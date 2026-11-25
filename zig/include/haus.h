@@ -139,8 +139,9 @@ const haus_value *haus_record_get(const haus_value *v, const char *key, size_t k
 const char *haus_variant_tag(const haus_value *v, size_t *len);
 const haus_value *haus_variant_arg(const haus_value *v, size_t i);
 /* A Secret in a decoded value (spec §15) is a value of kind HAUS_SECRET: the
- * accessors above see nothing in it, and every writer, the canonical form and
- * the hash reject it ("invalid-tag"), so it isn't written or logged by mistake.
+ * accessors above see nothing in it, and every writer, the canonical form, the
+ * hash, equality and order reject it ("cannot-encode", the value not shown),
+ * so it isn't written or logged by mistake; haus_encode writes it in full.
  * This explicit call gives out the value it hides; NULL for another kind. */
 const haus_value *haus_secret_reveal(const haus_value *v);
 
@@ -262,13 +263,16 @@ int haus_encode(const haus_type *t, const haus_value *v, haus_doc **out_doc, con
 
 /* Checks a text as a tool does (spec §14): the hints ("unlisted-field",
  * "unlisted-tag", "deprecated") and every error (spec §14, "Every error"),
- * in the order of their places in the text. A syntax or limit error is the
- * only issue. Each failing place once; nothing below a value that failed at
- * its own level; a record reports each missing field ("missing-field" at
- * the record) and checks every other field; any error inside a Secret is
- * one "invalid-secret" at the secret, and there are no hints inside one.
- * The check stops after HAUS_CHECK_MAX_ERRORS errors in one value and then
- * says so (haus_issues_stopped). HAUS_OK when the check ran. */
+ * in the order of their places in the text. A document with a syntax or
+ * limit error has that one issue; a Stream type is checked item by item, the
+ * items' errors before the syntax or limit error that ends the check (an
+ * error in the text has an empty path, and its line and column). Each error
+ * once; nothing below a value that failed at its own level; a record reports
+ * each missing field ("missing-field" at the record) and checks every other
+ * field; any error inside a Secret is one "invalid-secret" at the secret,
+ * and there are no hints inside one. The check stops after
+ * HAUS_CHECK_MAX_ERRORS errors in all (hints don't count) and then says so
+ * (haus_issues_stopped). HAUS_OK when the check ran. */
 #define HAUS_CHECK_MAX_ERRORS 200
 int haus_check_text(const haus_type *t, const char *text, size_t len, haus_issues **out, haus_error *err);
 /* The same, stopping at the first error: the hints found before it, and
@@ -284,8 +288,7 @@ typedef struct haus_issue {
 } haus_issue;
 
 size_t haus_issues_count(const haus_issues *issues);
-/* 1 when the check stopped at HAUS_CHECK_MAX_ERRORS errors in one value
- * (the rest of the text was not checked); 0 otherwise. */
+/* 1 when the check stopped at HAUS_CHECK_MAX_ERRORS errors (the rest of the text was not checked); 0 otherwise. */
 int haus_issues_stopped(const haus_issues *issues);
 int haus_issues_get(const haus_issues *issues, size_t i, haus_issue *out); /* strings borrowed from issues */
 void haus_issues_free(haus_issues *issues);

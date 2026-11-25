@@ -168,6 +168,8 @@ final class Canonical {
             opened = new Frame(variant.unsafeArgs(), ')');
           }
           break;
+        case SECRET:
+          throw WriteCheck.secretRefused(new Path(place));
       }
       if (opened != null) {
         if (opened.size() == 0) {
@@ -277,6 +279,8 @@ final class Canonical {
             }
             opened = new Pair(vx.unsafeArgs(), vy.unsafeArgs(), null, null);
             break;
+          case SECRET:
+            return false; // a secret is equal to itself only (x == y above)
         }
         if (opened != null) {
           if (opened.xs != null && opened.xs.length != opened.ys.length) {

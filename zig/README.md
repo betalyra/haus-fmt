@@ -53,11 +53,19 @@ it; it needs no libc.
 | Canonical form and hashes (§12) | `canonical`, `hash`, `hashAll` (SHA-256 of `std.crypto`) |
 | std/time (§13.2) | `time.check(kind, text)`: the std/time profile |
 | Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads, `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column; every type's id (`Def.id`, §13.3 "Identity") |
-| Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` prints as `<redacted>`, `reveal()` gives it out), `decoding.encode`, `decoding.decodeText`, `TypedStreamReader` (`$[i]` places), `decoding.check` / `checkWith` / `checkReport` (as a checker reports them, §14 "Every error": the hints and every error; a syntax or limit error is the only one; each failing place once, nothing below a value that failed at its own level, any error inside a `Secret` one `invalid-secret` at it; `.first = true` stops at the first error, with the hints found before it; at most `max_errors` errors per value, 200 by default, and `CheckReport.stopped` says when it stopped). Decoding still ends at the first error |
+| Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` is hidden, below), `decoding.encode`, `decoding.decodeText`, `TypedStreamReader` (`$[i]` places; items are read one at a time, so an item's error comes before a syntax error in a later item), `decoding.check` / `checkWith` / `checkReport` (as a checker reports them, §14 "Every error": the hints and every error, each once (two missing fields are two `missing-field` at the record); a document with a syntax or limit error has that one error; a `Stream` is checked item by item, the items' errors before the syntax error that ends it, which has a line and column and no path; nothing below a value that failed at its own level, any error inside a `Secret` one `invalid-secret` at it; `.first = true` stops at the first error, with the hints found before it; at most `max_errors` errors in the whole check, hints not counted, 200 by default, and `CheckReport.stopped` says when it stopped). Decoding still ends at the first error |
 | Codecs (§13.4) | `Codec(T)`, `decoding.rule`, `Codecs` by type id; std/time as Zig values and the official profiles' rules in `codecs` (below) |
 | JSON (§16) | `json.importJson` (§16.1), `json.toHausJson` / `fromHausJson` / `fromHausJsonLines` (§16.2), `json.toJson` / `fromJson` (§16.3) |
 | Packages (§13.3) | `packages.build(gpa, io, entry, options)`: packages given by directory, by folder, or as file trees in code (`packages.Tree`: files embedded with `@embedFile`, or a directory handle); the build's root (`import-outside-root`); no links followed in relative imports; regular files only, checked on the open handle; names spelled as their directory lists them; manifests, the version check, duplicates, cycles and the limits; messages show paths relative to the root. This binding belongs to no package manager's ecosystem: it never reads `node_modules` |
 | C ABI | `include/haus.h`, `src/c_api.zig` (below) |
+
+A decoded `Secret` (`Decoded.secret`, a `Decoded.Hidden`) shows nothing of its
+value (spec §15, "Hiding"): `{f}` prints `<redacted>`, `{any}` an opaque
+pointer, `std.json` `"<redacted>"`, and `decoding.toValue` (the value without
+its schema, for the canonical form, the hash and the writers) refuses it with
+`cannot-encode`. `reveal()` and `decoding.toValueRevealed` are the explicit
+calls that give it out; `decoding.encode` and `json.toJson` write it in full,
+with its schema.
 
 `Value` is a plain union, so a value built in code passes no constructor: it is
 checked where it is written (spec §11, "Values built in code"), with the codes a
@@ -131,20 +139,36 @@ The contract, as this binding keeps it:
   is `codec-rejected` at the type's place, with the message
   `<id> rejects the value: <reason>`. Inside a `Secret` it is `invalid-secret`
   at the secret, as every error there is.
+- Any named type without arguments can have one: the prelude's
+  (`prelude#Decimal`, in every package's types too), std/time's, a
+  package's, the application's own; and the type a value is decoded with
+  (decoding `CHF` as a `Currency` runs the `Currency` codec).
 - Codecs run from the inside out: a codec receives the host values of the
-  codecs inside its type (a `Money` codec sees the `Currency` codec's value).
+  codecs inside its type (a `Money` codec sees the `Currency` codec's value),
+  and each host value keeps what the schema decoded (`Decoded.schemaValue()`).
   The first rejection, the innermost, is the error.
+- A profile's rule is checked on what the schema decoded, never on what an
+  inner codec made of it: `decoding.rule` gives its rule
+  `Decoded.schemaView()`, and the shipped rules (`money.acceptsMoney`, …)
+  look through host values. So with `money.iso_money`, `Money(19.90, Bitcoin)`
+  is `codec-rejected` whatever codec is set for `Currency`.
 - A codec applies wherever its type occurs: inside imported packages' types,
   for a record case's payload (`Shipped Address`), in typed streams. A decoded
   value always has a place of its own for a host value (`Decoded.host`), so
   `codec-unreachable` never happens here.
 - `encode` writes a host value with its codec's `encode`, then checks the
   value written with the type and the codecs passed (`.codecs`): a value a
-  codec rejects is `cannot-encode`, so decode, encode, decode is the same as
-  decode.
+  codec rejects is `cannot-encode` at the codec's type's place (inside a
+  `Secret`, `invalid-secret` at the secret, without the codec's reason), so
+  decode, encode, decode is the same as decode.
 - `decoding.rule(id, accepts)` is a codec that keeps the default host type and
   adds a rule (a profile). `Codecs.init` rejects two codecs for one id
   (`error.DuplicateCodec`).
+- `decoding.unusedCodecs(arena, &codecs, schemas)` (or
+  `build.unusedCodecs(arena, &codecs)`) gives the `unused-codec` warnings: a
+  codec whose id no type has (`@haus-fmt/money@2#Money` with a schema that
+  imports major 1) never runs. Once per id, at no place; decoding is
+  unchanged. The `missing-codec` warning is not reported.
 - `json.toJson` takes host values (it encodes them first); `json.fromJson`
   gives the default host types: `decoding.applyCodecs` runs the codecs on its
   result.
@@ -183,7 +207,7 @@ as `examples/order.zig` does.
 | Building | `haus_doc_new`; `haus_new_number` (any spelling, `invalid-number`), `haus_new_string` (`cannot-encode`), `haus_new_bytes`, `haus_new_array`, `haus_new_record` (`duplicate-key`), `haus_new_variant` (`invalid-tag`) |
 | Writing, comparing | `haus_stringify` (layout, indent, width), `haus_stringify_doc`, `haus_value_canonical`, `haus_value_hash`, `haus_value_equals`, `haus_value_compare` |
 | JSON | `haus_import_json`, `haus_to_haus_json`, `haus_from_haus_json`; with a type `haus_type_to_json`, `haus_type_from_json` |
-| Schemas | `haus_schema_load` (text), `haus_schema_build` (a file, with packages by directory, folder or in-memory trees, and a root), `haus_schema_warning_count`/`_warning`, `haus_schema_type`, `haus_type_id`, `haus_type_is_stream`; `haus_decode`, `haus_decode_text`, `haus_encode`, `haus_check_text` (all hints and every error, at most `HAUS_CHECK_MAX_ERRORS` (200) per value, `haus_issues_stopped` when it stopped there), `haus_check_text_first` (the hints before the first error, and that error), and the one-call `haus_check`, `haus_to_json`, `haus_from_json` |
+| Schemas | `haus_schema_load` (text), `haus_schema_build` (a file, with packages by directory, folder or in-memory trees, and a root), `haus_schema_warning_count`/`_warning`, `haus_schema_type`, `haus_type_id`, `haus_type_is_stream`; `haus_decode`, `haus_decode_text`, `haus_encode`, `haus_check_text` (all hints and every error, at most `HAUS_CHECK_MAX_ERRORS` (200) in the whole check, `haus_issues_stopped` when it stopped there; a syntax or limit error has an empty path, and its line and column), `haus_check_text_first` (the hints before the first error, and that error), and the one-call `haus_check`, `haus_to_json`, `haus_from_json` |
 | Streams | `haus_stream_new` (strict or not), `haus_typed_stream_new` (a `Stream` type), `haus_stream_push`, `haus_stream_end` |
 
 **Statuses.** `HAUS_OK`, `HAUS_ERROR` (the `haus_error` has the code of §17,
@@ -209,8 +233,8 @@ a time. Codecs are a Zig API only.
 
 In what `haus_decode`, `haus_decode_text`, `haus_type_from_json` and typed
 streams give, a `Secret` is a value of its own kind, `HAUS_SECRET` (spec §15):
-the accessors see nothing in it, every writer, the canonical form and the hash
-reject it (`invalid-tag`), and `haus_secret_reveal` is the one call that gives
+the accessors see nothing in it, every writer, the canonical form, the hash,
+equality and order reject it (`cannot-encode`), and `haus_secret_reveal` is the one call that gives
 out its value. `haus_encode` gives the data to write, in full. The C ABI is tested
 from C, every function and status ([`test/c_api_test.c`](test/c_api_test.c)),
 and from Zig.

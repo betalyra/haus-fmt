@@ -37,7 +37,7 @@ import {
   type SchemaFile, type StdType, type Type,
 } from "@haus-fmt/haus"
 import { Schema } from "effect"
-import { entries, idOf, setId, type AnyCodec, type CodecEntry } from "./codec.js"
+import { entries, idOf, setId, type AnyCodec, type CodecEntry, type Named } from "./codec.js"
 import { BARE_TAG, CLOSED, NESTED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
 import { CODE, schemaErrorOf } from "./errors.js"
 // Circular import: only used when a schema file is compiled, after both modules have loaded.
@@ -121,6 +121,30 @@ const builtin = (name: Builtin): Schema.Top => {
       // @effect-diagnostics-next-line schemaNumber:off -- Float64 includes NaN and the infinities (spec §15)
       return Schema.Number
   }
+}
+
+/** The id codecs use for a type of the prelude: `prelude#Int`. */
+const preludeId = <N extends Builtin>(name: N): `prelude#${N}` => `prelude#${name}`
+
+const preludeSchemas = new Map<Builtin, Schema.Top>()
+
+/**
+ * The schema of a type of the prelude, as schema files decode it: the target
+ * of a codec for it (spec §13.4), which then applies to every one of its
+ * values, in the types of packages too.
+ *
+ *   const Ints = Haus.codec(Haus.prelude("Int"), (base) => base.pipe(Schema.check(...)))
+ *
+ * `Decimal` is `Haus.Decimal`.
+ */
+export const prelude = <N extends Builtin>(name: N): Named<Schema.Top, `prelude#${N}`> => {
+  let s = preludeSchemas.get(name)
+  if (s === undefined) {
+    // A schema of its own (annotate makes a new one), so that its id is not on a schema shared with other uses.
+    s = name === "Decimal" ? Haus.Decimal : setId(builtin(name).annotate({}), preludeId(name))
+    preludeSchemas.set(name, s)
+  }
+  return s as Named<Schema.Top, `prelude#${N}`>
 }
 
 /** `< >`, any tag: a bare tag decodes to its name, other tags to Unknown. */
@@ -228,8 +252,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   const build = (t: Type): Schema.Top => {
     switch (t.kind) {
       case "builtin":
-        // Decimal is a named type that codecs can replace (Haus.decimalAsBigDecimal).
-        return t.name === "Decimal" ? named(Haus.DECIMAL_ID, Haus.Decimal) : builtin(t.name)
+        // Every type of the prelude is a named type that codecs can replace (Haus.decimalAsBigDecimal, spec §13.4).
+        return named(preludeId(t.name), builtin(t.name))
       case "std":
         return std(t.name)
       case "array":
@@ -304,6 +328,27 @@ const prop = (k: string) => (KEY.test(k) ? k : JSON.stringify(k))
 /** JSDoc for a definition: its comment and its haus source, and `@deprecated` when it is (the core's). */
 export { definitionDoc }
 
+/** The TypeScript type of a prelude type's values, without a codec. */
+const builtinType = (name: Builtin): string => {
+  switch (name) {
+    case "String":
+    case "Decimal":
+      return "string"
+    case "Bytes":
+      return "globalThis.Uint8Array"
+    case "Bool":
+      return "boolean"
+    case "Int":
+    case "Int64":
+    case "UInt64":
+      return "bigint"
+    case "Any":
+      return "Haus$.Value"
+    default:
+      return "number"
+  }
+}
+
 /** The codec map parameter of every declared type. `$` can't appear in haus names, so it never clashes. */
 const C = "C$"
 
@@ -311,7 +356,7 @@ const C = "C$"
 const visitTypes = (t: Type, onRef: (inst: Instance) => boolean, onId: (id: string) => void): void => {
   switch (t.kind) {
     case "builtin":
-      return t.name === "Decimal" ? onId(Haus.DECIMAL_ID) : undefined
+      return onId(preludeId(t.name))
     case "std":
       return onId(stdId(t.name))
     case "array":
@@ -383,24 +428,8 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
   const print = (t: Type): string => {
     switch (t.kind) {
       case "builtin":
-        switch (t.name) {
-          case "String":
-            return "string"
-          case "Bytes":
-            return "globalThis.Uint8Array"
-          case "Bool":
-            return "boolean"
-          case "Decimal":
-            return `Haus$.Lookup<${C}, ${JSON.stringify(Haus.DECIMAL_ID)}, string>`
-          case "Int":
-          case "Int64":
-          case "UInt64":
-            return "bigint"
-          case "Any":
-            return "Haus$.Value"
-          default:
-            return "number"
-        }
+        // Every type of the prelude can have a codec (spec §13.4).
+        return `Haus$.Lookup<${C}, ${JSON.stringify(preludeId(t.name))}, ${builtinType(t.name)}>`
       case "std":
         return `Haus$.Lookup<${C}, ${JSON.stringify(stdId(t.name))}, string>`
       case "array":

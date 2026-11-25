@@ -25,10 +25,11 @@ struct SchemaSuiteTests {
             switch c.tag {
             case "Ok":
                 let decoded = try type.decode(input)
-                #expect(try canonical(decoded) == canonical(c.fields["output"] ?? input), "\(c.testDescription)")
-                // Encoding the result gives it back, and it can be written.
-                #expect(try canonical(type.encode(decoded)) == canonical(decoded), "\(c.testDescription)")
-                #expect(throws: Never.self) { try stringify(decoded) }
+                #expect(
+                    try canonical(revealed(decoded)) == canonical(c.fields["output"] ?? input), "\(c.testDescription)")
+                // Encoding the result gives it back, its secrets in full, and that can be written.
+                #expect(try canonical(type.encode(decoded)) == canonical(revealed(decoded)), "\(c.testDescription)")
+                #expect(throws: Never.self) { try stringify(type.encode(decoded)) }
             case "Err":
                 let error = #expect(throws: HausError.self, "\(c.testDescription)") { try type.decode(input) }
                 c.check(error)
@@ -100,8 +101,9 @@ struct SchemaJSONSuiteTests {
 }
 
 /// Typed streams (test-suite/stream/typed.schema.haus and typed.cases.haus,
-/// spec §15 "Streams"): a `Stream a` type decodes the text's values with
-/// `SchemaType.decodeAll`, which puts the item's index in an error's path;
+/// spec §15 "Streams"): a `Stream a` type decodes the text's values as a
+/// `StreamReader` reads them, each with `SchemaType.decode(_:index:)`, which
+/// puts the item's index in an error's path;
 /// any other type decodes the text's one value (`decodeAll` too: none, or
 /// two or more, is `not-one-value` at `$`).
 /// Encoding the decoded values gives `output` (an array for a stream).
@@ -130,8 +132,16 @@ struct TypedStreamSuiteTests {
         let got: String
         do throws(HausError) {
             if type.isStream {
-                let items = try type.decodeAll(parseAll(text))
-                got = "Ok \(try canonical(.array(try items.map { (v) throws(HausError) in try type.encode(v) })))"
+                // Item by item, as a stream is read: an item's error comes
+                // before a syntax error in a later item.
+                var reader = StreamReader()
+                reader.push(text)
+                reader.finish()
+                var items: [HausValue] = []
+                while let v = try reader.next() {
+                    items.append(try type.encode(type.decode(v, index: items.count)))
+                }
+                got = "Ok \(try canonical(.array(items)))"
             } else {
                 got = "Ok \(try canonical(type.encode(type.decodeAll(parseAll(text))[0])))"
             }

@@ -21,25 +21,36 @@
 import ErrorCode
 import Int
 import Secret
+import Streaming
 import Value
 import Time
 
 Decode := [].{
 	# ── documents ───────────────────────────────────────────
 
-	## Parse a whole file and decode every top-level value (a stream).
+	## Decode every top-level value of a file (a stream), one at a time as a
+	## stream reader reads them (spec §15, "Streams"): each value is parsed,
+	## then decoded, before the next is read, so an item's error comes before
+	## a syntax error in a later item.
 	all : Str, (Value -> Try(a, Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Error)])
 	all = |text, decoder| all_with(text, Value.default_limits, decoder)
 
 	## `all` with your own parser limits (see `Value.Limits`).
 	all_with : Str, Value.Limits, (Value -> Try(a, Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Error)])
 	all_with = |text, limits, decoder| {
-		values = Value.parse_all_with(text, limits).map_err(|e| Syntax(e))?
+		var $reader = Streaming.reader({ ..Streaming.defaults, limits })
 		var $out = []
-		var $i = 0.U64
-		for v in values {
-			$out = $out.append(at(decoder(v), "[${$i.to_str()}]").map_err(|e| Decode(e))?)
-			$i = $i + 1
+		# A value ends only at a comma, and a comma never waits for more input:
+		# each part that ends at one completes at most one value.
+		for part in after_commas(text.to_utf8()) {
+			(next, values) = Streaming.push($reader, part).map_err(|e| Syntax(e))?
+			$reader = next
+			for v in values {
+				$out = $out.append(at(decoder(v), "[${$out.len().to_str()}]").map_err(|e| Decode(e))?)
+			}
+		}
+		for v in Streaming.finish($reader).map_err(|e| Syntax(e))? {
+			$out = $out.append(at(decoder(v), "[${$out.len().to_str()}]").map_err(|e| Decode(e))?)
 		}
 		Ok($out)
 	}
@@ -497,6 +508,22 @@ decode_within = |v, decoder, limits, max_nodes| {
 at : Try(a, Error), Str -> Try(a, Error)
 at = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
 
+## `bytes` in parts that each end at a comma, and what follows the last one.
+after_commas : List(U8) -> List(List(U8))
+after_commas = |bytes| {
+	var $parts = []
+	var $start = 0
+	var $i = 0
+	for b in bytes {
+		$i = $i + 1
+		if b == ',' {
+			$parts = $parts.append(bytes.sublist({ start: $start, len: $i - $start }))
+			$start = $i
+		}
+	}
+	$parts.append(bytes.sublist({ start: $start, len: bytes.len() - $start }))
+}
+
 ## Not `what`, for a closed variant with the tags `known` (`Bool`, `Maybe`,
 ## `Result`): an unknown tag is `unknown-tag`, a known one with the wrong
 ## payload `wrong-payload`, any other value a `type-mismatch`.
@@ -563,6 +590,16 @@ expect Decode.one("{ id: 1, note: \"hi\", coupon: Some(\"X1\"), prices: [], paid
 expect Decode.one("{ id: 1, prices: [], paid: True }", order) == Err(Decode({ code: "missing-field", reason: "missing field 'coupon'", path: "" }))
 expect Decode.one("{ id: 1, note: None, coupon: None, prices: [], paid: True }", order) == Err(Decode({ code: "type-mismatch", reason: "expected String, found variant None", path: ".note" }))
 expect Decode.one("{ id: 1, coupon: None, prices: [1, Two], paid: True }", order) == Err(Decode({ code: "type-mismatch", reason: "expected a number, found variant Two", path: ".prices[1]" }))
+# A stream is read item by item: an item's error comes before a later item's syntax error (spec §15).
+stream_place : [Syntax(Value.ParseError), Decode(Error)] -> (Str, Str)
+stream_place = |e| match e {
+	Syntax(p) => (p.code, "${p.line.to_str()}:${p.column.to_str()}")
+	Decode(d) => (d.code, d.path)
+}
+
+expect Decode.all("1,\n\"ok\",\n\"ok\" \"oops\"", Decode.str).map_err(stream_place) == Err(("type-mismatch", "[0]"))
+expect Decode.all("\"a\",\n\"ok\" \"oops\"", Decode.str).map_err(stream_place) == Err(("missing-comma", "2:6"))
+expect Decode.all("\"a\", \"b\",\n\"c\"", Decode.str) == Ok(["a", "b", "c"])
 expect Decode.message({ code: "missing-field", reason: "missing field 'id'", path: "" }) == "missing field 'id'"
 expect Decode.message({ code: "type-mismatch", reason: "expected a string", path: ".total" }) == ".total: expected a string"
 expect Decode.one("300", Decode.u8) == Err(Decode({ code: "out-of-range", reason: "300 is out of range for UInt8 (0 to 255)", path: "" }))

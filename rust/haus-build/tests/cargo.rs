@@ -46,7 +46,7 @@ fn package_crates_and_their_dependents() {
     set("CARGO_PKG_VERSION", "1.0.1");
     set("CARGO_MANIFEST_LINKS", "haus_ids");
     let e = haus_build::package().unwrap_err();
-    assert_eq!(e.code(), ErrorCode::PackageVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::PackageVersion, "{e}");
     assert!(e.to_string().contains("says version 1.0.0, its Cargo.toml 1.0.1"), "{e}");
 
     set("CARGO_PKG_VERSION", "1.0.0");
@@ -70,7 +70,7 @@ fn package_crates_and_their_dependents() {
     set("DEP_HAUS_IDS_HAUS_CRATE", "haus_ids");
     set("DEP_HAUS_IDS_HAUS_VERSION", "1.1.0");
     let e = haus_build::Config::new().compile("src/app.schema.haus").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::PackageVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::PackageVersion, "{e}");
 
     set("DEP_HAUS_IDS_HAUS_VERSION", "1.0.0");
     haus_build::Config::new().compile("src/app.schema.haus").unwrap();
@@ -80,7 +80,7 @@ fn package_crates_and_their_dependents() {
 
     write(&app.join("src/app.schema.haus"), "import @acme/ids@2 (Id)\ntype A = { id: Id }");
     let e = haus_build::Config::new().compile("src/app.schema.haus").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "{e}");
 
     // A package crate that depends on ids: it re-exports its dependencies'
     // crates and passes on the packages its schema reaches (haus_graph).
@@ -133,6 +133,6 @@ fn package_crates_and_their_dependents() {
     // Its own files import only its dependencies.
     write(&app.join("src/app.schema.haus"), "import @acme/ids@1 (Id)\ntype A = { id: Id }");
     let e = haus_build::Config::new().compile("src/app.schema.haus").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::UndeclaredPackage, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::UndeclaredPackage, "{e}");
     assert!(e.to_string().contains("@acme/ids is a dependency of haus_orders, not of this crate"), "{e}");
 }

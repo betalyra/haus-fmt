@@ -537,9 +537,8 @@ twice, a tag that isn't one (`lower`, `A-B`, `É`, one with a lone
 surrogate). Where the generator knows the answer it is checked too: a valid
 value has a canonical form and a hash, a value with one mistake gives that
 mistake's code everywhere. Codes are compared where a value has at most one
-mistake (and, for the writer, limit) and nothing with two codes: a tag with
-a lone surrogate is both `invalid-tag` and `cannot-encode` (finding F1 of
-round C, below).
+mistake (and, for the writer, limit) and no depth at the limit. A tag with a
+lone surrogate is `invalid-tag` (§11; finding F1 of round C, below).
 
 The instructions, one value per line in prefix order: `n:HEX` a number from
 a literal's text, `s:HEX` a string, `b:HEX` a byte string, `a:N` an array of
@@ -625,7 +624,8 @@ go through the parser (`P`), the formatter (`F`), the schema-file reader
 key and a tag and written (`W`). The runners must agree, and with the spec:
 text with an unpaired surrogate is `invalid-utf8`, at the surrogate's place,
 when read; a value holding one is `cannot-encode` when written, hashed or put
-in canonical form (or its constructor rejects it so). Where the text has no
+in canonical form (or its constructor rejects it so), and a tag holding one is
+`invalid-tag`. Where the text has no
 lone surrogate only accepting or rejecting is compared (the byte fuzzers
 compare the codes).
 
@@ -665,8 +665,8 @@ spec and with each other except:
 | | |
 |---|---|
 | F3 | Rust's `Number::new` and Python's `Number` rejected a literal whose exponent doesn't fit 64 bits (`3E70955681357760880162`, `1e+99999999999999999999`) as `invalid-number`; TypeScript, Go and the JVM build it, and the writers reject it (`exponent-too-large`), as §11 says (a number past a limit is still a number). Only the normalized spelling (`1e9999…`) was built. Fixed: an exponent limit of `u64::MAX` is none in Rust's checks (`Limits::exponent_exceeds`), and Python's parser reads any exponent with the constructors' limits (`UNLIMITED`); unit tests in `rust/haus/tests/values.rs` and `python/tests/test_canonical.py`. |
-| F1 | A tag with an unpaired surrogate (`variant("\uD800")`): TypeScript and Python report `cannot-encode`, Go and the JVM `invalid-tag`. §11 lists both (a tag that isn't `[A-Z][A-Za-z0-9_]*`; a tag with an unpaired surrogate) and orders neither. Compared as the same until the spec decides. |
-| F2 | Lean's package resolver calls `import Lib/x` and `import .` `unknown-module`; its schema-file checker and every binding `schema-syntax`. For `Lib/x` the grammar agrees with them ("any other word where a module belongs (foo/bar) is a syntax error"); for `.` alone its comment reads the other way ("one that starts with "." but not with "./" or "../" … is unknown-module"), while every checker makes `..` and `.x` `unknown-module` and `.` `schema-syntax`. Known, not counted, in `--imports`. |
+| F1 | A tag with an unpaired surrogate (`variant("\uD800")`): TypeScript and Python report `cannot-encode`, Go and the JVM `invalid-tag`. §11 listed both and ordered neither. Decided in spec round 3: `invalid-tag` (a tag is checked before it is encoded); TypeScript and Python fixed, and `--build` and `--strings` expect `invalid-tag`. |
+| F2 | Lean's package resolver calls `import Lib/x` and `import .` `unknown-module`; its schema-file checker and every binding `schema-syntax`. For `Lib/x` the grammar agrees with them ("any other word where a module belongs (foo/bar) is a syntax error"); for `.` alone its comment reads the other way ("one that starts with "." but not with "./" or "../" … is unknown-module"), while every checker makes `..` and `.x` `unknown-module` and `.` `schema-syntax`. Decided in spec round 3: `schema-syntax` for both (errors.haus, grammar); Lean's resolver fixed, and `--imports` counts them again. |
 
 ## When it finds something
 

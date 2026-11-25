@@ -73,12 +73,12 @@ _ = try haus.decoding.decodeText(gpa, arena, root, text, .{ .codecs = &codecs, .
 // Money(44.40, Eur): $.total[1]: @haus-fmt/money@1#Currency rejects the value: … [codec-rejected]
 ```
 
-`haus.codecs.time` turns std/time values into Zig values (`time.date`, `time.instant`; `time.instant_timestamp` gives a `std.Io.Timestamp`, dropping the offset). `haus.Codec(T).init(id, decode, encode)` writes your own. There is no [`missing-codec`](/docs/errors#missing-codec) warning yet. [What haus checks](/docs/checks)
+`haus.codecs.time` turns std/time values into Zig values (`time.date`, `time.instant`; `time.instant_timestamp` gives a `std.Io.Timestamp`, dropping the offset). `haus.Codec(T).init(id, decode, encode)` writes your own, for any named type, `prelude#Decimal` included. A profile's rule is checked on what the schema decoded, so a looser codec of your own for `Currency` doesn't let `Money(19.90, Bitcoin)` through. `decoding.unusedCodecs` (or `build.unusedCodecs`) gives the [`unused-codec`](/docs/errors#unused-codec) warning for a codec whose id no type has. There is no [`missing-codec`](/docs/errors#missing-codec) warning yet. [What haus checks](/docs/checks)
 
-- **Streams.** `StreamReader` takes chunks of bytes and gives values once their comma arrives; `TypedStreamReader` decodes them, with `$[i]` places. [Logs and streams](/docs/tours/streams)
+- **Streams.** `StreamReader` takes chunks of bytes and gives values once their comma arrives; `TypedStreamReader` decodes them one at a time, with `$[i]` places, so an item's error comes before a syntax error in a later item. [Logs and streams](/docs/tours/streams)
 - **JSON.** `json.toJson` and `json.fromJson` with a type, `json.importJson` for any JSON. [Coming from JSON](/docs/from-json)
-- **Checking.** `decoding.check` gives the hints and every error of a value, with positions (`.first = true` stops at the first); `haus_check_text` does the same in C.
-- **Secrets.** A `Secret` prints as `<redacted>`; `reveal()` gives it out. [Config and secrets](/docs/tours/secrets)
+- **Checking.** `decoding.check` gives the hints and every error of a value, with positions (`.first = true` stops at the first); a stream is checked item by item, and at most 200 errors are reported in all. `haus_check_text` does the same in C.
+- **Secrets.** A `Secret` prints as `<redacted>`, also with `{any}` and `std.json`, and the writers without a schema refuse it (`cannot-encode`); `reveal()` gives it out. [Config and secrets](/docs/tours/secrets)
 - **Limits.** `haus.Limits` holds the spec's limits; the depth is at most 256.
 
 ## From C
@@ -100,7 +100,7 @@ haus_doc_free(doc);
 haus_schema_free(schema);
 ```
 
-A `haus_value` is borrowed from its `haus_doc` and freed with it; text the library returns is freed with `haus_free`. The library has no global state, and a schema can be read from several threads. In the C ABI, a decoded `Secret` is a value of its own kind that every writer rejects; `haus_secret_reveal` is the one call that gives it out. Codecs, including the profile codecs, are in the Zig API only, not yet in the C ABI.
+A `haus_value` is borrowed from its `haus_doc` and freed with it; text the library returns is freed with `haus_free`. The library has no global state, and a schema can be read from several threads. In the C ABI, a decoded `Secret` is a value of its own kind that every writer rejects (`cannot-encode`); `haus_secret_reveal` is the one call that gives it out. Codecs, including the profile codecs, are in the Zig API only, not yet in the C ABI.
 
 ## More
 

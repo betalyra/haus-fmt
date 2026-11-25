@@ -87,11 +87,27 @@ class Codec(Protocol):
     `decode` runs after the type's own decoding, on its default host value, and may reject
     more values (raise `ValueError`: a `HausDecodeError` with the code `codec-rejected`);
     `encode` gives back a default host value.
+
+    What an outer codec receives for a part that has a codec of its own is that part's host
+    value, as the part's codec made it (spec §13.4 leaves this to the binding): a codec for
+    `Money` sees the `Currency` codec's result. A rule that must hold of the value the schema
+    decoded goes in an optional `check` (`CheckedCodec`).
     """
 
     def decode(self, value: object, /) -> object: ...
 
     def encode(self, value: object, /) -> object: ...
+
+
+class CheckedCodec(Codec, Protocol):
+    """A codec with a rule on the value the schema decoded: `check` gets the type's default host
+    value decoded without any codec, the codecs of its parts included, and raises `ValueError` to
+    reject it (`codec-rejected`, at the codec's type). A profile's rule goes here (spec §13.4), so
+    that no codec set for a part (a looser `Currency`) can make a value pass it (`Money`).
+    `check` runs before `decode`, after the codecs of the parts.
+    """
+
+    def check(self, value: object, /) -> None: ...
 
 
 # ── where a node is applied ──────────────────────────────────
@@ -1518,15 +1534,28 @@ class _BackRef(_Node):
 
 
 class _Coded(_Node):
-    """A codec around a named type's own node (spec §13.4): after it when decoding, before it when encoding."""
+    """A codec around a named type's own node (spec §13.4): after it when decoding, before it when encoding.
 
-    __slots__ = ("codec", "id", "inner")
+    `plain` is the type's node without any codec, for a codec with a `check`: its rule runs on the value the
+    schema decoded, never on what the codecs inside made of it (spec §13.4).
+    """
 
-    def __init__(self, inner: _Node, codec: Codec, id: str) -> None:
+    __slots__ = ("codec", "id", "inner", "plain")
+
+    def __init__(self, inner: _Node, codec: Codec, id: str, plain: _Node | None = None) -> None:
         super().__init__(inner.expected)
         self.inner = inner
         self.codec = codec
         self.id = id
+        self.plain = plain
+
+    def checked(self, x: object, at: _At) -> None:
+        try:
+            cast("CheckedCodec", self.codec).check(x)
+            return
+        except (ValueError, TypeError, OverflowError) as e:
+            reason = _short(str(e), 100)
+        at.fail(f"the codec for {self.id} rejects it: {reason}", code="codec-rejected")
 
     def decoded(self, x: object, at: _At) -> object:
         try:
@@ -1544,13 +1573,19 @@ class _Coded(_Node):
         at.fail(f"the codec for {self.id} can't encode it: {reason}")
 
     def decode(self, v: Value, at: _At) -> object:
-        return self.decoded(self.inner.decode(v, at), at)
+        host = self.inner.decode(v, at)
+        if self.plain is not None:
+            self.checked(self.plain.decode(v, at), at)
+        return self.decoded(host, at)
 
     def encode(self, x: object, at: _At) -> Value:
         return self.inner.encode(self.encoded(x, at), at)
 
     def read_json(self, j: Json, at: _At) -> object:
-        return self.decoded(self.inner.read_json(j, at), at)
+        host = self.inner.read_json(j, at)
+        if self.plain is not None:
+            self.checked(self.plain.read_json(j, at), at)
+        return self.decoded(host, at)
 
     def write_json(self, x: object, at: _At) -> Json:
         return self.inner.write_json(self.encoded(x, at), at)
@@ -1638,11 +1673,13 @@ class Builder:
         shared, not copied: a type written once can be reached along exponentially many paths (`P a a` inside
         `P a a` …) and is built once."""
 
-    def coded(self, node: _Node, id: str) -> _Node:
+    def coded(self, node: _Node, id: str, plain: Callable[[], _Node]) -> _Node:
+        """`node` with the codec for `id`, if one is set; `plain` builds the node without codecs, for a
+        codec whose rule checks the value the schema decoded (`CheckedCodec`)."""
         if (codec := self.codecs.get(id)) is None:
             return node
         self.used.add(id)
-        return _Coded(node, codec, id)
+        return _Coded(node, codec, id, plain() if callable(getattr(codec, "check", None)) else None)
 
     def ref(self, inst: _Instance) -> _Node:
         if (done := self.built.get(inst)) is not None:
@@ -1654,7 +1691,7 @@ class Builder:
         self.building.add(inst)
         node = self.build(inst.body)
         if not inst.args:
-            node = self.coded(node, inst.definition.id)
+            node = self.coded(node, inst.definition.id, lambda: Builder({}).build(inst.body))
         self.building.discard(inst)
         self.built[inst] = node
         for back in self.back.pop(inst, []):
@@ -1673,9 +1710,9 @@ class Builder:
     def build_new(self, t: Type) -> _Node:
         match t:
             case BuiltinType(name):
-                return self.coded(_BUILTINS[name], f"prelude#{name}")
+                return self.coded(_BUILTINS[name], f"prelude#{name}", lambda: _BUILTINS[name])
             case StdType(name):
-                return self.coded(_StdTime(name), f"std/time#{name}")
+                return self.coded(_StdTime(name), f"std/time#{name}", lambda: _StdTime(name))
             case ArrayType(item):
                 return _Array(self.build(item))
             case MapType(value):

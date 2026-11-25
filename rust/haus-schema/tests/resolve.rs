@@ -24,7 +24,7 @@ fn value(text: &str) -> Value {
 /// The decoded value, canonical, or the error.
 fn decode(schema: &Schema, ty: &str, text: &str) -> String {
     match schema.decode(ty, &value(text)) {
-        Ok(v) => canonical(&v),
+        Ok(v) => canonical(&v.reveal()),
         Err(e) => format!("error: {e}"),
     }
 }
@@ -219,7 +219,7 @@ fn growing(schema: &str) -> ((usize, usize), String) {
     let start = std::time::Instant::now();
     let e = Schema::parse(schema).expect_err("an error");
     assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
-    assert_eq!(e.code(), haus::ErrorCode::GrowingRecursion, "{e}");
+    assert_eq!(e.code().unwrap(), haus::ErrorCode::GrowingRecursion, "{e}");
     (e.position().expect("a position"), e.reason().to_string())
 }
 
@@ -374,7 +374,7 @@ fn arguments_nested_30_levels_deep_compile_quickly() {
 /// The code and position of the error parsing `schema`.
 fn code_at(schema: &str) -> (String, (usize, usize)) {
     let e = Schema::parse(schema).expect_err("an error");
-    (e.code().as_str().to_string(), e.position().expect("a position"))
+    (e.code().expect("a code").to_string(), e.position().expect("a position"))
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn a_schema_file_that_is_not_utf8() {
     let path = dir.path().join("a.schema.haus");
     std::fs::write(&path, b"// \xff\ntype A = Int\n").unwrap();
     let e = Schema::load(&path, &haus_schema::NoImports).expect_err("an error");
-    assert_eq!(e.code(), haus::ErrorCode::InvalidUtf8, "{e}");
+    assert_eq!(e.code().unwrap(), haus::ErrorCode::InvalidUtf8, "{e}");
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn streams_decode_each_value() {
         r#"expected Int, found the string "3" at $[2].n"#
     );
     let out = schema.decode_stream("Root", &values[..2]).unwrap();
-    assert_eq!(out.iter().map(canonical).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
+    assert_eq!(out.into_iter().map(|v| canonical(&v.reveal())).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
 }
 
 #[test]
@@ -486,11 +486,11 @@ fn package_names_and_manifests() {
         ["@Acme/x", "@acme/X", "@acme", "@acme/x/y", "@-acme/x", "@acme/.x", "@acme/x~y", "@acme/node_modules"]
     {
         let e = Schema::parse(&format!("import {module} (A)\ntype R = A")).expect_err(module);
-        assert_eq!(e.code(), ErrorCode::UnknownModule, "{module}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::UnknownModule, "{module}: {e}");
     }
     for module in ["@acme/x.y.z_1-2", "@0/9@1", "@acme/node_modules2"] {
         let e = Schema::parse(&format!("import {module} (A)\ntype R = A")).expect_err(module);
-        assert_eq!(e.code(), ErrorCode::ImportUnavailable, "{module}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::ImportUnavailable, "{module}: {e}");
     }
     let manifest = |name: &str, version: &str| Manifest::parse(&format!("{{ name: {name:?}, version: {version:?} }}"));
     for version in ["0.0.0", "1.2.3", "1.0.0-rc.1", "1.0.0-0.x-y", "1.0.0+build.05", "10.20.30-alpha+001"] {
@@ -572,7 +572,7 @@ fn an_entry_file_below_a_package_directory_imports_files() {
     // The package's own schema, read as the entry file, still imports no files.
     write("schema.haus", "import ./app/main/common (Money)\ntype Root = Money");
     let e = Schema::load_with(dir.path().join("schema.haus"), &Options::default()).expect_err("rejected");
-    assert_eq!(e.code(), haus::ErrorCode::PackagePath, "{e}");
+    assert_eq!(e.code().unwrap(), haus::ErrorCode::PackagePath, "{e}");
     assert!(e.to_string().contains("can't import files"), "{e}");
 }
 
@@ -689,7 +689,8 @@ fn record_cases_without_a_json_form_are_warned_about() {
          type Events = Stream < Ev { _tag: Int } >",
     )
     .unwrap();
-    let warnings: Vec<String> = schema.warnings().iter().map(|w| format!("{} {}", w.code().as_str(), w)).collect();
+    let warnings: Vec<String> =
+        schema.warnings().iter().map(|w| format!("{} {}", w.code().expect("a code"), w)).collect();
     assert_eq!(
         warnings,
         [

@@ -41,32 +41,54 @@ func (l *loc) field(i int) *fieldLoc {
 // locate returns the top-level values of text, which haus.ParseAll accepts,
 // or nil.
 func locate(text string) []*loc {
-	s := scan{b: text}
-	if strings.HasPrefix(text, "\uFEFF") {
-		s.pos = 3
-	}
+	s := newScan(text)
 	var out []*loc
-	s.trivia()
 	for s.pos < len(s.b) {
-		v := s.value()
-		if v == nil {
+		v := s.next()
+		if v == nil || s.failed {
 			return nil
 		}
 		out = append(out, v)
-		s.trivia()
-		if s.pos < len(s.b) {
-			if !s.eat(',') {
-				return nil
-			}
-			s.trivia()
-		}
 	}
 	return out
 }
 
 type scan struct {
-	b   string
-	pos int
+	b      string
+	pos    int
+	failed bool // next: something unexpected, no more locations
+}
+
+// newScan returns a scan of the top-level values of text, one at a time
+// (next), for a stream read item by item: only the items the parser has
+// accepted so far are scanned.
+func newScan(text string) *scan {
+	s := &scan{b: text}
+	if strings.HasPrefix(text, "\xef\xbb\xbf") { // a byte order mark
+		s.pos = 3
+	}
+	s.trivia()
+	return s
+}
+
+// next returns the span of the next top-level value, or nil.
+func (s *scan) next() *loc {
+	if s.failed || s.pos >= len(s.b) {
+		return nil
+	}
+	v := s.value()
+	if v == nil {
+		s.failed = true
+		return nil
+	}
+	s.trivia()
+	if s.pos < len(s.b) {
+		if !s.eat(',') {
+			s.failed = true
+		}
+		s.trivia()
+	}
+	return v
 }
 
 func (s *scan) peek() byte {

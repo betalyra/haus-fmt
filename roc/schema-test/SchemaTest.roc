@@ -1764,6 +1764,7 @@ stream_typed = |ty, text| match ty {
 	"Log" => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_entry), StreamTyped.encode_entry))
 	"Point" => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_point), StreamTyped.encode_point))
 	"Points" => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_point), StreamTyped.encode_point))
+	"Names" => Decoded(encoded_items(Decode.all(text, Decode.str), Encode.str))
 	_ => NoType
 }
 

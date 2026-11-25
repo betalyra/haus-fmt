@@ -116,18 +116,18 @@ func TestSchemaSuite(t *testing.T) {
 				case c.ok && err != nil:
 					t.Errorf("%s: failed to decode: %v", label, err)
 				case c.ok:
-					if got, want := canonical(t, out), canonical(t, c.output); got != want {
+					if got, want := canonical(t, revealed(out)), canonical(t, c.output); got != want {
 						t.Errorf("%s: decoded as %s, expected %s", label, got, want)
 					}
 					// Encoding the result gives it back, and decoding is idempotent.
 					enc, err := typ.Encode(out)
 					if err != nil {
 						t.Errorf("%s: encoding the result: %v", label, err)
-					} else if canonical(t, enc) != canonical(t, out) {
+					} else if canonical(t, enc) != canonical(t, revealed(out)) {
 						t.Errorf("%s: encoded as %s", label, canonical(t, enc))
 					}
-					if _, err := haus.FormatValue(out, haus.DefaultFormatOptions()); err != nil {
-						t.Errorf("%s: decoded, but can't be written: %v", label, err)
+					if _, err := haus.FormatValue(enc, haus.DefaultFormatOptions()); err != nil {
+						t.Errorf("%s: decoded and encoded, but can't be written: %v", label, err)
 					}
 				case err == nil:
 					t.Errorf("%s: decoded as %s, expected %s", label, canonical(t, out), c.code)

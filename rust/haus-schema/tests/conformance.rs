@@ -13,7 +13,7 @@
 //! `invalid/NAME.error`.
 
 use haus::{Value, canonical};
-use haus_schema::{NoImports, Options, Schema, Severity};
+use haus_schema::{Decoded, NoImports, Options, Schema, Severity};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -68,7 +68,8 @@ impl Case {
 
     /// Runs the case: None if it passes, what went wrong otherwise.
     fn failure(&self, schema: &Schema) -> Option<String> {
-        let decoded = schema.decode(&self.ty, &self.input);
+        // The suite's outputs show secrets: the decoded value, revealed.
+        let decoded = schema.decode(&self.ty, &self.input).map(Decoded::reveal);
         let errors = schema.check(&self.ty, std::slice::from_ref(&self.input));
         let errors: Vec<_> = errors.iter().filter(|i| i.severity == Severity::Error).collect();
         match (self.ok, decoded) {
@@ -151,8 +152,8 @@ fn invalid_schemas_are_rejected() {
             };
             match parsed {
                 Ok(_) => Some(format!("{name}: accepted")),
-                Err(e) if e.code().as_str() != expected.trim() => {
-                    Some(format!("{name}: {} ({e}), expected {}", e.code(), expected.trim()))
+                Err(e) if e.code().map(|c| c.as_str()) != Some(expected.trim()) => {
+                    Some(format!("{name}: {:?} ({e}), expected {}", e.code(), expected.trim()))
                 }
                 Err(_) => None,
             }

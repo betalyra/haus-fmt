@@ -11,7 +11,7 @@
  * - `uncheckedProfiles(text)`: for tools without codecs (editors), a note at
  *   each import of an official package that has profiles.
  */
-import { schemaOutline, type Definition, type Instance, type SchemaFile, type Type } from "./schema-file.js"
+import { BUILTINS, PRELUDE_ARITY, schemaOutline, STD_MODULES, type Definition, type Instance, type SchemaFile, type Type } from "./schema-file.js"
 
 /** The types official profiles have a rule for, by id, with the profiles (spec §13.4). `iso`'s rule for `Money` is its currency's. */
 export const PROFILED_TYPES: ReadonlyMap<string, readonly string[]> = new Map([
@@ -30,18 +30,47 @@ export const packageProfiles = (name: string): readonly string[] | undefined => 
   return profiles.size > 0 ? [...profiles] : undefined
 }
 
-/** The warning `missing-codec`: a type of an official profile reached without its codec (spec §13.4). */
-export interface CodecWarning {
-  readonly code: "missing-codec"
-  /** The type's id: `@haus-fmt/money@1#Currency`. */
-  readonly id: string
-  /** The profiles that have a rule for it: `["iso"]`. */
-  readonly profiles: readonly string[]
-  readonly message: string
-}
+/**
+ * A warning about the codecs set (spec §13.4): `missing-codec`, a type of an
+ * official profile reached without its codec; `unused-codec`, a codec for an
+ * id that no type has.
+ */
+export type CodecWarning =
+  | {
+    readonly code: "missing-codec"
+    /** The type's id: `@haus-fmt/money@1#Currency`. */
+    readonly id: string
+    /** The profiles that have a rule for it: `["iso"]`. */
+    readonly profiles: readonly string[]
+    readonly message: string
+  }
+  | {
+    readonly code: "unused-codec"
+    /** The codec's id: `@haus-fmt/money@2#Money`. */
+    readonly id: string
+    readonly message: string
+  }
 
 export const missingCodecMessage = (id: string, profiles: readonly string[]): string =>
   `${id} has profiles (${profiles.join(", ")}), but no codec is set for it: its values are checked for their shape only`
+
+/** The ids of the prelude's types and the standard modules' (`prelude#Decimal`, `std/time#Instant`). */
+export const BUILT_IN_TYPE_IDS: ReadonlySet<string> = new Set([
+  ...BUILTINS.map((name) => `prelude#${name}`),
+  ...Object.keys(PRELUDE_ARITY).map((name) => `prelude#${name}`),
+  ...Object.entries(STD_MODULES).flatMap(([module, names]) => names.map((name) => `${module}#${name}`)),
+])
+
+/**
+ * The warning `unused-codec` for each codec id that no type has (spec §13.4):
+ * not one of the prelude or a standard module, nor of the file and the files
+ * and packages it imports. Such a codec never runs: a typo, or the wrong major
+ * version (`@haus-fmt/money@2#Money` with a schema that imports major 1).
+ */
+export const unusedCodecs = (file: SchemaFile, ids: Iterable<string>): CodecWarning[] =>
+  [...ids]
+    .filter((id) => !BUILT_IN_TYPE_IDS.has(id) && !file.typeIds.has(id))
+    .map((id) => ({ code: "unused-codec", id, message: `a codec is set for ${id}, but no type has that id: it never runs` }))
 
 /**
  * The types of official profiles that the file's own definitions reach without

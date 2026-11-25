@@ -20,7 +20,7 @@ fn missing(schema: &Schema, codecs: &[&str]) -> Vec<String> {
         .missing_codecs(codecs.iter().copied())
         .iter()
         .map(|w| {
-            assert_eq!(w.code(), ErrorCode::MissingCodec);
+            assert_eq!(w.code(), Some(ErrorCode::MissingCodec));
             assert_eq!((w.position(), w.path()), (None, None));
             w.reason().split(' ').next().unwrap().to_owned()
         })
@@ -113,6 +113,6 @@ fn a_note_per_import_for_tools_without_codecs() {
             ),
         ]
     );
-    assert!(notes.iter().all(|n| n.code() == ErrorCode::MissingCodec));
+    assert!(notes.iter().all(|n| n.code() == Some(ErrorCode::MissingCodec)));
     assert_eq!(profiles::unchecked_profiles("import @haus-fmt/money ("), vec![]);
 }

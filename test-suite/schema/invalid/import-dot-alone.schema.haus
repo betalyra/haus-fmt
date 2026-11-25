@@ -1,0 +1,4 @@
+// "." alone is no module: a syntax error, not unknown-module (grammar.ebnf).
+// "..", ".x" and ".../a" start with "." but aren't paths: unknown-module.
+import . (T)
+type B = { t: T }

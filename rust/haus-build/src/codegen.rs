@@ -63,6 +63,9 @@ pub struct Input<'a> {
     pub codecs: &'a [Codec],
     /// Whether to check that each codec is one for its type (once per output file).
     pub check_codecs: bool,
+    /// Whether the file is the application's copy of a package's types (the
+    /// codec closure): its types keep their names, as the codecs' inputs.
+    pub copy: bool,
 }
 
 pub(crate) use crate::schema::unknown_type;
@@ -115,6 +118,27 @@ pub fn print(tokens: TokenStream, id: &str) -> Result<String, crate::Error> {
 /// A Rust path or type, as written in a codec or an import: `crate::codecs::Cents`.
 fn rust_path(path: &str) -> Option<TokenStream> {
     syn::parse_str::<syn::Type>(path).ok().map(|t| quote!(#t))
+}
+
+/// A type with the codec at `codec`: its target, decoded through it. With
+/// `inside`, the type (a copy of a package's) whose other codecs run first,
+/// from the inside out (spec §13.4).
+fn coded(codec: &TokenStream, inside: Option<&TokenStream>) -> Rs {
+    let (de, from_json) = match inside {
+        Some(path) => (
+            quote!(::haus::de::codec_inside_out::<#codec, #path>),
+            quote!(::haus::json::de::codec_inside_out::<#codec, #path>),
+        ),
+        None => (quote!(::haus::de::codec::<#codec>), quote!(::haus::json::de::codec::<#codec>)),
+    };
+    Rs {
+        ty: quote!(<#codec as ::haus::Codec>::Target),
+        de: Fun::Path(de),
+        en: Fun::Path(quote!(::haus::ser::codec::<#codec>)),
+        from_json: Fun::Path(from_json),
+        to_json: Fun::Path(quote!(::haus::json::ser::codec::<#codec>)),
+        shadow: quote!(<#codec as ::haus::Codec>::Base),
+    }
 }
 
 // ── recursion ────────────────────────────────────────────────
@@ -606,14 +630,50 @@ impl<'a> Gen<'a> {
             };
         }
         let id = format!("{}#{}", self.input.id, def.name);
+        // A type with a codec: its name is the codec's host type, so that decoding
+        // as it runs the codec (spec §13.4), and the type without the codec is
+        // `<Name>Base`, the codec's `Base`. A copy of a package's types keeps its
+        // names: its types are what the codecs of the package's types take.
+        let codec = (self.codecs.get(id.as_str()))
+            .filter(|_| !self.input.copy && def.params.is_empty())
+            .cloned()
+            .map(|codec| self.base_name(def).map(|base| (codec, base)))
+            .transpose()?;
+        let base = codec.as_ref().map_or(def.name.clone(), |(_, base)| base.clone());
+        let note = match &codec {
+            Some(_) => format!("haus type `{id}` without its codec: [`{}`] decodes with the codec.", def.name),
+            None => format!("haus type `{id}`."),
+        };
         let item = Item {
-            name: format_ident!("{}", def.name),
+            name: format_ident!("{base}"),
             params: def.params.iter().map(|p| param(p)).collect(),
-            doc: docs(def.doc.lines().chain(["", &format!("haus type `{id}`.")]).skip_while(|l| l.is_empty())),
+            doc: docs(def.doc.lines().chain(["", &note]).skip_while(|l| l.is_empty())),
             attrs: &def.attrs,
             at: At { owner: def, hint: def.name.clone(), contained: false },
         };
-        self.define(&item, &def.ty, Some(&id))
+        self.define(&item, &def.ty, Some(&id))?;
+        if let Some((codec, base)) = codec {
+            let name = format_ident!("{}", def.name);
+            let note = format!("haus type `{id}`, decoded and encoded with its codec `{codec}` (spec §13.4).");
+            let without = format!("Without the codec it is [`{base}`].");
+            let lines = def.doc.lines().chain(["", &note, "", &without]);
+            let (doc, deprecated) = (docs(lines.skip_while(|l| l.is_empty())), deprecated([def.attrs.as_slice()]));
+            self.items.push(quote! { #doc #deprecated pub type #name = ::haus::Coded<#codec>; });
+        }
+        Ok(())
+    }
+
+    /// The name of the type without its codec, for a type `def` with one: `MoneyBase`.
+    fn base_name(&mut self, def: &TypeDef) -> Result<String, Error> {
+        let base = format!("{}Base", def.name);
+        match self.names.insert(base.clone()) {
+            true => Ok(base),
+            false => self.fail(
+                def.pos,
+                Code::DuplicateType,
+                format!("{} has a codec, so the type without it would be called {base}, which is taken", def.name),
+            ),
+        }
     }
 
     /// The item for a type, with its id if it has one.
@@ -677,9 +737,12 @@ impl<'a> Gen<'a> {
             })?;
             (imp.id.clone(), path, imp.params, imp.copy)
         } else if let Some(&(_, params)) = PRELUDE.iter().find(|(n, _)| *n == name) {
-            return match arity(params) {
-                Some(reason) => self.fail(pos, Code::WrongArity, reason),
-                None => self.prelude(name, args, pos, at),
+            // A codec for a prelude type applies to every use of it (spec §13.4: `prelude#Decimal`).
+            let codec = self.codecs.get(format!("prelude#{name}").as_str()).filter(|_| params == 0);
+            return match (arity(params), codec) {
+                (Some(reason), _) => self.fail(pos, Code::WrongArity, reason),
+                (None, Some(codec)) => Ok(coded(codec, None)),
+                (None, None) => self.prelude(name, args, pos, at),
             };
         } else {
             return self.fail(pos, Code::UnknownType, unknown_type(name));
@@ -690,21 +753,7 @@ impl<'a> Gen<'a> {
         if let Some(codec) = self.codecs.get(id.as_str()).filter(|_| args.is_empty()) {
             // A package's type that contains other codecs' types is copied: the
             // copy runs those codecs first, at their own places (spec §13.4).
-            let (de, from_json) = match copy {
-                true => (
-                    quote!(::haus::de::codec_inside_out::<#codec, #path>),
-                    quote!(::haus::json::de::codec_inside_out::<#codec, #path>),
-                ),
-                false => (quote!(::haus::de::codec::<#codec>), quote!(::haus::json::de::codec::<#codec>)),
-            };
-            return Ok(Rs {
-                ty: quote!(<#codec as ::haus::Codec>::Target),
-                de: Fun::Path(de),
-                en: Fun::Path(quote!(::haus::ser::codec::<#codec>)),
-                from_json: Fun::Path(from_json),
-                to_json: Fun::Path(quote!(::haus::json::ser::codec::<#codec>)),
-                shadow: quote!(<#codec as ::haus::Codec>::Base),
-            });
+            return Ok(coded(codec, copy.then_some(&path)));
         }
         // An inline type in an argument is named after its place, as in Roc: `Inner1`.
         let args = args

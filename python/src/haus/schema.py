@@ -35,7 +35,7 @@ from . import _decode
 from ._canonical import canonical as _canonical
 from ._canonical import canonical_at
 from ._codecs import CodecGroup, DateCodec, DecimalCodec, InstantCodec, optional_codecs
-from ._decode import Codec
+from ._decode import CheckedCodec, Codec
 from ._errors import HausDecodeError, HausEncodeError, HausJsonError, format_path
 from ._host import Maybe, Nothing, Secret, Some, Tagged, Unknown
 from ._json import Json, read_json, read_lines, schema_json_depth, write_json
@@ -108,6 +108,7 @@ __all__ = [
     "Attribute",
     "BuiltinType",
     "Case",
+    "CheckedCodec",
     "Codec",
     "CodecGroup",
     "DateCodec",

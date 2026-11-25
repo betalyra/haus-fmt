@@ -74,7 +74,7 @@ export { importEdits, missingImports, type ImportEdit } from "./schema-imports.j
 export { missingCodecMessage, missingCodecs, packageProfiles, PROFILED_TYPES, uncheckedProfiles, type CodecWarning, type ProfileNote } from "./profiles.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"
-export { checkData, describeType, type CheckIssue, type CheckOptions } from "./check.js"
+export { checkData, checkText, describeType, MAX_ERRORS, type CheckIssue, type CheckOptions, type CheckReport } from "./check.js"
 export { contextOf, describeValue, hoverAt, hoverContext, hoverMarkdown, hoverText, TAG_NOTES, type HoverContext, type HoverInfo } from "./hover.js"
 export { completeAt, type Completion } from "./complete.js"
 export { HausValidationError, parseWith, parseWithAsync, type StandardSchemaV1 } from "./standard.js"

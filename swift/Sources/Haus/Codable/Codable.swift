@@ -91,19 +91,19 @@ extension SchemaType {
 
     func encodeTyped(_ value: some Encodable) throws(HausError) -> HausValue {
         let encoder = SchemaEncoder(root: node, CodingState())
-        return try catching { try encodeValue(value, encoder) }
+        return try catching(.cannotEncode) { try encodeValue(value, encoder) }
     }
 }
 
 /// Runs `body`, whose errors are all ``HausError``s (the coders convert
-/// the others where they happen).
-func catching<T>(_ body: () throws -> T) throws(HausError) -> T {
+/// the others where they happen; any left is `code`).
+func catching<T>(_ code: HausError.Code = .typeMismatch, _ body: () throws -> T) throws(HausError) -> T {
     do {
         return try body()
     } catch let error as HausError {
         throw error
     } catch {
-        throw HausError(.typeMismatch, "\(error)")
+        throw HausError(code, "\(error)")
     }
 }
 
@@ -124,8 +124,14 @@ func catching<T>(_ body: () throws -> T) throws(HausError) -> T {
 /// ```
 ///
 /// A rejection is `codec-rejected` at the value's place, with the message
-/// `<id> rejects the value: <the error>`. Decoding runs codecs from the
-/// inside out: a part's codec before the codec of the value that holds it.
+/// `<id> rejects the value: <the error>`; when encoding, an error of
+/// `hausBase` is `cannot-encode` there. Decoding runs codecs from the inside
+/// out: a part's codec before the codec of the value that holds it. What
+/// an outer codec gets for a part with a codec of its own is decided by its
+/// `HausBase`: the part's codec type gives the Swift value that codec made,
+/// the part's base type the value the schema decoded. A codec that checks
+/// a profile's rule declares its parts with their base types, so that no
+/// codec of another type can make a value pass it (spec §13.4).
 public protocol HausCodec: Codable {
     /// The value the schema decodes, which the codec converts.
     associatedtype HausBase: Codable
@@ -151,8 +157,15 @@ extension HausCodec {
     }
 
     public func encode(to encoder: any Encoder) throws {
-        if let haus = encoder as? SchemaEncoder { try expectCodec(Self.self, Self.hausTypeID, haus.node, haus.place) }
-        try hausBase.encode(to: encoder)
+        let haus = encoder as? SchemaEncoder
+        if let haus { try expectCodec(Self.self, Self.hausTypeID, haus.node, haus.place) }
+        let base: HausBase
+        do {
+            base = try hausBase
+        } catch {
+            throw haus?.place.fail(.cannotEncode, "\(Self.hausTypeID) can't encode the value: \(error)") ?? error
+        }
+        try base.encode(to: encoder)
     }
 }
 
@@ -213,8 +226,20 @@ extension Secret: Decodable where Wrapped: Decodable {
     }
 }
 
+/// A `Secret` is written in full only with its schema (``SchemaType/encode(_:limits:)``);
+/// any other `Encoder`, such as Foundation's `JSONEncoder`, fails (spec §15,
+/// "Hiding"): it would otherwise write the value where a log or a file shows
+/// it.
 extension Secret: Encodable where Wrapped: Encodable {
     public func encode(to encoder: any Encoder) throws {
+        guard encoder is SchemaEncoder else {
+            throw EncodingError.invalidValue(
+                "<redacted>",
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "a Secret is written only with its schema (SchemaType.encode): its value is not shown"
+                ))
+        }
         var container = encoder.singleValueContainer()
         try container.encode(reveal())
     }

@@ -70,7 +70,7 @@ All the mappings: [host types](/docs/types#host-types-in-each-language).
 - **Streams.** `StreamReader` takes chunks and gives values as they complete; `HausValues(chunks)` is the same as an `AsyncSequence`. [Logs and streams](/docs/tours/streams)
 - **JSON.** `orderType.toJSON(order)` writes schema-based JSON, `decode(_:fromJSON:)` reads it. `importJSON` reads any JSON as haus. [Coming from JSON](/docs/from-json)
 - **Hashes.** `hash` uses CryptoKit, so it exists on Apple platforms; on Linux, hash `canonical(value)` with a SHA-256 of your choice.
-- **Secrets.** `Secret<T>` holds a value that is never printed. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** `Secret<T>` holds a value that is never printed, and that only the schema's encoder writes (`JSONEncoder` fails on it). Decoding into a `HausValue` hides a secret as `.secret(…)`, which `stringify` and `canonical` refuse. [Config and secrets](/docs/tours/secrets)
 - **Concurrency.** Values, schemas and their types are `Sendable`: tasks can share one schema.
 - **Errors.** A `HausError` with a `code`, a `position` for text and `json` for the JSON form. [Error codes](/docs/errors)
 

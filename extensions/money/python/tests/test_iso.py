@@ -18,9 +18,28 @@ CODED = schema.load_schema(haus_money.PACKAGE / "schema.haus", codecs=haus_money
 _VECTOR = schema.compile_schema("""
     type Vector = closed <
       Accept { type: String, value: String, output?: String, note?: String }
-      | Reject { type: String, value: String, note?: String }
+      | Reject { type: String, value: String, looser?: Array String, note?: String }
     >
 """)["Vector"]
+
+
+class _Looser:
+    """An application's codec that accepts every value of its type's schema: looser than the profile."""
+
+    def decode(self, value: object, /) -> object:
+        return value
+
+    def encode(self, value: object, /) -> object:
+        return value
+
+
+def _with_looser(types: tuple[str, ...]) -> schema.Schema:
+    """The iso codecs, with a looser codec of the application's for each type named (`looser`)."""
+    looser = {f"@haus-fmt/money@1#{t}": _Looser() for t in types}
+    codecs = {i: c for i, c in haus_money.iso.items() if i not in looser} | looser
+    return schema.load_schema(haus_money.PACKAGE / "schema.haus", codecs=codecs)
+
+
 VECTORS = [
     cast(Tagged, _VECTOR.decode(v))
     for v in haus.parse_all((haus_money.PACKAGE / "profiles/iso.vectors.haus").read_text())
@@ -53,6 +72,11 @@ def test_vector(vector: Tagged) -> None:
         with pytest.raises(HausDecodeError) as e:
             coded.parse(f["value"])
         assert e.value.code == "codec-rejected"
+        if looser := cast(tuple[str, ...], f.get("looser", ())):
+            # A profile's rule is checked on the values the schema decoded (spec §13.4).
+            with pytest.raises(HausDecodeError) as e:
+                _with_looser(looser)[f["type"]].parse(f["value"])
+            assert e.value.code == "codec-rejected"
         return
     decoded = coded.parse(f["value"])
     encoded = coded.canonical(decoded)

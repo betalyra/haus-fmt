@@ -29,7 +29,7 @@ Every library reads and writes the same haus. They all run one [conformance suit
 
 - **Profile codecs.** The `iso` and `wgs84` rules of `@haus-fmt/money` and `@haus-fmt/geo` ship as codecs in every library except Swift. Zig has them in its Zig API, not yet in the C ABI. [What haus checks](/docs/checks)
 - **The `missing-codec` warning**, when your schema reaches a profiled type without its codec: TypeScript, Rust, Python, Go, Java and Kotlin, and `haus-gen` for Roc.
-- **Every error of a file at once**, with positions, as an editor shows them: TypeScript (`checkData`), Rust (`haus-fmt-schema`), Go (`CheckText`), Zig (`decoding.check`) and C (`haus_check_text`). The others stop at the first error.
+- **Every error of a file at once**, with positions, as an editor shows them: TypeScript (`checkText`), Rust (`haus-fmt-schema`), Go (`CheckText`), Zig (`decoding.check`) and C (`haus_check_text`). The others stop at the first error.
 - **Host types.** What `Int`, `Decimal`, `Maybe` and `Date` become in each language: [Host types in each language](/docs/types#host-types-in-each-language).
 
 The [examples](https://github.com/betalyra/haus-fmt/tree/main/examples) are the same in every language: `quickstart` reads a comment thread with its schema, `order` decodes an order with money, a location and codecs. Each page links to its language's copy.

@@ -207,7 +207,14 @@ final class SchemaLoader {
       Reached r = e.getValue();
       pkgs.add(new SchemaPackage(e.getKey(), r.pkg.manifest.version(), r.pkg.dir));
     }
-    return new Schema(defs, templates, own, warnings, pkgs);
+    // The ids of the types of every file loaded, for unused-codec (spec §13.4).
+    Set<String> ids = new HashSet<>();
+    for (int unit = 0; unit < units.size(); unit++) {
+      for (int d = 0; d < units.get(unit).file.types.size(); d++) {
+        ids.add(defId(unit, d));
+      }
+    }
+    return new Schema(defs, templates, own, warnings, pkgs, ids);
   }
 
   private void add(List<SchemaDefinition> defs, List<Instance> templates, String name, DefRef at) {

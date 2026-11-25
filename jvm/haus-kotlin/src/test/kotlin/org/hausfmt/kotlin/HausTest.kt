@@ -21,6 +21,7 @@ class HausTest {
         is Value.Array -> "array of ${v.size()}"
         is Value.Record -> "record of ${v.size()}"
         is Value.Variant -> "variant ${v.tag()}"
+        is Value.Secret -> "a secret"
     }
 
     @Test

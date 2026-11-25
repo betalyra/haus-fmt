@@ -151,15 +151,26 @@ without failing (spec §14, §15, §16). Schemas are given as text in each
 case, one file without imports.
 
 - `Schema { schema, warnings }`: the schema loads, and its warnings are
-  exactly `warnings`, in the order of their places: `Warning(code, line,
-  column)`, at what the warning is about (an unknown attribute's `@`, the
-  use of a deprecated type, a case without a schema-based JSON form).
-- `Data { schema, type, data, issues }`: checking the text `data` against
-  `type` (every value for a `Stream` type, else exactly one) gives exactly
-  `issues`, in the order of their places: `Hint(code, path)` for what is
+  exactly `warnings`: `Warning(code, line, column)`, at what the warning is
+  about (an unknown attribute's `@`, the use of a deprecated type, a case
+  without a schema-based JSON form).
+- `Data { schema, type, data, issues, first? }`: checking the text `data`
+  against `type` (every value for a `Stream` type, item by item, else
+  exactly one) gives exactly `issues`: `Hint(code, path)` for what is
   allowed but pointed out (`unlisted-field`, `unlisted-tag`, `deprecated`),
-  `Error(code, path)` for what the type forbids. `path` is the place of
-  spec §15.
+  `Error(code, path)` for what the type forbids, and `Syntax(code, line,
+  column)` for a syntax or limit error of the text, at its line and column
+  (spec §8). `path` is the place of spec §15. Without `first`, the check
+  reports every error (spec §14, "Every error"); with `first: True`, it stops
+  at the first (`haus check --first`). Runners check the text as a whole,
+  through the binding's checker of text, not a parse of their own, so that
+  a stream is read as the checker reads it.
+
+Warnings and issues are compared as multisets of (code, place): the order
+doesn't matter (spec §14 fixes none), and an entry listed twice must be
+reported twice (two `missing-field` at one record). The place is the line and
+column of a warning or a `Syntax` issue, and the path of the others; every
+runner compares it.
 
 A binding without a data checker runs the `Schema` cases only, and says so.
 
@@ -269,7 +280,7 @@ packages"):
   No case has it yet: Cargo passes packages through build-script metadata,
   which a file tree can't express, and `haus-build` runs the core cases.
 
-There are 133 cases: 87 `"core"` and 46 `"npm"`; 6 of them have
+There are 136 cases: 90 `"core"` and 46 `"npm"`; 6 of them have
 `os: "unix"` (4 core, 2 npm), and 3 `unmodelled` (below).
 
 The Lean reference (`haus-ref --packages`) runs every case of every

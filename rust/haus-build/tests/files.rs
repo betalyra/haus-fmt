@@ -98,10 +98,10 @@ fn an_application_split_into_files_in_roc() {
     assert!(code("OrderUpShippingCommon").contains("haus type `../shipping/common#Address`"));
     // One module has no room for the others.
     let e = RocConfig::new().root(dir.path()).generate(&app(dir.path()), "Order", "order").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportUnavailable, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportUnavailable, "{e}");
     // By default the root is the schema's directory: ../billing goes above it.
     let e = RocConfig::new().modules(&app(dir.path()), "Order", "order").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportOutsideRoot, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportOutsideRoot, "{e}");
 }
 
 #[test]
@@ -139,9 +139,9 @@ fn import_cycles_between_files() {
     write(&a, "import ./b (B)\ntype A = { b?: B }");
     write(&dir.path().join("b.schema.haus"), "import ./a (A)\ntype B = { a?: A }");
     let e = rust(&Config::new(), &a, &Explicit::new()).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportCycle, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportCycle, "{e}");
     let e = RocConfig::new().modules(&a, "A", "a").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportCycle, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportCycle, "{e}");
 }
 
 #[test]
@@ -152,9 +152,9 @@ fn a_file_outside_packages_cant_reach_into_one() {
     let a = dir.path().join("a.schema.haus");
     write(&a, "import ./ids/x (Id)\ntype A = Id");
     let e = rust(&Config::new(), &a, &Explicit::new()).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::PackagePath, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::PackagePath, "{e}");
     let e = RocConfig::new().modules(&a, "A", "a").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::PackagePath, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::PackagePath, "{e}");
 }
 
 #[test]
@@ -164,14 +164,14 @@ fn the_major_version_of_an_import_is_checked() {
     let a = dir.path().join("a.schema.haus");
     write(&a, "import @acme/x@7 (X)\ntype A = X");
     let e = RocConfig::new().package(dir.path().join("x"), "x").modules(&a, "A", "a").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "{e}");
     assert!(e.to_string().contains("@acme/x@7 wants major version 7, but version 1.0.0 was found"), "{e}");
     let packages = Explicit::new().package(dir.path().join("x")).unwrap();
     let e = rust(&Config::new(), &a, &packages).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "{e}");
     let text = "import @acme/x@7 (X)\ntype A = X";
     let cargo = Packages::none().with(&dir.path().join("x"), "acme_x").unwrap();
-    assert_eq!(haus_build::generate(text, "a", &[], &cargo).unwrap_err().code(), ErrorCode::ImportVersion);
+    assert_eq!(haus_build::generate(text, "a", &[], &cargo).unwrap_err().code(), Some(ErrorCode::ImportVersion));
     write(&a, "import @acme/x@1 (X)\ntype A = X");
     RocConfig::new().package(dir.path().join("x"), "x").modules(&a, "A", "a").unwrap();
 }
@@ -182,7 +182,7 @@ fn roc_messages_are_about_the_packages_given() {
     let a = dir.path().join("a.schema.haus");
     write(&a, "import @acme/x (X)\ntype A = X");
     let e = RocConfig::new().modules(&a, "A", "a").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportNotFound, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportNotFound, "{e}");
     let message = e.to_string();
     assert!(message.contains("not among the packages given"), "{message}");
     assert!(!message.contains("crate") && !message.contains("build script"), "{message}");
@@ -208,7 +208,7 @@ fn the_version_of_a_package_json_is_the_manifests() {
     let a = dir.path().join("a.schema.haus");
     write(&a, "import @acme/x (X)\ntype A = X");
     let e = RocConfig::new().package(dir.path().join("x"), "x").modules(&a, "A", "a").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::PackageVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::PackageVersion, "{e}");
     assert!(e.to_string().contains("1.0.0") && e.to_string().contains("1.2.0"), "{e}");
 }
 
@@ -286,10 +286,22 @@ fn a_codec_applies_inside_other_crates_types() {
     assert!(code.contains("pub terms: super::acme_ledger::Terms,"), "{code}");
     assert!(code.contains("pub rate: <crate::Percent as ::haus::Codec>::Target,"), "{code}");
     assert!(code.contains("pub entries: ::std::vec::Vec<::acme_ledger::Entry>,"), "{code}");
-    // A type the schema doesn't have at all.
+    // A type the schema doesn't have at all: a codec that would never run (spec §13.4, rejected).
     let e = rust(&Config::new().codec("@haus-fmt/money@1#Coin", "crate::Cents"), &a, &explicit).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::UnknownType, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::UnusedCodec, "{e}");
     assert!(e.to_string().contains("the schema has no such type"), "{e}");
+    // A codec for a prelude type applies inside packages' types too: Money's amount is a Decimal,
+    // so the types that contain a Money are copied; Terms has none.
+    let code = rust(&Config::new().codec("prelude#Decimal", "crate::BigDecimal"), &a, &explicit).unwrap();
+    assert!(code.contains("pub amount: <crate::BigDecimal as ::haus::Codec>::Target,"), "{code}");
+    assert!(code.contains("pub order: self::acme_orders::Order,"), "{code}");
+    assert!(code.contains("pub terms: ::acme_ledger::Terms,"), "{code}");
+    // Two codecs for one id are a mistake of the configuration, not the last one winning.
+    let twice =
+        Config::new().codec("@haus-fmt/money@1#Money", "crate::Cents").codec("@haus-fmt/money@1#Money", "crate::Euros");
+    let e = rust(&twice, &a, &explicit).unwrap_err();
+    assert!(e.to_string().contains("two codecs for @haus-fmt/money@1#Money"), "{e}");
+    assert_eq!(e.code(), None, "{e}");
 }
 
 #[test]
@@ -316,7 +328,7 @@ fn a_crate_names_its_dependencies_dependencies_through_them() {
     }
     // Only packages' files import it: the crate's own files import its dependencies.
     let e = haus_build::generate("import @acme/ledger@1 (Note)\ntype B = Note", "app", &[], &cargo).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::UndeclaredPackage, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::UndeclaredPackage, "{e}");
     assert!(e.to_string().contains("@acme/ledger is a dependency of haus_orders, not of this crate"), "{e}");
 }
 
@@ -508,9 +520,9 @@ fn a_spread_of_a_std_time_type_is_invalid() {
     {
         write(&a, text);
         let e = rust(&Config::new(), &a, &Explicit::new()).unwrap_err();
-        assert_eq!(e.code(), ErrorCode::InvalidSpread, "{e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::InvalidSpread, "{e}");
         let e = RocConfig::new().modules(&a, "A", "a").unwrap_err();
-        assert_eq!(e.code(), ErrorCode::InvalidSpread, "{e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::InvalidSpread, "{e}");
     }
 }
 

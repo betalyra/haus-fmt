@@ -311,10 +311,14 @@ static void test_schema(void) {
     CHECK(eq(haus_string(haus_secret_reveal(pin), &len), len, "1234"));
     CHECK(haus_secret_reveal(v) == NULL && haus_secret_reveal(NULL) == NULL);
     char *written = NULL;
-    CHECK(haus_stringify(v, HAUS_COMPACT, 2, 80, &written, &len, &err) == HAUS_ERROR && code_is(&err, "invalid-tag"));
+    CHECK(haus_stringify(v, HAUS_COMPACT, 2, 80, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
     CHECK(strstr(err.message, "1234") == NULL);
-    CHECK(haus_value_canonical(pin, &written, &len, &err) == HAUS_ERROR);
-    CHECK(canonical_is(haus_record_get(v, S("lines")), "[{qty:2,sku:\"a\"}]"));
+    CHECK(haus_value_canonical(pin, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    char digest[65];
+    int equal = 0;
+    CHECK(haus_value_hash(v, digest, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    CHECK(haus_to_haus_json(v, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    CHECK(haus_value_equals(v, v, &equal, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));    CHECK(canonical_is(haus_record_get(v, S("lines")), "[{qty:2,sku:\"a\"}]"));
     CHECK(canonical_is(haus_record_get(v, S("id")), "0"));
     haus_doc_free(doc);
     /* Encoding writes the data in full. */

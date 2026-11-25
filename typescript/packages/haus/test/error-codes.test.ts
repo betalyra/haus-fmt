@@ -190,7 +190,7 @@ describe("wrong-payload names the case (spec §15, §17)", () => {
       hint: "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.",
     })
     expect(checked("{ shape: Circle(1.5), on: None }")).toEqual([
-      { severity: "error", code: "wrong-payload", message: "Circle takes one argument, a record", hint: "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.", start: 9, end: 20 },
+      { severity: "error", code: "wrong-payload", message: "Circle takes one argument, a record", hint: "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.", path: "$.shape", start: 9, end: 20 },
     ])
   })
 

@@ -30,17 +30,32 @@ for issue in schema.check_text("Root", &text) {                  // every proble
     let at = issue.position.unwrap();
     println!("{}:{}: {} {}", at.line, at.column, issue.severity, issue);
 }
-let value = schema.decode("Root", &haus::parse(&text)?[0])?;     // spec §15: the value an encoder writes back
+let decoded = schema.decode("Root", &haus::parse(&text)?[0])?;   // spec §15: the value an encoder writes back
+println!("{decoded}");                                           // its secrets as <redacted>
+let value = decoded.reveal();                                    // a haus::Value, secrets and all
 ```
 
+`decode` gives a `haus_schema::Decoded`: the decoded value, in which every
+`Secret` stays hidden (spec §15, "Secrets"). `Debug` and `Display` show a
+secret as `<redacted>`, and the canonical form, the hash, `compare` and the
+writers take a `haus::Value`, which can't hold one: `reveal()` makes the value
+one, secrets and all, and only when the code asks. `as_value()` gives the
+value of one without secrets. `schema.encode("Root", &decoded)` encodes with
+the schema, the secrets in full (the receiver needs them).
+
 `check_text` reports every error (spec §14, "Every error") and the hints, up
-to `MAX_ISSUES` (200): each failing place once, nothing below a value that
-failed at its own level (a wrong kind or tag), an error inside a `Secret` once
-at the secret, and after a syntax or limit error that one error. The issues
-are a set: their order is not part of the result. `check_text_report` (and
+to `MAX_ERRORS` (200) errors, hints not counted: each error once (a record
+missing two fields has two), nothing below a value that failed at its own
+level (a wrong kind or tag), and an error inside a `Secret` once at the
+secret. A document with a syntax or limit error has that one error; a
+`Stream` is checked item by item, so a syntax error ends the check after the
+errors of the items before it (`Issue::syntax` tells it apart). The issues
+are a multiset: their order is not part of the result. `check_text_report` (and
 `check_report` for parsed values) takes `CheckOptions { first, limits }`,
 `first` to stop at the first error with the hints before it, and returns a
 `CheckReport` whose `stopped` says that the check stopped at the cap.
+`check_stream` checks a stream's values as they arrive, with one cap for all
+of them (`haus check -`), and `decode_item` decodes one, at its index.
 
 ## Use
 
@@ -212,6 +227,21 @@ from `Packages::files()`.
   that uses them works with every crate. Without codecs, nothing is copied,
   and a type with a codec of its own isn't either: its codec decodes the
   package's type.
+- Every named type without parameters can have a codec: your own, a
+  package's, std/time's, and the prelude's (`prelude#Decimal` applies to
+  every `Decimal`, in packages' types too). One codec per id: a second
+  `.codec(…)` for an id fails the build, as a mistake of its configuration
+  (an error without a code: `Error::code()` is `None`), and one for an id the
+  schema has no type for fails it with `unused-codec`.
+- A codec gets the value as the schema decoded it (its `Base`), never what
+  the codecs of its parts made of it, so a profile's rule holds whatever codec
+  you set for a part.
+- A codec runs also when a whole value is decoded as its type (spec §13.4).
+  The generated name of one of your types with a codec is the codec's host
+  type, `pub type Money = haus::Coded<crate::Cents>`, so decoding as `Money`
+  runs the codec; the type without the codec, the codec's `Base`, is
+  `MoneyBase`. A package's types are its crate's: decode one through a codec
+  as `haus::Coded<C>`: `haus::from_str::<haus::Coded<haus_money::Iso>>(text)`.
 
 The official profiles (spec §13.3) are codecs of the official crates. They
 reject what the profile rejects and keep the value (spec §13.4):

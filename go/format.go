@@ -328,8 +328,11 @@ func (c *writeCheck) number(text string) error {
 }
 
 func (c *writeCheck) unknownValue(v Value) error {
-	if v == nil {
+	switch v.(type) {
+	case nil:
 		return c.fail(CodeCannotEncode, "a nil value")
+	case Secret:
+		return c.fail(CodeCannotEncode, "%s", secretRefused)
 	}
 	return c.fail(CodeCannotEncode, "an unknown kind of value")
 }

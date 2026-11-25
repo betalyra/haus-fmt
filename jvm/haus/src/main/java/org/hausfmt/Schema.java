@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.hausfmt.SchemaTypes.Instance;
 
 /**
@@ -30,14 +31,17 @@ public final class Schema {
   private final List<HausException> warnings;
   private final List<SchemaPackage> packages;
   private final Map<String, Integer> byName = new HashMap<>();
+  /** The ids of the types of every file loaded: its own, and those of the files and packages it imports. */
+  private final Set<String> ids;
 
   Schema(List<SchemaDefinition> definitions, List<Instance> templates, int own, List<HausException> warnings,
-      List<SchemaPackage> packages) {
+      List<SchemaPackage> packages, Set<String> ids) {
     this.definitions = List.copyOf(definitions);
     this.templates = List.copyOf(templates);
     this.own = own;
     this.warnings = List.copyOf(warnings);
     this.packages = List.copyOf(packages);
+    this.ids = Set.copyOf(ids);
     for (int i = 0; i < definitions.size(); i++) {
       byName.put(definitions.get(i).name(), i);
     }
@@ -158,5 +162,16 @@ public final class Schema {
       roots.add(template.body);
     }
     return Profiles.missingCodecs(roots, Objects.requireNonNull(codecs, "codecs"));
+  }
+
+  /**
+   * The {@code unused-codec} warnings for decoding the schema's types with {@code codecs} (spec
+   * §13.4, "A codec that matches no type"): one for each codec whose id is no type of the prelude,
+   * of std/time, nor of the schema's files and the packages they import, such as a typo or {@code
+   * @haus-fmt/money@2#Money} when the schema imports major 1. Such a codec never runs, and the
+   * values it was meant to check pass. Sorted by id, at no place, like {@link #warnings()}.
+   */
+  public List<HausException> unusedCodecs(Codecs codecs) {
+    return Profiles.unusedCodecs(ids, Objects.requireNonNull(codecs, "codecs"));
   }
 }

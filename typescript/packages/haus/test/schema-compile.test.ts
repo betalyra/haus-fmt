@@ -215,10 +215,38 @@ describe("codecs", () => {
     expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(expect.objectContaining({ code: "cannot-encode" }))
   })
 
-  it("for types the schema doesn't contain are ignored; two for one type are an error", () => {
+  it("for types the schema doesn't contain never run: the warning unused-codec; two for one type are an error", () => {
     const other: Codec = { id: "@haus-fmt/geo@1#LatLng", apply: (base) => base }
     expect(() => order([capitals, other])).not.toThrow()
     expect(() => order([capitals, capitals])).toThrow("two codecs for @haus-fmt/money@1#Currency")
+  })
+
+  it("unused-codec: once per id no type has, not for the prelude, std/time or the imported package's types (spec §13.4)", () => {
+    const compiled = (codecs: readonly Codec[]) =>
+      compileSchemaFile(`import @haus-fmt/money (Currency)\ntype Order = { shown: Currency }`, { resolver: nodeResolver({ packages }), codecs }).warnings
+    const major2: Codec = { id: "@haus-fmt/money@2#Money", apply: (base) => base }
+    expect(compiled([capitals, major2])).toEqual([{ code: "unused-codec", id: "@haus-fmt/money@2#Money", message: "a codec is set for @haus-fmt/money@2#Money, but no type has that id: it never runs" }])
+    const known = ["@haus-fmt/money@1#Money", "prelude#Decimal", "std/time#Instant", "Order"].map((id): Codec => ({ id, apply: (base) => base }))
+    expect(compiled([capitals, ...known])).toEqual([])
+  })
+
+  it("for the prelude and std/time apply wherever their type occurs, in a package's types too (spec §13.4)", () => {
+    const tenths: Codec = { id: "prelude#Decimal", apply: (base) => h.refine(base as h.Schema<string>, (d) => (/\.\d{2,}$/.test(d) ? "at most one decimal" : undefined)) }
+    const at: Codec = { id: "std/time#Instant", apply: (base) => h.transform(base as h.Schema<string>, (s) => new globalThis.Date(s), (d) => d.toISOString().replace(".000Z", "Z")) }
+    const { schemas } = compileSchemaFile(`import @haus-fmt/money (Money)\nimport std/time (Instant)\ntype Order = { total: Money, at: Instant, rate: Decimal }`, { resolver: nodeResolver({ packages }), codecs: [tenths, at] })
+    const order = h.parse(schemas.Order!, `{ total: Money(1.5, EUR), at: Instant("2026-11-01T09:00:00Z"), rate: 0.5 }`) as { at: globalThis.Date }
+    expect(order.at).toBeInstanceOf(globalThis.Date)
+    expect(h.stringify(schemas.Order!, order, { style: "compact" })).toBe(`{ total: Money(1.5, EUR), at: Instant("2026-11-01T09:00:00Z"), rate: 0.5 }`)
+    // Inside the package's Money too.
+    expect(() => h.parse(schemas.Order!, `{ total: Money(1.55, EUR), at: Instant("2026-11-01T09:00:00Z"), rate: 0.5 }`)).toThrow(expect.objectContaining({ code: "codec-rejected", path: ["total", 0] }))
+  })
+
+  it("runs on the type a value is decoded with; inside a Secret its rejection is invalid-secret; encoding, cannot-encode at the codec's place", () => {
+    const options = { resolver: nodeResolver({ packages }), codecs: [capitals] }
+    const { schemas } = compileSchemaFile(`import @haus-fmt/money (Currency)\ntype Code = Currency\ntype Key = { c: Secret Currency }`, options)
+    expect(() => h.parse(schemas.Code!, `Usd`)).toThrow(expect.objectContaining({ code: "codec-rejected", path: [] }))
+    expect(() => h.parse(schemas.Key!, `{ c: Usd }`)).toThrow(expect.objectContaining({ code: "invalid-secret", path: ["c"] }))
+    expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(expect.objectContaining({ code: "cannot-encode", path: ["total", 1] }))
   })
 
   it("missing for a type of an official profile: the warning missing-codec, once per id (spec §13.4)", () => {

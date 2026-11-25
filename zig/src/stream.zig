@@ -26,6 +26,14 @@ pub const StreamOptions = struct {
     /// otherwise.
     strict: bool = false,
     diagnostic: ?*Diagnostic = null,
+    /// Item by item, as a typed stream decoder reads (spec §14, §15
+    /// "Streams"): `push` gives the values a chunk completed before an
+    /// error, and the error comes from the next call (`push` or `end`),
+    /// its diagnostic as it was. Invalid UTF-8 is found where the reader
+    /// gets to it, after the values before it. Without it, a chunk's error
+    /// comes at once, and the chunk is checked for UTF-8 before any of its
+    /// values is parsed.
+    item_by_item: bool = false,
 };
 
 const State = enum {
@@ -71,6 +79,9 @@ pub const StreamReader = struct {
     x_word: bool = false,
     ident: bool = false,
     failed: bool = false,
+    /// `item_by_item`: an error held back until the values before it are
+    /// read, with its diagnostic.
+    deferred: ?Diagnostic = null,
 
     pub fn init(gpa: Allocator, options: StreamOptions) Error!StreamReader {
         try @import("root.zig").checkLimits(options.limits, options.diagnostic);
@@ -110,7 +121,29 @@ pub const StreamReader = struct {
     /// Reads the next chunk; returns the values it completed, allocated
     /// with `arena`.
     pub fn push(r: *StreamReader, arena: Allocator, chunk: []const u8) Error![]const Value {
-        if (r.failed) return error.Haus;
+        if (r.failed) return r.failedAgain();
+        var out: std.ArrayList(Value) = .empty;
+        r.pushInto(arena, chunk, &out) catch |e| {
+            if (e == error.Haus and r.options.item_by_item and out.items.len > 0) {
+                // The values before the error first; the error next time.
+                if (r.options.diagnostic) |d| r.deferred = d.*;
+                return out.toOwnedSlice(arena);
+            }
+            out.deinit(arena);
+            return e;
+        };
+        return out.toOwnedSlice(arena);
+    }
+
+    /// The error of a reader that failed: a held-back one with its diagnostic.
+    fn failedAgain(r: *StreamReader) Error {
+        if (r.deferred) |saved| if (r.options.diagnostic) |d| {
+            d.* = saved;
+        };
+        return error.Haus;
+    }
+
+    fn pushInto(r: *StreamReader, arena: Allocator, chunk: []const u8, out: *std.ArrayList(Value)) Error!void {
         // Drop the parts already read.
         if (r.seg_start > 0) {
             const rest = r.buf.items.len - r.seg_start;
@@ -122,8 +155,9 @@ pub const StreamReader = struct {
         try r.buf.appendSlice(r.gpa, chunk);
         // The text read so far is checked for UTF-8 before any of it is
         // parsed (spec §4): invalid UTF-8 in this chunk comes before a
-        // syntax error in a value it completes.
-        {
+        // syntax error in a value it completes. Item by item, the scan
+        // below finds it, after the values before it.
+        if (!r.options.item_by_item) {
             var at = r.scanned;
             while (at < r.buf.items.len) {
                 const len = std.unicode.utf8ByteSequenceLength(r.buf.items[at]) catch return r.fail(.@"invalid-utf8", at, "invalid UTF-8", .{});
@@ -135,8 +169,6 @@ pub const StreamReader = struct {
                 at += len;
             }
         }
-        var out: std.ArrayList(Value) = .empty;
-        errdefer out.deinit(arena);
         while (r.scanned < r.buf.items.len) {
             const at = r.scanned;
             const len = std.unicode.utf8ByteSequenceLength(r.buf.items[at]) catch return r.fail(.@"invalid-utf8", at, "invalid UTF-8", .{});
@@ -168,13 +200,12 @@ pub const StreamReader = struct {
                 return r.fail(.@"value-too-long", start, "a value longer than {d} characters", .{r.options.limits.max_value_length});
             }
         }
-        return out.toOwnedSlice(arena);
     }
 
     /// Ends the stream: returns the last value, if there is one after the
     /// last comma.
     pub fn end(r: *StreamReader, arena: Allocator) Error!?Value {
-        if (r.failed) return error.Haus;
+        if (r.failed) return r.failedAgain();
         if (r.scanned < r.buf.items.len) return r.fail(.@"invalid-utf8", r.scanned, "invalid UTF-8: the stream ends inside a character", .{});
         const last = try r.part(arena, r.buf.items.len, false);
         if (last != null and r.options.strict) {
@@ -374,6 +405,35 @@ test "a chunk is checked for UTF-8 before it is parsed" {
     var d: Diagnostic = .{};
     try std.testing.expectError(error.Haus, readAll(std.testing.allocator, arena, "[1 2], \xff", 64, .{ .diagnostic = &d }));
     try std.testing.expectEqual(errors.Code.@"invalid-utf8", d.code);
+}
+
+test "item by item: the values before an error, then the error" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const t = std.testing;
+    var d: Diagnostic = .{};
+    for ([_][]const u8{ "1, 2, [3 4], 5,", "1, 2, \xff 3," }) |text| {
+        var r = try StreamReader.init(t.allocator, .{ .diagnostic = &d, .item_by_item = true });
+        defer r.deinit();
+        try t.expectEqual(2, (try r.push(arena, text)).len);
+        d = .{};
+        // The error, as it was found, from the next call.
+        try t.expectError(error.Haus, r.end(arena));
+        if (text[6] == 0xff) {
+            try t.expectEqual(errors.Code.@"invalid-utf8", d.code);
+        } else {
+            try t.expectEqual(errors.Code.@"missing-comma", d.code);
+            try t.expectEqual(@as(u32, 1), d.line);
+            try t.expectEqual(@as(u32, 10), d.column);
+        }
+        try t.expectError(error.Haus, r.push(arena, "6,"));
+    }
+    // Without it, the chunk's error at once, and UTF-8 first.
+    var r = try StreamReader.init(t.allocator, .{ .diagnostic = &d });
+    defer r.deinit();
+    try t.expectError(error.Haus, r.push(arena, "1, [2 3], \xff"));
+    try t.expectEqual(errors.Code.@"invalid-utf8", d.code);
 }
 
 test "value-too-long is at the start of the value's text" {

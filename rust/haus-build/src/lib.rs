@@ -32,6 +32,12 @@
 //! re-exports their crates, so a crate sees its dependencies' packages
 //! without depending on them.
 //!
+//! A codec runs also when a value is decoded as its type: an application's
+//! own type with a codec is generated as the codec's host type (`pub type
+//! Money = haus::Coded<crate::Cents>`), and the type without the codec, the
+//! codec's `Base`, as `MoneyBase`. One codec per id: two for one id fail the
+//! build as a mistake of its configuration, an error without a code.
+//!
 //! Imports are loaded and checked by haus-fmt-schema (spec §13.3); files
 //! the schema imports (`import ./common (Address)`) are generated into the
 //! same output, as modules ([`Config::compile`]). The build's root, which
@@ -331,8 +337,14 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                     (key.clone(), Imported { id: origin.id(key), path, params, shape: origin.shape(schema), copy })
                 })
                 .collect::<HashMap<_, _>>();
-            let input =
-                codegen::Input { text: &unit.text, id: &unit.id, imports: &imports, codecs, check_codecs: u == 0 };
+            let input = codegen::Input {
+                text: &unit.text,
+                id: &unit.id,
+                imports: &imports,
+                codecs,
+                check_codecs: u == 0,
+                copy: unit.package.is_some(),
+            };
             let items = codegen::generate(&unit.file, &input).map_err(|e| {
                 let e = Error::from(e);
                 match &unit.path {

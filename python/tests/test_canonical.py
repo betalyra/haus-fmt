@@ -223,7 +223,9 @@ def test_built_values_have_a_canonical_form_hash_and_order() -> None:
         (lambda: Variant("lower"), "invalid-tag"),
         (lambda: Variant(""), "invalid-tag"),
         (lambda: Variant("A-B"), "invalid-tag"),
-        (lambda: Variant("A\ud800"), "cannot-encode"),
+        (lambda: Variant("A\ud800"), "invalid-tag"),  # a tag is checked before it is encoded (spec §11)
+        (lambda: Variant("\ud800"), "invalid-tag"),
+        (lambda: Variant(type("Tag", (str,), {})("\udc00")), "invalid-tag"),
         (lambda: Variant(cast("str", None)), "cannot-encode"),
         (lambda: Variant("A", cast("tuple[Value, ...]", (1,))), "cannot-encode"),
         (lambda: Record([("a", Number("1")), ("a", Number("2"))]), "duplicate-key"),

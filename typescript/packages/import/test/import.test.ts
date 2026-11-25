@@ -100,8 +100,9 @@ describe("Secret, Any and attributes", async () => {
       const b = await backend(target)
       const { schema: schemaPath, data } = files(good)
       const types = typesFor(schema, schemaPath, b).text
-      expect(types).toContain(target === "plain" ? "key?: h$.Secret<string>" : "key?: Redacted$.Redacted<string>")
-      expect(types).toContain(target === "plain" ? "readonly extra: h$.Value" : "readonly extra: Haus$.Value")
+      // Effect: every type of the prelude can have a codec (spec §13.4), so its declaration is a Lookup.
+      expect(types).toContain(target === "plain" ? "key?: h$.Secret<string>" : `key?: Redacted$.Redacted<Haus$.Lookup<C$, "prelude#String", string>>`)
+      expect(types).toContain(target === "plain" ? "readonly extra: h$.Value" : `readonly extra: Haus$.Lookup<C$, "prelude#Any", Haus$.Value>`)
       expect(types).toContain("/** @deprecated use token */ readonly key?:")
 
       const root = (await load(moduleFor(good, data, b, runtimeOf).code)).default as { key: unknown; extra: { kind: string } }

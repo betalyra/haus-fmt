@@ -16,6 +16,13 @@ That is the shape of an ISO 4217 code. Whether the code is assigned is not
 checked: the list changes, and which currencies an application takes (a
 shop's own list, `BTC`) is the application's choice, made with its own codec.
 
+A codec for `Currency` or `Money`, the application's own included, MAY reject
+more than this rule, never less: the application chooses among the codes the
+rule accepts (`BTC` yes, `Bitcoin` no). An application that takes other codes
+defines a type of its own. A looser codec for `Currency` doesn't change what
+the rule for `Money` accepts: `Money(19.90, Bitcoin)` is rejected whatever
+codec is set for `Currency` (spec §13.4).
+
 ## `Money(amount, currency)`
 
 A codec accepts a `Money` exactly when its `currency` is accepted as a

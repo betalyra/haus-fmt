@@ -58,7 +58,12 @@ ProfilesTest := [].{
 		\\{ trips: [{ fare: Money(12.50, EUR), area: BBox(LatLng(0, 170), LatLng(10, -170)), stops: [LatLng(-0, 0), LatLng(38.7223, -9.1393)], legs: [Walk, Ride { fare: Money(3.10, EUR), from: LatLng(38.7, -9.1), to: LatLng(38.8, -9.2) }, Tip(CHF)] }], traveller: { name: "Ada" }, budget: Money(100.00, USD) }
 }
 
-## The vector's codec, by its type.
+## The vector's codec, by its type. A Reject's `looser: ["Currency"]` asks
+## for the vector to be rejected again with a looser codec for `Currency`:
+## `Iso` checks its rule on the `Money` the schema decoded
+## (`HausFmtMoney.decode_money`, which runs no codec for `Currency`), so
+## whatever codec the application sets for `Currency`, the check is this
+## one (spec §13.4).
 check : Value -> Try({}, Str)
 check = |vector| match vector.view() {
 	Tag(tag, [payload]) => {
@@ -66,6 +71,10 @@ check = |vector| match vector.view() {
 		ty = text(fields, "type")?
 		value = text(fields, "value")?
 		output = text(fields, "output") ?? value
+		looser = names(fields, "looser")?
+		if !looser.is_empty() and (tag != "Reject" or ty != "Money" or looser != ["Currency"]) {
+			return Err("no looser codecs ${Str.join_with(looser, ", ")} for a ${tag} of ${ty}")
+		}
 		match ty {
 			"Money" => run(tag, value, output, HausFmtMoney.decode_money, HausFmtMoney.encode_money, Iso.decode, Iso.encode)
 			"Currency" => run(tag, value, output, HausFmtMoney.decode_currency, HausFmtMoney.encode_currency, IsoCurrency.decode, IsoCurrency.encode)
@@ -88,6 +97,13 @@ text : List((Str, Value)), Str -> Try(Str, Str)
 text = |fields, key| match fields.find_first(|(k, _)| k == key).map_ok(|(_, v)| v.view()) {
 	Ok(Text(s)) => Ok(s)
 	_ => Err("no ${key}")
+}
+
+## The type names of the field `key`, an array of strings; none without it.
+names : List((Str, Value)), Str -> Try(List(Str), Str)
+names = |fields, key| match fields.find_first(|(k, _)| k == key) {
+	Ok((_, v)) => Decode.list(v, Decode.str).map_err(|_| "the ${key} is not an array of type names")
+	Err(_) => Ok([])
 }
 
 ## `x` encoded with `encode` (at the top, for a reader with the default limits), as text.

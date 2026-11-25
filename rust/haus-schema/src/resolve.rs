@@ -723,7 +723,11 @@ impl<'a> Loader<'a> {
             true => files::package(self.options.packages, name, from.as_deref(), &mut self.files),
             false => files::file(name, from.as_deref(), self.units[unit].package.as_deref(), &mut self.files),
         };
-        let found = found.map_err(|e| self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))))?;
+        // A locator's error without a code (an application's locator) leaves the import unavailable.
+        let found = found.map_err(|e| {
+            let code = e.code().unwrap_or(Code::ImportUnavailable);
+            self.lift(at(code, format!("can't import {label}: {}", e.reason())))
+        })?;
         if let (Some(wanted), Some(package)) = (wanted, &found.package) {
             let version = quote(&package.manifest.version);
             if package.manifest.major() != wanted {
@@ -744,7 +748,7 @@ impl<'a> Loader<'a> {
                 Some(Reached { found: old, .. }) => {
                     let (old_dir, new_dir) = (self.files.shown(&old.dir), self.files.shown(&new.dir));
                     let e = duplicate((&old.manifest, &old_dir), (&new.manifest, &new_dir));
-                    return Err(self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))));
+                    return Err(self.lift(at(Code::DuplicatePackage, format!("can't import {label}: {}", e.reason()))));
                 }
                 None => found.path.clone(),
             },

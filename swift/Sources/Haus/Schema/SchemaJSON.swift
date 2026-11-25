@@ -386,7 +386,7 @@ extension SchemaWalker {
                 try imported(x, depth: depth + 1)
                 path.removeLast()
             }
-        case .number, .bytes, .variant:
+        case .number, .bytes, .variant, .secret:
             break
         }
     }

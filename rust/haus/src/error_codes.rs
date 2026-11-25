@@ -136,7 +136,7 @@ pub enum ErrorCode {
     AttributeSpace,
     /// `attribute-on-spread`: An attribute on a spread. The fields and tags a spread copies keep their own attributes. Reported at (informative): The attribute's `@`.
     AttributeOnSpread,
-    /// `unknown-module`: An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf). Reported at (informative): The import, at its `import`.
+    /// `unknown-module`: An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf). Reported at (informative): The import, at its `import`.
     UnknownModule,
     /// `unknown-import`: An import names a type the module doesn't have, or no type at all. Reported at (informative): The type's name in the import.
     UnknownImport,
@@ -198,9 +198,9 @@ pub enum ErrorCode {
     InvalidTime,
     /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15). Reported at: The secret itself, never a place inside it.
     InvalidSecret,
-    /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4).
+    /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
     CodecRejected,
-    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded. Building a value in code: informative (§11).
+    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
     CannotEncode,
     /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text. Reported at: The place of the value that contains itself, or `$`.
     CyclicValue,
@@ -220,7 +220,7 @@ pub enum ErrorCode {
     HausJsonNumber,
     /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte. Reported at: The member: `$._value._bytes`.
     HausJsonBytes,
-    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
+    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included. Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
     InvalidTag,
     /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits. Reported at: The string.
     InvalidBase64,
@@ -240,6 +240,8 @@ pub enum ErrorCode {
     UnlistedTag,
     /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
     MissingCodec,
+    /// `unused-codec`: A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. Reported at: Nowhere: it is about the codecs the application set, reported once per id.
+    UnusedCodec,
 }
 
 /// The category of an error code (spec §17).
@@ -274,7 +276,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 117] = [
+    pub const ALL: [ErrorCode; 118] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -392,6 +394,7 @@ impl ErrorCode {
         ErrorCode::UnlistedField,
         ErrorCode::UnlistedTag,
         ErrorCode::MissingCodec,
+        ErrorCode::UnusedCodec,
     ];
 
     /// The code: `payload-newline`.
@@ -514,6 +517,7 @@ impl ErrorCode {
             ErrorCode::UnlistedField => "unlisted-field",
             ErrorCode::UnlistedTag => "unlisted-tag",
             ErrorCode::MissingCodec => "missing-codec",
+            ErrorCode::UnusedCodec => "unused-codec",
         }
     }
 
@@ -637,6 +641,7 @@ impl ErrorCode {
             ErrorCode::UnlistedField => ErrorCategory::Hints,
             ErrorCode::UnlistedTag => ErrorCategory::Hints,
             ErrorCode::MissingCodec => ErrorCategory::Hints,
+            ErrorCode::UnusedCodec => ErrorCategory::Hints,
         }
     }
 
@@ -760,6 +765,7 @@ impl ErrorCode {
             ErrorCode::UnlistedField => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.",
             ErrorCode::UnlistedTag => "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers.",
             ErrorCode::MissingCodec => "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.",
+            ErrorCode::UnusedCodec => "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them.",
         }
     }
 }

@@ -302,7 +302,9 @@ last = Streaming.finish($reader)?
 ```
 
 `Streaming.Options` has the parser's `limits`, `max_value_length` (64 Mi
-characters) and `require_terminator`. (The module isn't called `Stream`
+characters) and `require_terminator`. `Decode.all` reads a text the same way,
+value by value, decoding each before reading the next (spec §15): an item's
+error comes before a syntax error in a later item. (The module isn't called `Stream`
 because Roc has a builtin `Stream`, which hides a package module of that name
 from the package's other modules.)
 

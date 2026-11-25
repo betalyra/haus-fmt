@@ -49,8 +49,8 @@ pub const Decoded = union(enum) {
     unknown: v.Variant,
     /// `Any`: the value as parsed.
     any: Value,
-    /// `Secret a`: hidden when printed (`<redacted>`); `reveal` gives it out.
-    secret: *const Decoded,
+    /// `Secret a`: hidden (`Hidden`); `reveal` gives it out.
+    secret: Hidden,
     /// A std/time value: its type and the checked text, as written.
     time: Time,
     /// A value of the host type a codec chose for its type (spec §13.4):
@@ -58,9 +58,80 @@ pub const Decoded = union(enum) {
     host: Host,
 
     pub const Entry = struct { key: []const u8, value: Decoded };
+
+    /// The value of a `Secret`, hidden (spec §15, "Hiding"): printing it
+    /// (`{f}`), inspecting it (`{any}`: an opaque pointer) and `std.json`
+    /// show `<redacted>` or nothing of it; the writers without a schema
+    /// (`toValue`) refuse it. `reveal` is the one call that gives it out.
+    pub const Hidden = struct {
+        ptr: *const anyopaque,
+
+        pub fn of(value: *const Decoded) Hidden {
+            return .{ .ptr = value };
+        }
+
+        pub fn reveal(h: Hidden) Decoded {
+            return @as(*const Decoded, @ptrCast(@alignCast(h.ptr))).*;
+        }
+
+        pub fn format(_: Hidden, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            try w.writeAll("<redacted>");
+        }
+
+        pub fn jsonStringify(_: Hidden, jws: anytype) !void {
+            try jws.write("<redacted>");
+        }
+    };
     pub const Tagged = struct { tag: []const u8, args: []const Decoded = &.{} };
     pub const Time = struct { kind: time.Kind, text: []const u8 };
-    pub const Host = struct { codec: *const AnyCodec, ptr: *const anyopaque };
+    pub const Host = struct {
+        codec: *const AnyCodec,
+        ptr: *const anyopaque,
+        /// What the schema decoded, which the codec made this host value
+        /// of (inner codecs' host values in it): null for a host value
+        /// made in code (`Codec(T).wrap`).
+        schema: ?*const Decoded = null,
+    };
+
+    /// What the schema decoded for this value: for a codec's host value,
+    /// the value its codec was given; any other value is itself. Profile
+    /// rules look at this (spec §13.4), never at what a codec made of it.
+    pub fn schemaValue(d: Decoded) Decoded {
+        return switch (d) {
+            .host => |h| if (h.schema) |s| s.* else d,
+            else => d,
+        };
+    }
+
+    /// `d` with every host value inside replaced by what the schema decoded
+    /// (`schemaValue`), at every level: the value a profile rule checks.
+    /// Host values made in code are kept.
+    pub fn schemaView(d: Decoded, arena: Allocator) Allocator.Error!Decoded {
+        return switch (d) {
+            .host => |h| if (h.schema) |s| s.schemaView(arena) else d,
+            .array => |items| blk: {
+                const out = try arena.alloc(Decoded, items.len);
+                for (items, out) |x, *o| o.* = try x.schemaView(arena);
+                break :blk .{ .array = out };
+            },
+            .map, .record => |entries| blk: {
+                const out = try arena.alloc(Entry, entries.len);
+                for (entries, out) |e, *o| o.* = .{ .key = e.key, .value = try e.value.schemaView(arena) };
+                break :blk if (d == .map) .{ .map = out } else .{ .record = out };
+            },
+            .variant => |t| blk: {
+                const out = try arena.alloc(Decoded, t.args.len);
+                for (t.args, out) |x, *o| o.* = try x.schemaView(arena);
+                break :blk .{ .variant = .{ .tag = t.tag, .args = out } };
+            },
+            .secret => |s| blk: {
+                const inner = try arena.create(Decoded);
+                inner.* = try s.reveal().schemaView(arena);
+                break :blk .{ .secret = .of(inner) };
+            },
+            else => d,
+        };
+    }
 
     /// The field `key` of a record or map, if it is present.
     pub fn get(d: Decoded, key: []const u8) ?Decoded {
@@ -75,7 +146,7 @@ pub const Decoded = union(enum) {
     /// The value a `Secret` hides, given out only by this explicit call.
     pub fn reveal(d: Decoded) Decoded {
         return switch (d) {
-            .secret => |s| s.*,
+            .secret => |s| s.reveal(),
             else => d,
         };
     }
@@ -199,7 +270,7 @@ pub fn Codec(comptime T: type) type {
                 fn dec(arena: Allocator, d: Decoded, reason: *Reason) CodecError!Decoded {
                     const p = try arena.create(T);
                     p.* = try decodeFn(arena, d, reason);
-                    return .{ .host = .{ .codec = undefined, .ptr = p } };
+                    return .{ .host = .{ .codec = undefined, .ptr = @ptrCast(p) } };
                 }
                 fn enc(arena: Allocator, d: Decoded, reason: *Reason) CodecError!Decoded {
                     return switch (d) {
@@ -233,18 +304,20 @@ pub fn Codec(comptime T: type) type {
         pub fn wrap(self: *const Self, arena: Allocator, x: T) Allocator.Error!Decoded {
             const p = try arena.create(T);
             p.* = x;
-            return .{ .host = .{ .codec = &self.any, .ptr = p } };
+            return .{ .host = .{ .codec = &self.any, .ptr = @ptrCast(p) } };
         }
     };
 }
 
 /// A codec that keeps the type's default host type and adds a rule (a
-/// profile, spec §13.3): `check` rejects what the rule doesn't accept,
-/// when decoding and when encoding.
+/// profile, spec §13.3): `accepts` rejects what the rule doesn't accept,
+/// when decoding and when encoding. The rule sees what the schema decoded
+/// (`Decoded.schemaView`), never what inner codecs made of it (spec
+/// §13.4), so no codec of a part can make a value pass it.
 pub fn rule(id: []const u8, comptime accepts: fn (d: Decoded, reason: *Reason) error{Rejected}!void) AnyCodec {
     const W = struct {
-        fn run(_: Allocator, d: Decoded, reason: *Reason) CodecError!Decoded {
-            try accepts(d, reason);
+        fn run(arena: Allocator, d: Decoded, reason: *Reason) CodecError!Decoded {
+            try accepts(try d.schemaView(arena), reason);
             return d;
         }
     };
@@ -277,6 +350,72 @@ pub const Codecs = struct {
         return c.map.get(id);
     }
 };
+
+/// A warning about the codecs an application set (spec §13.4): at no
+/// place, about the id it names.
+pub const CodecWarning = struct {
+    code: Code,
+    id: []const u8,
+    message: []const u8,
+};
+
+/// The `unused-codec` warnings (spec §13.4, "A codec that matches no
+/// type"): one per codec whose id is no type of the prelude or a standard
+/// module, nor of `schemas` (pass every schema of a build,
+/// `packages.Build.schemas`, or the one schema loaded from text). Such a
+/// codec never runs, so the values it was meant to check pass: a typo, or
+/// `@haus-fmt/money@2#Money` when the schema imports major 1. Decoding is
+/// unchanged. In the order of the ids; allocated with `arena`.
+pub fn unusedCodecs(arena: Allocator, codecs: *const Codecs, schemas: []const *const Schema) Allocator.Error![]const CodecWarning {
+    var out: std.ArrayList(CodecWarning) = .empty;
+    var it = codecs.map.keyIterator();
+    next: while (it.next()) |key| {
+        const id = key.*;
+        if (std.mem.startsWith(u8, id, "prelude#")) {
+            const name = id["prelude#".len..];
+            if (schema_mod.isPreludeName(name)) continue;
+        } else if (std.mem.startsWith(u8, id, "std/time#")) {
+            if (std.meta.stringToEnum(time.Kind, id["std/time#".len..]) != null) continue;
+        } else for (schemas) |s| {
+            for (s.defs) |d| if (std.mem.eql(u8, d.id, id)) continue :next;
+        }
+        try out.append(arena, .{
+            .code = .@"unused-codec",
+            .id = id,
+            .message = try std.fmt.allocPrint(arena, "a codec is set for {s}, but no type has this id: it never runs, and the values it was meant to check pass unchecked", .{id}),
+        });
+    }
+    std.mem.sort(CodecWarning, out.items, {}, struct {
+        fn less(_: void, a: CodecWarning, b: CodecWarning) bool {
+            return std.mem.order(u8, a.id, b.id) == .lt;
+        }
+    }.less);
+    return out.items;
+}
+
+test "unused-codec: a codec for an id no type has" {
+    var state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const t = std.testing;
+    const s = try schema_mod.load(a, "type Money = closed < Money Decimal Currency >\ntype Currency = < >", .{ .module = "@haus-fmt/money@1" });
+    const keep = struct {
+        fn ok(_: Decoded, _: *Reason) error{Rejected}!void {}
+    }.ok;
+    const used = [_]AnyCodec{ rule("@haus-fmt/money@1#Money", keep), rule("prelude#Decimal", keep), rule("prelude#Bool", keep), rule("std/time#Date", keep) };
+    const unused = [_]AnyCodec{ rule("@haus-fmt/money@2#Money", keep), rule("@haus-fmt/money@1#Mony", keep), rule("std/time#Daet", keep) };
+    var cs = try Codecs.init(t.allocator, &.{ &used[0], &used[1], &used[2], &used[3], &unused[0], &unused[1], &unused[2] });
+    defer cs.deinit(t.allocator);
+    const ws = try unusedCodecs(a, &cs, &.{s});
+    try t.expectEqual(3, ws.len);
+    try t.expectEqualStrings("@haus-fmt/money@1#Mony", ws[0].id);
+    try t.expectEqualStrings("@haus-fmt/money@2#Money", ws[1].id);
+    try t.expectEqualStrings("std/time#Daet", ws[2].id);
+    try t.expectEqual(Code.@"unused-codec", ws[0].code);
+    try t.expect(std.mem.indexOf(u8, ws[1].message, "@haus-fmt/money@2#Money") != null);
+    // Decoding is unchanged.
+    _ = try decodeText(t.allocator, a, s.get("Money").?, "Money(1, EUR)", .{ .codecs = &cs });
+}
 
 /// What a checker points out (spec §14): a hint, or an error, at its place.
 pub const Issue = struct {
@@ -470,7 +609,13 @@ fn CtxOf(comptime all_mode: bool) type {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.Rejected => return c.fail(.@"codec-rejected", path, "{s} rejects the value: {s}", .{ codec.id, reason.message() }),
             };
-            if (out == .host) out.host.codec = codec;
+            if (out == .host) {
+                out.host.codec = codec;
+                // What the schema decoded, for the rules of outer codecs.
+                const schema_value = try c.arena.create(Decoded);
+                schema_value.* = d;
+                out.host.schema = schema_value;
+            }
             return out;
         }
 
@@ -636,7 +781,7 @@ fn CtxOf(comptime all_mode: bool) type {
                     c.secret_depth -= 1;
                     const box = try c.arena.create(Decoded);
                     box.* = inner;
-                    return .{ .secret = box };
+                    return .{ .secret = .of(box) };
                 },
                 .Stream => return c.fail(.@"type-mismatch", path, "a Stream describes a whole file, not one value", .{}),
             }
@@ -927,38 +1072,59 @@ fn floatValue(arena: Allocator, comptime F: type, x: F) Allocator.Error!Value {
     return .{ .number = try arena.dupe(u8, formatFloat(F, x, &buf)) };
 }
 
-/// The value a decoded result is written as (spec §15, "Encoding"). A
-/// host value of a codec is encoded by its codec first; one it rejects is
-/// `error.Haus` (`encode` says why and where).
-pub fn toValue(arena: Allocator, d: Decoded) Error!Value {
-    return valueAt(arena, d, null, &Path.root);
+/// The value a decoded result is, written without its schema (spec §15).
+/// A host value of a codec is encoded by its codec first; one it rejects
+/// is `error.Haus`. A `Secret` is refused (`cannot-encode` at the secret,
+/// spec §15 "Hiding"): `encode` writes it with its schema, and
+/// `toValueRevealed` is the explicit call that gives it out too.
+pub fn toValue(arena: Allocator, d: Decoded, diag: ?*Diagnostic) Error!Value {
+    return valueAt(arena, d, diag, &Path.root, .refuse);
 }
 
+/// `toValue` with every `Secret`'s value written in full: an explicit
+/// call, like `Decoded.reveal`.
+pub fn toValueRevealed(arena: Allocator, d: Decoded, diag: ?*Diagnostic) Error!Value {
+    return valueAt(arena, d, diag, &Path.root, .write);
+}
+
+/// How the walks below treat a `Secret`: refuse it (a writer without the
+/// schema), write it (encoding), or the walk is inside one (an error is
+/// `invalid-secret` at the secret, without the codec's reason).
+const SecretMode = enum(u8) { refuse, write, inside };
+
 /// What a codec gives back for a host value (spec §13.4), its own inner
-/// host values left in; a rejection is `cannot-encode` at `path`.
-noinline fn encodeHost(arena: Allocator, h: Decoded.Host, diag: ?*Diagnostic, path: *const Path) Error!Decoded {
+/// host values left in; a rejection is `cannot-encode` at `path`, or,
+/// inside a `Secret`, `invalid-secret` at the secret, without the reason.
+noinline fn encodeHost(arena: Allocator, h: Decoded.Host, diag: ?*Diagnostic, path: *const Path, mode: SecretMode) Error!Decoded {
     var reason: Reason = .{};
     return h.codec.encode(arena, .{ .host = h }, &reason) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Rejected => {
             var c: Ctx = .{ .arena = arena, .diag = diag, .hints = null };
+            if (mode == .inside) return c.fail(.@"invalid-secret", path, "the value of this Secret can't be written for its type (the value is not shown)", .{});
             return c.fail(.@"cannot-encode", path, "{s} can't encode the value: {s}", .{ h.codec.id, reason.message() });
         },
     };
 }
 
-fn valueAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) Error!Value {
+noinline fn refuseSecret(arena: Allocator, diag: ?*Diagnostic, path: *const Path) Error {
+    var c: Ctx = .{ .arena = arena, .diag = diag, .hints = null };
+    return c.fail(.@"cannot-encode", path, "a Secret is written only with its schema (the value is not shown)", .{});
+}
+
+fn valueAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path, mode: SecretMode) Error!Value {
     return switch (d) {
         .int, .decimal => |s| .{ .number = s },
         .float64 => |x| floatValue(arena, f64, x),
         .float32 => |x| floatValue(arena, f32, x),
         .string => |s| .{ .string = s },
         .bytes => |b| .{ .bytes = b },
+        // Inside a `Secret` every place is the secret's (§15).
         .array => |items| blk: {
             const out = try arena.alloc(Value, items.len);
             for (items, 0..) |x, i| {
                 const p = path.index(i);
-                out[i] = try valueAt(arena, x, diag, &p);
+                out[i] = try valueAt(arena, x, diag, if (mode == .inside) path else &p, mode);
             }
             break :blk .{ .array = out };
         },
@@ -966,7 +1132,7 @@ fn valueAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) 
             const out = try arena.alloc(v.Field, entries.len);
             for (entries, 0..) |e, i| {
                 const p = path.key(e.key);
-                out[i] = .{ .key = e.key, .value = try valueAt(arena, e.value, diag, &p) };
+                out[i] = .{ .key = e.key, .value = try valueAt(arena, e.value, diag, if (mode == .inside) path else &p, mode) };
             }
             break :blk .{ .record = out };
         },
@@ -975,35 +1141,36 @@ fn valueAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) 
             for (t.args, 0..) |x, i| {
                 // A record payload is at the variant's place (§15).
                 const p = path.index(i);
-                out[i] = try valueAt(arena, x, diag, if (t.args.len == 1 and x == .record) path else &p);
+                out[i] = try valueAt(arena, x, diag, if ((t.args.len == 1 and x == .record) or mode == .inside) path else &p, mode);
             }
             break :blk .{ .variant = .{ .tag = t.tag, .args = out } };
         },
         .unknown => |u| .{ .variant = u },
         .any => |x| x,
-        .secret => |s| valueAt(arena, s.*, diag, path),
+        .secret => |s| if (mode == .refuse) refuseSecret(arena, diag, path) else valueAt(arena, s.reveal(), diag, path, .inside),
         .time => |t| blk: {
             const args = try arena.alloc(Value, 1);
             args[0] = .{ .string = t.text };
             break :blk .{ .variant = .{ .tag = t.kind.typeName(), .args = args } };
         },
-        .host => |h| valueAt(arena, try encodeHost(arena, h, diag, path), diag, path),
+        .host => |h| valueAt(arena, try encodeHost(arena, h, diag, path, mode), diag, path, mode),
     };
 }
 
 /// `d` with every host value encoded by its codec (spec §13.4): what the
 /// type's default host types would have decoded.
 pub fn lower(arena: Allocator, d: Decoded, diag: ?*Diagnostic) Error!Decoded {
-    return lowerAt(arena, d, diag, &Path.root);
+    return lowerAt(arena, d, diag, &Path.root, .write);
 }
 
-fn lowerAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) Error!Decoded {
+fn lowerAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path, mode: SecretMode) Error!Decoded {
     return switch (d) {
+        // Inside a `Secret` every place is the secret's (§15).
         .array => |items| blk: {
             const out = try arena.alloc(Decoded, items.len);
             for (items, 0..) |x, i| {
                 const p = path.index(i);
-                out[i] = try lowerAt(arena, x, diag, &p);
+                out[i] = try lowerAt(arena, x, diag, if (mode == .inside) path else &p, mode);
             }
             break :blk .{ .array = out };
         },
@@ -1011,7 +1178,7 @@ fn lowerAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) 
             const out = try arena.alloc(Decoded.Entry, entries.len);
             for (entries, 0..) |e, i| {
                 const p = path.key(e.key);
-                out[i] = .{ .key = e.key, .value = try lowerAt(arena, e.value, diag, &p) };
+                out[i] = .{ .key = e.key, .value = try lowerAt(arena, e.value, diag, if (mode == .inside) path else &p, mode) };
             }
             break :blk if (d == .map) .{ .map = out } else .{ .record = out };
         },
@@ -1019,16 +1186,16 @@ fn lowerAt(arena: Allocator, d: Decoded, diag: ?*Diagnostic, path: *const Path) 
             const out = try arena.alloc(Decoded, t.args.len);
             for (t.args, 0..) |x, i| {
                 const p = path.index(i);
-                out[i] = try lowerAt(arena, x, diag, if (t.args.len == 1 and x == .record) path else &p);
+                out[i] = try lowerAt(arena, x, diag, if ((t.args.len == 1 and x == .record) or mode == .inside) path else &p, mode);
             }
             break :blk .{ .variant = .{ .tag = t.tag, .args = out } };
         },
         .secret => |s| blk: {
             const box = try arena.create(Decoded);
-            box.* = try lowerAt(arena, s.*, diag, path);
-            break :blk .{ .secret = box };
+            box.* = try lowerAt(arena, s.reveal(), diag, path, .inside);
+            break :blk .{ .secret = .of(box) };
         },
-        .host => |h| lowerAt(arena, try encodeHost(arena, h, diag, path), diag, path),
+        .host => |h| lowerAt(arena, try encodeHost(arena, h, diag, path, mode), diag, path, mode),
         else => d,
     };
 }
@@ -1048,7 +1215,7 @@ pub const EncodeOptions = struct {
 /// code) is `cannot-encode` at its place; inside a `Secret`,
 /// `invalid-secret`.
 pub fn encode(arena: Allocator, def: *const Def, d: Decoded, options: EncodeOptions) Error!Value {
-    const val = try valueAt(arena, d, options.diagnostic, &Path.root);
+    const val = try valueAt(arena, d, options.diagnostic, &Path.root, .write);
     // The limits of values built in code (§9 item 8): checked as written.
     try canonical.checkWritable(arena, val, .{ .limits = options.limits, .diagnostic = options.diagnostic });
     var inner: Diagnostic = .{};
@@ -1078,7 +1245,7 @@ pub fn encode(arena: Allocator, def: *const Def, d: Decoded, options: EncodeOpti
 /// Runs the codecs of `options` on a result decoded without them, such as
 /// `json.fromJson`'s: the result `decode` would have given with them.
 pub fn applyCodecs(arena: Allocator, def: *const Def, d: Decoded, options: DecodeOptions) Error!Decoded {
-    return decode(arena, def, try valueAt(arena, d, options.diagnostic, &Path.root), options);
+    return decode(arena, def, try valueAt(arena, d, options.diagnostic, &Path.root, .write), options);
 }
 
 // ── texts and streams ────────────────────────────────────────
@@ -1098,7 +1265,9 @@ pub fn streamItem(def: *const Def) ?*const Expr {
 
 /// Reads a stream with a `Stream a` type (spec §15, "Streams"): each
 /// top-level value is decoded as an `a` as it arrives, and an error's place
-/// starts with the item's index (`$[3].price`).
+/// starts with the item's index (`$[3].price`). Items are read one at a
+/// time: an item's error comes before a syntax error in a later item, also
+/// in the same chunk.
 pub const TypedStreamReader = struct {
     reader: StreamReader,
     item: *const Expr,
@@ -1112,7 +1281,9 @@ pub const TypedStreamReader = struct {
     pub fn init(gpa: Allocator, def: *const Def, options: TextOptions) Error!TypedStreamReader {
         const item = streamItem(def) orelse unreachable;
         return .{
-            .reader = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = options.diagnostic }),
+            // Item by item: an item's error comes before a syntax error in
+            // a later item (spec §15, "Streams").
+            .reader = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = options.diagnostic, .item_by_item = true }),
             .item = item,
             .diag = options.diagnostic,
             .hints = options.hints,
@@ -1183,7 +1354,7 @@ pub fn encodeText(arena: Allocator, def: *const Def, d: Decoded, options: Encode
     const out = try arena.alloc(Value, d.array.len);
     for (d.array, 0..) |x, i| {
         const p = Path.root.index(i);
-        out[i] = try valueAt(arena, x, options.diagnostic, &p);
+        out[i] = try valueAt(arena, x, options.diagnostic, &p, .write);
         _ = decodeExpr(arena, item, null, out[i], .{ .diagnostic = options.diagnostic, .limits = options.limits, .codecs = options.codecs, .base = &p }) catch |e| switch (e) {
             error.Haus => {
                 if (options.diagnostic) |dg| dg.code = .@"cannot-encode";
@@ -1209,9 +1380,11 @@ pub const CheckOptions = struct {
     /// Stop at the first error (`haus check --first`): the hints found
     /// before it, and that error.
     first: bool = false,
-    /// Reporting every error, the check stops after this many errors in
-    /// one value (spec §14, "Every error": bounded work on hostile input)
-    /// and says so (`CheckReport.stopped`). 0: no cap.
+    /// Reporting every error, the check stops after this many errors (spec
+    /// §14, "Every error": bounded work on hostile input) and says so
+    /// (`CheckReport.stopped`). One cap for the whole check, a stream's
+    /// every item together; hints don't count. 0: no cap. The spec asks a
+    /// tool that stops for at least 100.
     max_errors: u32 = default_max_errors,
 
     pub const default_max_errors = 200;
@@ -1219,18 +1392,20 @@ pub const CheckOptions = struct {
 
 /// What a check found.
 pub const CheckReport = struct {
-    /// The hints and errors, in the order of their places in the text.
+    /// The hints and errors, in the order of their places in the text. An
+    /// error in the text (syntax or a limit) has no path, and its line and
+    /// column.
     issues: []const Issue,
-    /// The check stopped at `CheckOptions.max_errors` errors in one value:
-    /// the rest of the text was not checked, and may have more.
+    /// The check stopped at `CheckOptions.max_errors` errors: the rest of
+    /// the text was not checked, and may have more.
     stopped: bool = false,
 };
 
 /// The state of a check reporting every error.
 const AllErrors = struct {
-    /// The cap per value (0: none).
+    /// The cap (0: none), for the whole check.
     max: u32,
-    /// The errors of the value being checked.
+    /// The errors found so far.
     count: u32 = 0,
     stopped: bool = false,
 };
@@ -1242,8 +1417,10 @@ pub fn checkWith(gpa: Allocator, arena: Allocator, def: *const Def, text: []cons
 
 /// `checkWith`, and whether the check stopped at the cap.
 ///
-/// The text is parsed first: a syntax or limit error is the only issue
-/// (spec §14, "Every error"), for a stream too. Then every value is checked:
+/// A document is parsed first: a syntax or limit error is its only issue
+/// (spec §14, "Every error"). A stream is checked item by item: the errors
+/// of the items before a syntax or limit error, then that error, which
+/// ends the check. Every value is checked:
 /// each failing place once; nothing below a value that failed at its own
 /// level (another kind, an unknown tag of a closed variant, a wrong
 /// payload, a value its type or a codec rejects); a record checks every
@@ -1252,64 +1429,92 @@ pub fn checkWith(gpa: Allocator, arena: Allocator, def: *const Def, text: []cons
 /// the secret, and no hints.
 pub fn checkReport(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions) Error!CheckReport {
     var issues: std.ArrayList(Issue) = .empty;
+    var all: AllErrors = .{ .max = options.max_errors };
+    if (def.stream) {
+        try checkStream(gpa, arena, def, text, options, &all, &issues);
+        return .{ .issues = issues.items, .stopped = all.stopped };
+    }
+    // A document: parsed whole first; a syntax or limit error is its one error.
     var d: Diagnostic = .{};
-    const values = parseForCheck(gpa, arena, def, text, options, &d) catch |e| switch (e) {
+    const root = @import("root.zig");
+    const parsed = root.parseAll(arena, text, .{ .limits = options.limits, .diagnostic = &d }) catch |e| switch (e) {
         error.Haus => {
             try appendDiag(arena, &issues, &d);
             return .{ .issues = issues.items };
         },
         else => return e,
     };
-    var all: AllErrors = .{ .max = options.max_errors };
-    for (values, 0..) |val, i| {
-        all.count = 0;
-        const item_path = Path.root.index(i);
-        const path = if (def.stream) &item_path else &Path.root;
-        const result = if (options.first) blk: {
-            var c: Ctx = .{ .arena = arena, .diag = &d, .hints = &issues, .codecs = options.codecs };
-            break :blk checkOne(&c, def, val, path, options.limits);
-        } else blk: {
-            var c: AllCtx = .{ .arena = arena, .diag = &d, .hints = &issues, .codecs = options.codecs, .all = &all };
-            break :blk checkOne(&c, def, val, path, options.limits);
-        };
-        result catch |e| switch (e) {
-            error.Haus => {
-                // Collected where it was found, unless it is the first-error
-                // mode (or an error that didn't come through `fail`).
-                if (options.first or all.count == 0) try appendDiag(arena, &issues, &d);
-                if (options.first or all.stopped) break;
-            },
-            else => return e,
-        };
+    if (parsed.value.len != 1) {
+        d.set(.@"not-one-value", "expected one value, found {s}", .{if (parsed.value.len == 0) "none" else "more than one"});
+        d.setPath("$");
+        try appendDiag(arena, &issues, &d);
+        return .{ .issues = issues.items };
     }
+    _ = try checkValue(arena, def, parsed.value[0], &Path.root, options, &all, &issues);
     return .{ .issues = issues.items, .stopped = all.stopped };
+}
+
+/// A `Stream` checked item by item, as a stream decoder reads it (spec
+/// §14, "Every error"): each item is parsed, then checked, before the next
+/// is read. A syntax or limit error ends the check, after the errors of the
+/// items before it; stopping at the first error, an item's error before it
+/// is the one.
+fn checkStream(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue)) Error!void {
+    var pd: Diagnostic = .{};
+    var r = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = &pd, .item_by_item = true });
+    defer r.deinit();
+    var index: usize = 0;
+    // The reader gives the items before an error, and the error after them.
+    const items = r.push(arena, text) catch |e| switch (e) {
+        error.Haus => return appendDiag(arena, issues, &pd),
+        else => return e,
+    };
+    for (items) |val| {
+        const p = Path.root.index(index);
+        index += 1;
+        if (try checkValue(arena, def, val, &p, options, all, issues)) return;
+    }
+    const last = r.end(arena) catch |e| switch (e) {
+        error.Haus => return appendDiag(arena, issues, &pd),
+        else => return e,
+    };
+    if (last) |val| {
+        const p = Path.root.index(index);
+        _ = try checkValue(arena, def, val, &p, options, all, issues);
+    }
+}
+
+/// Checks one value (a document's, or a stream's item at `path`), adding
+/// its hints and errors to `issues`. True when the check ends there: the
+/// first error in the first-error mode, or the cap.
+fn checkValue(arena: Allocator, def: *const Def, val: Value, path: *const Path, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue)) Error!bool {
+    var d: Diagnostic = .{};
+    const before = all.count;
+    const result = if (options.first) blk: {
+        var c: Ctx = .{ .arena = arena, .diag = &d, .hints = issues, .codecs = options.codecs };
+        break :blk checkOne(&c, def, val, path, options.limits);
+    } else blk: {
+        var c: AllCtx = .{ .arena = arena, .diag = &d, .hints = issues, .codecs = options.codecs, .all = all };
+        break :blk checkOne(&c, def, val, path, options.limits);
+    };
+    result catch |e| switch (e) {
+        error.Haus => {
+            // Collected where it was found, unless it is the first-error
+            // mode (or an error that didn't come through `fail`).
+            if (options.first or all.count == before) {
+                try appendDiag(arena, issues, &d);
+                all.count += 1;
+                if (all.max != 0 and all.count >= all.max) all.stopped = true;
+            }
+            return options.first or all.stopped;
+        },
+        else => return e,
+    };
+    return all.stopped;
 }
 
 fn appendDiag(arena: Allocator, issues: *std.ArrayList(Issue), d: *const Diagnostic) Allocator.Error!void {
     try issues.append(arena, .{ .kind = .err, .code = d.code, .path = try arena.dupe(u8, d.path()), .message = try arena.dupe(u8, d.message()), .line = d.line, .column = d.column });
-}
-
-/// The values of a text, parsed whole before any is checked: the one value
-/// of a document, or every value of a stream.
-fn parseForCheck(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions, d: *Diagnostic) Error![]const Value {
-    if (def.stream) {
-        var r = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = d });
-        defer r.deinit();
-        var out: std.ArrayList(Value) = .empty;
-        try out.appendSlice(arena, try r.push(arena, text));
-        if (try r.end(arena)) |last| try out.append(arena, last);
-        return out.items;
-    }
-    const root = @import("root.zig");
-    const parsed = try root.parseAll(arena, text, .{ .limits = options.limits, .diagnostic = d });
-    if (parsed.value.len != 1) {
-        d.set(.@"not-one-value", "expected one value, found {s}", .{if (parsed.value.len == 0) "none" else "more than one"});
-        d.line = 0;
-        d.column = 0;
-        d.setPath("$");
-        return error.Haus;
-    }
-    return parsed.value;
 }
 
 /// One value of a checked text, as `decodeText` decodes it.
@@ -1357,7 +1562,7 @@ test "every error, and the first-error mode" {
     try t.expectEqualStrings("Error invalid-time $.t[0]; Error out-of-range $.n; ", (try checkText(a, "import std/time (Date)\ntype R = { t: Date, n: UInt8 }", "R", "{ t: Date(\"2023-02-30\"), n: 256 }", .{}))[0]);
 }
 
-test "every error of a stream, after the whole text parses" {
+test "every error of a stream, item by item" {
     var state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer state.deinit();
     const a = state.allocator();
@@ -1365,11 +1570,23 @@ test "every error of a stream, after the whole text parses" {
     const sch = "type Log = Stream { n: Int }";
     try t.expectEqualStrings("Error type-mismatch $[0].n; Hint unlisted-field $[1].z; Error missing-field $[2]; ", (try checkText(a, sch, "Log", "{ n: \"a\" },\n{ n: 1, z: 2 },\n{},\n", .{}))[0]);
     try t.expectEqualStrings("Error type-mismatch $[0].n; ", (try checkText(a, sch, "Log", "{ n: \"a\" },\n{},\n", .{ .first = true }))[0]);
-    // A syntax error is the only issue, wherever it is.
-    const r = try checkText(a, sch, "Log", "{ n: \"a\", z: 1 },\n{ n: },\n", .{});
-    try t.expect(std.mem.startsWith(u8, r[0], "Error "));
-    try t.expectEqual(1, std.mem.count(u8, r[0], ";"));
-    try t.expect(std.mem.indexOf(u8, r[0], "type-mismatch") == null);
+    // A syntax error ends the check, after the errors of the items before it.
+    const text = "{ n: \"a\", z: 1 },\n{ n: },\n{ n: \"b\" },\n";
+    try t.expectEqualStrings("Error type-mismatch $[0].n; Hint unlisted-field $[0].z; Error expected-value ; ", (try checkText(a, sch, "Log", text, .{}))[0]);
+    try t.expectEqualStrings("Error type-mismatch $[0].n; ", (try checkText(a, sch, "Log", text, .{ .first = true }))[0]);
+    // With no error before it, the syntax error is the first one; it has
+    // a line and a column, and no path.
+    const s = try schema_mod.load(a, sch, .{});
+    const r = try checkReport(t.allocator, a, s.get("Log").?, "{ n: 1 },\n{ n: },\n", .{ .first = true });
+    try t.expectEqual(1, r.issues.len);
+    try t.expectEqual(Code.@"expected-value", r.issues[0].code);
+    try t.expectEqualStrings("", r.issues[0].path);
+    try t.expectEqual(@as(u32, 2), r.issues[0].line);
+    // A typed stream decoder reads the same way.
+    var d: Diagnostic = .{};
+    try t.expectError(error.Haus, decodeText(t.allocator, a, s.get("Log").?, text, .{ .diagnostic = &d }));
+    try t.expectEqual(Code.@"type-mismatch", d.code);
+    try t.expectEqualStrings("$[0].n", d.path());
 }
 
 test "every error stops at the cap, and says so" {
@@ -1390,6 +1607,37 @@ test "every error stops at the cap, and says so" {
     // Below the cap, it hasn't stopped.
     const few = try checkText(a, "type R = Array Int", "R", "[\"x\", 1, \"y\"]", .{});
     try t.expect(!few[1]);
+    // One cap for the whole check, a stream's items together; hints don't count.
+    var items: std.ArrayList(u8) = .empty;
+    for (0..150) |_| try items.appendSlice(a, "{ h: 1, n: \"x\", m: \"y\" },\n");
+    const stream = try checkText(a, "type S = Stream { n: Int, m: Int }", "S", items.items, .{});
+    try t.expect(stream[1]);
+    try t.expectEqual(CheckOptions.default_max_errors, std.mem.count(u8, stream[0], "Error "));
+    try t.expectEqual(100, std.mem.count(u8, stream[0], "Hint "));
+}
+
+test "a secret is hidden: printing, inspecting, std.json and writers without the schema" {
+    var state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const t = std.testing;
+    const s = try schema_mod.load(a, "type T = { key: Secret String, n: Int }", .{});
+    const d = try decodeText(t.allocator, a, s.get("T").?, "{ key: \"hunter2\", n: 1 }", .{});
+    const key = d.get("key").?;
+    try t.expectEqualStrings("{ \"key\": <redacted>, \"n\": 1 }", try std.fmt.allocPrint(a, "{f}", .{d}));
+    try t.expect(std.mem.indexOf(u8, try std.fmt.allocPrint(a, "{any}", .{d}), "hunter2") == null);
+    try t.expectEqualStrings("\"<redacted>\"", try std.json.Stringify.valueAlloc(a, key.secret, .{}));
+    // A writer without the schema refuses it, without the value.
+    var diag: Diagnostic = .{};
+    try t.expectError(error.Haus, toValue(a, d, &diag));
+    try t.expectEqual(Code.@"cannot-encode", diag.code);
+    try t.expectEqualStrings("$.key", diag.path());
+    try t.expect(std.mem.indexOf(u8, diag.message(), "hunter2") == null);
+    // The explicit calls give it out; encoding with the schema writes it in full.
+    try t.expectEqualStrings("hunter2", key.reveal().string);
+    try t.expectEqualStrings("hunter2", (try toValueRevealed(a, key, null)).string);
+    const written = try encode(a, s.get("T").?, d, .{});
+    try t.expectEqualStrings("{key:\"hunter2\",n:1}", try canonical.canonical(a, written, .{}));
 }
 
 test "float spelling" {

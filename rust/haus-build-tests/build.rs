@@ -25,7 +25,9 @@
 //!
 //! travel.schema.haus uses a package (packages/travel) that uses the
 //! official packages: tests/profiles.rs uses its types with the codecs of
-//! their profiles (`haus_money::Iso`, `haus_geo::Wgs84`, …).
+//! their profiles (`haus_money::Iso`, `haus_geo::Wgs84`, …), and
+//! looser.schema.haus with iso's codec for Money and a looser one of its
+//! own for Currency (the vectors' `looser`).
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -47,6 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")
         .codec("@haus-fmt/geo@1#BBox", "haus_geo::Wgs84BBox")
         .compile_as("travel.schema.haus", "travel")?;
+    haus_build::Config::new()
+        .codec("@haus-fmt/money@1#Money", "haus_money::Iso")
+        .codec("@haus-fmt/money@1#Currency", "crate::LooseCurrency")
+        .compile_as("looser.schema.haus", "looser")?;
 
     let suite = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("../../test-suite/schema");
     println!("cargo::rerun-if-changed={}", suite.display());

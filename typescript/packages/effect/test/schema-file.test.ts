@@ -274,8 +274,9 @@ type Root = { i: Instant, z: ZonedDateTime }`
     expect(d).toContain(`export type Level<C$ = {}> = Haus$.Lookup<C$, "haus-examples/syntax-tour#Level", "Debug" | "Info" | "Warn" | "Error">;`)
     expect(d).toContain(`export declare const Root: Haus$.Named<Schema$.Codec<Root>, "haus-examples/syntax-tour#Root", Root$F, `)
     expect(d).toContain(`interface Root$F extends Haus$.TypeLambda { readonly type: Root<this["C"]> }`)
-    expect(d).toContain(`readonly timeout: Option$.Option<bigint>`)
-    expect(d).toContain(`readonly owner?: string`)
+    // Every type of the prelude can have a codec (spec §13.4).
+    expect(d).toContain(`readonly timeout: Option$.Option<Haus$.Lookup<C$, "prelude#Int", bigint>>`)
+    expect(d).toContain(`readonly owner?: Haus$.Lookup<C$, "prelude#String", string>`)
     // Imported types are declared too, with their ids.
     expect(d).toContain(`type Money<C$ = {}> = Haus$.Lookup<C$, "@haus-fmt/money@1#Money", { readonly _tag: "Money"; readonly values: readonly [Haus$.Lookup<C$, "prelude#Decimal", string>, Currency<C$>] }>;`)
     expect(d).not.toContain("BigDecimal")

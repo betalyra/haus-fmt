@@ -930,6 +930,24 @@ the model's stream decoding, any other type's one value by `Schema.decode`.
 -/
 def typedCheck (env : Schema.Env) (streams : List String) (type text : String)
     (want : Except (String × String) Value) : Verdict :=
+  -- A stream is read item by item (spec §15 "Streams"): the items before a syntax error are
+  -- decoded first, so an item's error comes before a later item's syntax error.
+  if streams.contains type then
+    let (vs, err) := Stream.read {} [text.toList]
+    match Schema.decodeStream env (.ref type) vs, err, want with
+    | .error e, _, .error (code, path) =>
+      if codeText e.code != code then .wrong s!"{codeText e.code} instead of {code} ({schemaErrorText e})"
+      else if e.place != path then .wrong s!"at {e.place} instead of {path} ({e.reason})"
+      else .right
+    | .error e, _, .ok _ => .wrong s!"rejected: {schemaErrorText e}"
+    | .ok _, some e, _ =>
+      let (l, c) := position text.toList e
+      .wrong s!"the text: {e.code} at {l}:{c}"
+    | .ok xs, none, .ok w =>
+      let got := Value.arr (xs.map Schema.encode)
+      if Value.equiv got w then .right else .wrong s!"got {canonicalText got}"
+    | .ok xs, none, .error _ => .wrong s!"accepted as {canonicalText (Value.arr (xs.map Schema.encode))}"
+  else
   match Parser.parse {} text.toList with
   | .error e =>
     let (l, c) := position text.toList e
@@ -961,8 +979,8 @@ def typedCheck (env : Schema.Env) (streams : List String) (type text : String)
 /--
 The typed stream cases of DIR (`typed.schema.haus`, `typed.cases.haus`; spec
 §15, "Streams"): the schema read by the reference's schema-file checker, a
-`Stream a` definition's text parsed whole and its values decoded by the
-model's stream decoding (`Schema.decodeStream`, which puts the item's index
+`Stream a` definition's text read by the stream reader (`Stream.read`) and
+the items before any syntax error decoded by the model's stream decoding (`Schema.decodeStream`, which puts the item's index
 in the place), and any other type's text as a single document: its one value
 by `Schema.decode`, anything else `not-one-value` at `$` (spec §6).
 The results: (passed, failed, skipped) and a line per case.

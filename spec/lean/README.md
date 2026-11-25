@@ -61,8 +61,10 @@ The other suites: `--stream-suite` reads each case of `limits.cases.haus`
 with the stream reader (`Stream.readWith`) whole, one character at a time and
 split at every position, and parses a case's `whole` text with `parse`
 (default limits). It decodes `typed.cases.haus` with `typed.schema.haus`
-(read by `SchemaFile.load`): a `Stream a` definition by
-`Schema.decodeStream`, which puts the item's index in the place, any other
+(read by `SchemaFile.load`): a `Stream a` definition's text by the stream
+reader (`Stream.read`), and the items it read before any syntax error by
+`Schema.decodeStream`, which puts the item's index in the place (so an
+item's error comes before a later item's syntax error), any other
 type's one value by `Schema.decode`; a text that doesn't hold one value for
 such a type is `not-one-value`, at `$`. It reads each text of
 `document.cases.haus` as a single document (`Parser.parseDocument`, spec

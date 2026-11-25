@@ -1,0 +1,4 @@
+// A module that starts with "." but not with "./" or "../" is unknown-module
+// (grammar.ebnf): ".." alone names no file.
+import .. (T)
+type B = { t: T }

@@ -55,8 +55,8 @@ struct PackageSuiteTests {
     static let core = cases.filter { skipped($0) == nil }
 
     @Test func everyCase() {
-        #expect(Self.cases.count == 133)
-        #expect(Self.cases.filter { $0.string("ecosystem") == "core" }.count == 87)
+        #expect(Self.cases.count == 136)
+        #expect(Self.cases.filter { $0.string("ecosystem") == "core" }.count == 90)
         #expect(Self.cases.filter { $0.string("ecosystem") == "npm" }.count == 46)
         let reasons = Dictionary(grouping: Self.cases.compactMap(Self.skipped), by: { $0 }).mapValues(\.count)
         print("package suite: \(Self.core.count) cases run, skipped: \(reasons)")

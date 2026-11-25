@@ -90,7 +90,9 @@ func (s *Schema) Decode(name string, v haus.Value) (haus.Value, error) {
 }
 
 // Decode decodes v with the type, with the default limits, and returns the
-// value an encoder writes back (spec §15), or the first error: an
+// value an encoder writes back (spec §15), the value of each Secret type
+// hidden in a [haus.Secret] ([Type.Encode] writes it in full), or the
+// first error: an
 // *haus.Error with the code and the path of the failing value
 // ($.items[2].price). An error inside a Secret is invalid-secret, at the
 // secret. For a Stream definition, v is one value of the stream.
@@ -692,8 +694,15 @@ func notCase(v haus.Value, tags ...string) haus.ErrorCode {
 
 // secret decodes v as item, and replaces any error inside by one at the
 // secret itself, with its type only (spec §15): messages quote values, keys
-// and tags of the data, and paths may name keys.
+// and tags of the data, and paths may name keys. Decoding gives the value
+// hidden in a [haus.Secret] (spec §15, "decode.secret.generic-decoders");
+// encoding and writing take a haus.Secret or a plain value, and give the
+// plain value, written in full.
 func (w *walker) secret(v haus.Value, item *typ) (haus.Value, bool, error) {
+	hidden, wasHidden := v.(haus.Secret)
+	if wasHidden {
+		v = hidden.Reveal()
+	}
 	at := len(w.path)
 	depth := w.depth
 	out, changed, err := w.value(v, item)
@@ -704,7 +713,10 @@ func (w *walker) secret(v haus.Value, item *typ) (haus.Value, bool, error) {
 		w.path, w.depth = w.path[:at], depth
 		return nil, false, w.fail(haus.CodeInvalidSecret, "expected %s (a Secret: the value is not shown)", describe(item))
 	}
-	return out, changed, nil
+	if w.encoding || w.writing {
+		return out, changed || wasHidden, nil
+	}
+	return haus.NewSecret(out), true, nil
 }
 
 // text checks a string built in code. A writing walk checks it as it
@@ -1276,6 +1288,8 @@ func found(v haus.Value) string {
 		return "a record"
 	case haus.Variant:
 		return "the tag " + quote(v.Tag.String())
+	case haus.Secret:
+		return "a Secret"
 	}
 	return "nothing"
 }

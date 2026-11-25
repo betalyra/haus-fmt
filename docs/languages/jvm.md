@@ -112,6 +112,7 @@ SchemaType root = schema.type("Root");
 Codecs codecs = Codecs.of(MoneyCodecs.ISO, GeoCodecs.WGS84);   // org.hausfmt.ext.money, org.hausfmt.ext.geo
 root.decode(Haus.parse(text), DecodeOptions.DEFAULT.withCodecs(codecs));   // Money(1, Eur): codec-rejected
 root.missingCodecs(codecs);   // missing-codec warnings for profiled types left without a codec
+schema.unusedCodecs(codecs);  // unused-codec warnings for codecs whose id no type has
 ```
 
 `Codec.of(id, Host.class, decode, encode)` writes your own. [What haus checks](/docs/checks), [`missing-codec`](/docs/errors#missing-codec)
@@ -120,7 +121,7 @@ root.missingCodecs(codecs);   // missing-codec warnings for profiled types left 
 - **Decimals.** `Decimal` is a `BigDecimal`, or a `Value.Number` to keep `-0` and exponents as written.
 - **Streams.** `new StreamReader(in, StreamOptions.DEFAULT.withStrict(true))` reads one value at a time; it is an `Iterator<Value>` with `stream()`. In Kotlin, `input.hausValues()` is a `Sequence`. [Logs and streams](/docs/tours/streams)
 - **JSON.** `orders.toJson(o)` writes schema-based JSON; `HausJson.importJson` reads any JSON as haus. [Coming from JSON](/docs/from-json)
-- **Secrets.** `Secret a` is a `Secret<A>`; errors inside never show the value. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** `Secret a` is a `Secret<A>` in a typed codec, and a `Value.Secret` from `decode`; both show `<redacted>`, `Haus.write`, `canonical` and `hash` refuse a `Value.Secret`, encoding with the schema writes it in full, and errors inside never show the value. `Secret<A>` hides it from `toString` only: don't give it to a JSON library that reads fields by reflection. [Config and secrets](/docs/tours/secrets)
 - **Threads.** Values, schemas and codecs are immutable and safe to share.
 - **Errors.** `HausException` is unchecked, with `code()`, `hint()` and `toJson()` for tools. [Error codes](/docs/errors)
 

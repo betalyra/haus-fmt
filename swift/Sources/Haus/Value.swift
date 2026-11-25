@@ -41,6 +41,14 @@ public enum HausValue: Sendable {
     /// A tag with zero or more arguments: `None`, `Some(1)`, `Circle { r: 1 }`
     /// (one record argument).
     case variant(HausTag, [HausValue])
+    /// The value of a `Secret` type, hidden (spec §15): no value of the
+    /// format, but what ``SchemaType/decode(_:limits:)`` gives for a secret.
+    /// It shows as `<redacted>` and is given out by ``Secret/reveal()``;
+    /// the writers that don't apply its schema (``stringify(_:_:)``,
+    /// ``canonical(_:limits:)``, hashing, self-describing JSON) refuse it with
+    /// `cannot-encode`, and it is equal to no value. ``SchemaType/encode(_:limits:)``
+    /// writes it in full.
+    indirect case secret(Secret<HausValue>)
 }
 
 extension HausValue {
@@ -88,6 +96,7 @@ extension HausValue {
             switch value {
             case .array(let items), .variant(_, let items): pending += items
             case .record(let r): pending += r.fields.lazy.map(\.value)
+            case .secret(let s): pending.append(s.reveal())
             case .number, .string, .bytes: break
             }
             // `value` is freed here: its items are in `pending`, so none of them is.
@@ -159,6 +168,8 @@ extension HausValue: Hashable {
             hasher.combine(5)
             hasher.combine(tag)
             hashItems(args, into: &hasher, levels: levels)
+        case .secret:
+            hasher.combine(6)  // equal to nothing: the value takes no part
         }
     }
 }

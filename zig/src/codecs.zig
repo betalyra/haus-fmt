@@ -424,13 +424,15 @@ pub const money = struct {
     pub const money_id = "@haus-fmt/money@1#Money";
     pub const currency_id = "@haus-fmt/money@1#Currency";
 
-    /// The rule for a `Currency`, as decoded (an unknown tag of `< >`).
+    /// The rule for a `Currency`, as the schema decoded it (an unknown tag
+    /// of `< >`). For a host value of an application's Currency codec, the
+    /// value that codec was given (spec §13.4: a looser codec doesn't make
+    /// `Bitcoin` pass).
     pub fn acceptsCurrency(d: Decoded, reason: *Reason) error{Rejected}!void {
-        const tag, const args = switch (d) {
+        const tag, const args = switch (d.schemaValue()) {
             .unknown => |u| .{ u.tag, u.args.len },
             .variant => |t| .{ t.tag, t.args.len },
-            // A host value of an application's own Currency codec: it
-            // checked the value itself.
+            // A host value made in code: no schema value to check.
             else => return,
         };
         if (args != 0) return reason.reject("{s} has a payload: a currency is a bare tag", .{tag});
@@ -440,8 +442,9 @@ pub const money = struct {
 
     /// The rule for a `Money`: its currency is accepted.
     pub fn acceptsMoney(d: Decoded, reason: *Reason) error{Rejected}!void {
-        if (d != .variant) return;
-        return acceptsCurrency(d.variant.args[1], reason);
+        const m = d.schemaValue();
+        if (m != .variant) return;
+        return acceptsCurrency(m.variant.args[1], reason);
     }
 
     pub const iso_money: AnyCodec = decoding.rule(money_id, acceptsMoney);
@@ -463,9 +466,15 @@ pub const geo = struct {
     pub const Point = struct { lat: f64, lng: f64 };
 
     /// The latitude and longitude of a decoded `LatLng`.
-    pub fn point(d: Decoded) ?Point {
+    /// What the schema decoded counts (`Decoded.schemaValue`), also for a
+    /// host value of an application's own codec.
+    pub fn point(d0: Decoded) ?Point {
+        const d = d0.schemaValue();
         if (d != .variant or d.variant.args.len != 2) return null;
-        return .{ .lat = d.variant.args[0].float64, .lng = d.variant.args[1].float64 };
+        const lat = d.variant.args[0].schemaValue();
+        const lng = d.variant.args[1].schemaValue();
+        if (lat != .float64 or lng != .float64) return null;
+        return .{ .lat = lat.float64, .lng = lng.float64 };
     }
 
     pub fn acceptsLatLng(d: Decoded, reason: *Reason) error{Rejected}!void {
@@ -474,7 +483,8 @@ pub const geo = struct {
         if (!(p.lng >= -180 and p.lng <= 180)) return reason.reject("the longitude {d} is outside −180…180", .{p.lng});
     }
 
-    pub fn acceptsBBox(d: Decoded, reason: *Reason) error{Rejected}!void {
+    pub fn acceptsBBox(d0: Decoded, reason: *Reason) error{Rejected}!void {
+        const d = d0.schemaValue();
         if (d != .variant or d.variant.args.len != 2) return;
         const sw = d.variant.args[0];
         const ne = d.variant.args[1];
@@ -638,7 +648,7 @@ test "codecs run from the inside out, the first rejection at its own place" {
     defer cs.deinit(testing.allocator);
     var diag: errors.Diagnostic = .{};
     const d = try f.decode("Money", "Money(19.90, CHF)", &cs, &diag);
-    // The Money rule saw the Currency's host value.
+    // The Money rule ran; the Money value holds the Currency's host value.
     try testing.expectEqual(Iso.CHF, currency_enum.get(d.variant.args[1]).?);
     try testing.expectEqualStrings("Money(19.90,CHF)", try f.encode("Money", d, &cs, &diag));
     // The inner codec rejects first, at its place.
@@ -701,6 +711,101 @@ test "codecs on record payloads, inside secrets, and one per id" {
     try testing.expectEqual(errors.Code.@"invalid-secret", diag.code);
     try testing.expectEqualStrings("$[0]", diag.path());
     try testing.expectError(error.DuplicateCodec, decoding.Codecs.init(testing.allocator, &.{ &geo.wgs84_lat_lng, &geo.wgs84_lat_lng }));
+}
+
+/// A Currency codec looser than the profile: any tag, as its name.
+const any_currency = Codec([]const u8).init(money.currency_id, struct {
+    fn dec(_: Allocator, d: Decoded, _: *Reason) CodecError![]const u8 {
+        return d.unknown.tag;
+    }
+}.dec, struct {
+    fn enc(_: Allocator, x: []const u8, _: *Reason) CodecError!Decoded {
+        return .{ .unknown = .{ .tag = x } };
+    }
+}.enc);
+
+test "a profile's rule is checked on what the schema decoded, whatever the inner codec" {
+    var f = try Fixture.init(money_schema, "@haus-fmt/money@1");
+    defer f.deinit();
+    var cs = try decoding.Codecs.init(testing.allocator, &.{ any_currency.erased(), &money.iso_money });
+    defer cs.deinit(testing.allocator);
+    var diag: errors.Diagnostic = .{};
+    // The looser codec takes Bitcoin as a Currency of its own …
+    const btc = try f.decode("Currency", "Bitcoin", &cs, &diag);
+    try testing.expectEqualStrings("Bitcoin", any_currency.get(btc).?);
+    // … but Money's rule still rejects it, at the Money.
+    try testing.expectError(error.Haus, f.decode("Money", "Money(19.90, Bitcoin)", &cs, &diag));
+    try testing.expectEqual(errors.Code.@"codec-rejected", diag.code);
+    try testing.expectEqualStrings("$", diag.path());
+    try testing.expect(std.mem.startsWith(u8, diag.message(), "@haus-fmt/money@1#Money rejects the value"));
+    const ok = try f.decode("Money", "Money(19.90, BTC)", &cs, &diag);
+    try testing.expectEqualStrings("BTC", any_currency.get(ok.variant.args[1]).?);
+    // The schema value is kept beside the host value.
+    try testing.expectEqualStrings("BTC", ok.variant.args[1].schemaValue().unknown.tag);
+    // Encoding: the rule runs on the value written, `cannot-encode` at the Money.
+    const a = f.arena_state.allocator();
+    const bad: Decoded = .{ .variant = .{ .tag = "Money", .args = &.{ .{ .decimal = "1" }, try any_currency.wrap(a, "Bitcoin") } } };
+    try testing.expectError(error.Haus, f.encode("Money", bad, &cs, &diag));
+    try testing.expectEqual(errors.Code.@"cannot-encode", diag.code);
+    try testing.expectEqualStrings("$", diag.path());
+}
+
+test "a codec for any named type: the prelude's, inside a package's type, and the decoded type itself" {
+    var f = try Fixture.init(money_schema, "@haus-fmt/money@1");
+    defer f.deinit();
+    // Decimal amounts in cents (two decimals at most).
+    const cents = Codec(i64).init("prelude#Decimal", struct {
+        fn dec(_: Allocator, d: Decoded, reason: *Reason) CodecError!i64 {
+            const x = std.fmt.parseFloat(f64, d.decimal) catch return reason.reject("not a number", .{});
+            const c = @round(x * 100);
+            if (@abs(c - x * 100) > 1e-6 or @abs(c) > 1e15) return reason.reject("not a whole number of cents", .{});
+            return @intFromFloat(c);
+        }
+    }.dec, struct {
+        fn enc(arena: Allocator, x: i64, _: *Reason) CodecError!Decoded {
+            const sign: []const u8 = if (x < 0) "-" else "";
+            const m: u64 = @abs(x);
+            return .{ .decimal = try std.fmt.allocPrint(arena, "{s}{d}.{d:0>2}", .{ sign, m / 100, m % 100 }) };
+        }
+    }.enc);
+    var cs = try decoding.Codecs.init(testing.allocator, &.{ cents.erased(), &money.iso_currency });
+    defer cs.deinit(testing.allocator);
+    var diag: errors.Diagnostic = .{};
+    const d = try f.decode("Money", "Money(19.9, EUR)", &cs, &diag);
+    try testing.expectEqual(@as(i64, 1990), cents.get(d.variant.args[0]).?);
+    try testing.expectEqualStrings("Money(19.90,EUR)", try f.encode("Money", d, &cs, &diag));
+    try testing.expectError(error.Haus, f.decode("Money", "Money(1.005, EUR)", &cs, &diag));
+    try testing.expectEqual(errors.Code.@"codec-rejected", diag.code);
+    try testing.expectEqualStrings("$[0]", diag.path());
+    // Decoding a value as a Currency runs the Currency codec.
+    try testing.expectError(error.Haus, f.decode("Currency", "Eur", &cs, &diag));
+    try testing.expectEqual(errors.Code.@"codec-rejected", diag.code);
+    try testing.expectEqualStrings("$", diag.path());
+}
+
+test "a codec's rejection inside a Secret is invalid-secret, when encoding too" {
+    var f = try Fixture.init("type T = { k: Secret Money }\ntype Money = closed < Money Decimal Currency >\ntype Currency = < >", "@haus-fmt/money@1");
+    defer f.deinit();
+    var cs = try decoding.Codecs.init(testing.allocator, &.{ currency_enum.erased(), &money.iso_money });
+    defer cs.deinit(testing.allocator);
+    var diag: errors.Diagnostic = .{};
+    try testing.expectError(error.Haus, f.decode("T", "{ k: Money(1, GBP) }", &cs, &diag));
+    try testing.expectEqual(errors.Code.@"invalid-secret", diag.code);
+    try testing.expectEqualStrings("$.k", diag.path());
+    try testing.expect(std.mem.indexOf(u8, diag.message(), "GBP") == null);
+    // A host value its codec can't write, inside a Secret: at the secret,
+    // without the codec's reason (the date isn't shown).
+    var df = try Fixture.init("import std/time (Date)\ntype T = { k: Secret (Array Date) }", "local");
+    defer df.deinit();
+    const a = df.arena_state.allocator();
+    const feb30 = try time.date.wrap(a, .{ .year = 2026, .month = .feb, .day = 30 });
+    const box = try a.create(Decoded);
+    box.* = .{ .array = try a.dupe(Decoded, &.{feb30}) };
+    const val: Decoded = .{ .record = try a.dupe(Decoded.Entry, &.{.{ .key = "k", .value = .{ .secret = .of(box) } }}) };
+    try testing.expectError(error.Haus, df.encode("T", val, null, &diag));
+    try testing.expectEqual(errors.Code.@"invalid-secret", diag.code);
+    try testing.expectEqualStrings("$.k", diag.path());
+    try testing.expect(std.mem.indexOf(u8, diag.message(), "2026") == null);
 }
 
 test "the type ids" {

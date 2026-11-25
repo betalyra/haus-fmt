@@ -20,7 +20,8 @@ fn line(hex: &str) -> String {
         Ok(_) => "ok".into(),
         Err(e) => {
             let (line, column) = e.position().unwrap_or((0, 0));
-            format!("err {line} {column} {} {}", e.code(), e.reason().replace(['\n', '\r'], " "))
+            let code = e.code().map_or("-".to_owned(), |c| c.to_string());
+            format!("err {line} {column} {code} {}", e.reason().replace(['\n', '\r'], " "))
         }
     }
 }

@@ -561,6 +561,11 @@ const Reader = struct {
                 while (i < r.p.end and (v.isIdentChar(r.p.text[i]) or r.p.text[i] == '.' or r.p.text[i] == '/' or r.p.text[i] == '-')) i += 1;
                 const path = r.p.text[r.p.pos..i];
                 r.p.pos = i;
+                // `.` alone is no module, a syntax error as `Lib/x` is;
+                // `..`, `.x` and `.../a` are unknown modules (grammar.ebnf).
+                if (std.mem.eql(u8, path, ".")) {
+                    return r.fail(.@"schema-syntax", module_at, "'.' is not a module: import std/…, a package @org/name or a file ./name", .{});
+                }
                 if (!std.mem.startsWith(u8, path, "./") and !std.mem.startsWith(u8, path, "../")) {
                     return r.fail(.@"unknown-module", module_at, "unknown module {s}: import std/…, a package @org/name or a file ./name", .{errors.quoteText(&buf, path)});
                 }

@@ -55,6 +55,7 @@ fn decode(ty: &str, text: &str) -> Result<Value, (String, String)> {
     match ty {
         "Log" => stream::<typed::Entry>(text),
         "Points" => stream::<typed::Point>(text),
+        "Names" => stream::<String>(text),
         "Entry" => one::<typed::Entry>(text),
         "Level" => one::<typed::Level>(text),
         "Point" => one::<typed::Point>(text),

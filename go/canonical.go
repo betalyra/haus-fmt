@@ -348,8 +348,12 @@ func (w *canonicalWriter) value(v Value) error {
 				w.b = append(w.b, '(')
 				f = canonicalFrame{items: x.Args, close: ')'}
 			}
-		default:
+		case Secret:
+			return &Error{Code: CodeCannotEncode, Path: w.place(), Message: secretRefused}
+		case nil:
 			return newError(CodeCannotEncode, "a nil value")
+		default:
+			return newError(CodeCannotEncode, "an unknown kind of value")
 		}
 		switch {
 		case f.close == 0:

@@ -171,7 +171,7 @@ const rejected = (reason: string, code: ErrorCode): never => {
 }
 
 /** Text with a UTF-8 form: a string without an unpaired surrogate (spec §4), else `cannot-encode`. */
-const text = (s: unknown, what: "a string" | "a key" | "a tag"): string => {
+const text = (s: unknown, what: "a string" | "a key"): string => {
   if (typeof s !== "string") return rejected(`${what} must be a string, not ${typeof s}`, "cannot-encode")
   if (unpairedSurrogate(s) >= 0) return rejected(`${what} with an unpaired surrogate, which has no UTF-8 form`, "cannot-encode")
   return s
@@ -249,10 +249,12 @@ export const rec = (fields: Iterable<readonly [string, Value]> | Readonly<Record
  * written `Circle { r: 1 }`) or positional arguments (`variant("Point",
  * [num("1"), num("2")])`). The arguments are copied (and frozen). A tag that
  * isn't one is HausEncodeError `invalid-tag` (one with an unpaired surrogate
- * `cannot-encode`); an argument that isn't a value is `cannot-encode`.
+ * too: the tag is checked before it is encoded, spec §11); a tag that isn't a
+ * string, or an argument that isn't a value, is `cannot-encode`.
  */
 export const variant = (tag: string, args: Iterable<Value> = NO_ARGS): HVariant => {
-  if (!TAG.test(text(tag, "a tag"))) rejected(`the tag '${quoteText(tag)}' is not [A-Z][A-Za-z0-9_]*`, "invalid-tag")
+  if (typeof tag !== "string") rejected(`a tag must be a string, not ${typeof tag}`, "cannot-encode")
+  if (!TAG.test(tag)) rejected(`the tag '${quoteText(tag)}' is not [A-Z][A-Za-z0-9_]*`, "invalid-tag")
   return new VariantNode(tag, args === NO_ARGS ? NO_ARGS : values(args, "argument"))
 }
 

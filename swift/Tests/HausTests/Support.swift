@@ -23,6 +23,19 @@ func files(_ dir: URL, _ ext: String) -> [String] {
     return names.filter { $0.hasSuffix(ext) }.map { String($0.dropLast(ext.count)) }.sorted()
 }
 
+/// `v` with every secret a decoder hid in it revealed, for comparing decoded
+/// values with the expected ones.
+func revealed(_ v: HausValue) -> HausValue {
+    switch v {
+    case .secret(let s): return revealed(s.reveal())
+    case .array(let items): return .array(items.map(revealed))
+    case .variant(let tag, let args): return .variant(tag, args.map(revealed))
+    case .record(let r):
+        return .record(try! HausRecord(r.fields.map { (key: $0.key, value: revealed($0.value)) }))
+    case .number, .string, .bytes: return v
+    }
+}
+
 /// Whether the file exists.
 func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 

@@ -3,7 +3,7 @@
 //!
 //! One walk does both. Decoding stops at the first error and builds the
 //! value an encoder writes back (the suite's `output`); checking goes on
-//! after errors, reports up to [`MAX_ISSUES`] of them with their place in the
+//! after errors, reports up to [`MAX_ERRORS`] of them with their place in the
 //! text, and adds hints: fields and tags an open type doesn't list ("not in
 //! the schema", with a "did you mean"), and deprecated fields and tags that
 //! the data uses (spec §14). Messages follow the TypeScript checker
@@ -15,15 +15,19 @@
 //! `Secret` is reported as one error at the secret, with its type and never
 //! its value, a key or a tag of it.
 
+use crate::decoded::{Decoded, hide};
 use crate::locate::{Lines, Node, locate};
 use crate::resolve::{Schema, tags};
 use crate::types::{Builtin, Case, Instance, Payload, Record, Type, Variant};
-use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Number, Tag, Value};
+use haus::stream::{Options as StreamOptions, Reader};
+use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Number, SyntaxError, Tag, Value};
 use std::fmt;
 use std::ops::Range;
 
-/// At most this many issues are reported for one file.
-pub const MAX_ISSUES: usize = 200;
+/// At most this many errors are reported for one check, a stream's every
+/// item together (spec §14, "Every error"); hints don't count. The check
+/// says when it stopped there ([`CheckReport::stopped`]).
+pub const MAX_ERRORS: usize = 200;
 const STEPS_PER_VALUE: usize = 16;
 
 /// How to check ([`Schema::check_report`]).
@@ -31,7 +35,7 @@ const STEPS_PER_VALUE: usize = 16;
 pub struct CheckOptions {
     /// Stop at the first error (`haus check --first`), with the hints found
     /// before it. By default every error is reported (spec §14, "Every
-    /// error"), up to [`MAX_ISSUES`] issues.
+    /// error"), up to [`MAX_ERRORS`] errors.
     pub first: bool,
     /// The parser's limits, also the depth limit and the limits raw values
     /// are checked against.
@@ -40,11 +44,11 @@ pub struct CheckOptions {
 
 /// What a check found ([`Schema::check_report`]): the issues, as a set
 /// (which issues is specified, their order is not, spec §14), and whether
-/// it stopped at [`MAX_ISSUES`] with more to report.
+/// it stopped at [`MAX_ERRORS`] with more to report.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CheckReport {
     pub issues: Vec<Issue>,
-    /// The check stopped at [`MAX_ISSUES`] issues: there are more.
+    /// The check stopped at [`MAX_ERRORS`] errors: there are more.
     pub stopped: bool,
 }
 
@@ -105,14 +109,38 @@ pub struct Issue {
     pub span: Option<Range<usize>>,
     /// Where `span` starts.
     pub position: Option<Position>,
-    /// A fix for this case, better than the catalogue's for the code
-    /// (boxed: errors are returned by value, and stay small this way).
-    fix: Option<Box<str>>,
+    /// What few issues have (boxed: errors are returned by value, and stay
+    /// small this way).
+    more: Option<Box<More>>,
+}
+
+/// What an [`Issue`] has beyond its code, message and place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum More {
+    /// A fix for this case, better than the catalogue's for the code.
+    Fix(String),
+    /// The syntax or limit error of the text this issue is (spec §8): its
+    /// place is its line and column, not a path, and it ended the check.
+    Syntax(SyntaxError),
 }
 
 impl Issue {
     fn new(severity: Severity, code: Code, message: String, path: Vec<Segment>) -> Issue {
-        Issue { severity, code, message, path, span: None, position: None, fix: None }
+        Issue { severity, code, message, path, span: None, position: None, more: None }
+    }
+
+    fn with_syntax(self, e: SyntaxError) -> Issue {
+        Issue { more: Some(Box::new(More::Syntax(e))), ..self }
+    }
+
+    /// The syntax or limit error of the text this issue is, if it is one:
+    /// its place is its [`position`](Issue::position), not its path, and it
+    /// ended the check (spec §14, "Every error").
+    pub fn syntax(&self) -> Option<&SyntaxError> {
+        match self.more.as_deref() {
+            Some(More::Syntax(e)) => Some(e),
+            _ => None,
+        }
     }
 
     fn error((code, message): (Code, String)) -> Issue {
@@ -122,7 +150,10 @@ impl Issue {
     /// A concrete fix: the one for this case (`Point takes 2 arguments …`),
     /// or the catalogue's for the code (spec §17).
     pub fn hint(&self) -> &str {
-        self.fix.as_deref().unwrap_or(self.code.hint())
+        match self.more.as_deref() {
+            Some(More::Fix(fix)) => fix,
+            _ => self.code.hint(),
+        }
     }
 
     /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
@@ -176,26 +207,27 @@ impl Schema {
     /// as spec §15 says. The result is the value an encoder writes back:
     /// numbers in their written form (`0xFF` as `255`, `-0` as an integer
     /// `0`, floats in their one spelling), fields an open record ignores
-    /// left out, and everything else as it was. Fails with the first error.
-    /// For a `Stream` definition, `value` is one value of the stream.
-    pub fn decode(&self, name: &str, value: &Value) -> Result<Value, Issue> {
+    /// left out, and everything else as it was, with its secrets hidden
+    /// ([`Decoded`]). Fails with the first error. For a `Stream`
+    /// definition, `value` is one value of the stream.
+    pub fn decode(&self, name: &str, value: &Value) -> Result<Decoded, Issue> {
         self.decode_with(name, value, &Limits::default())
     }
 
     /// [`Schema::decode`] for a reader with `limits` (depth, and the limits
     /// that raw values of an `Any` or an unknown tag are checked against).
-    pub fn decode_with(&self, name: &str, value: &Value, limits: &Limits) -> Result<Value, Issue> {
+    pub fn decode_with(&self, name: &str, value: &Value, limits: &Limits) -> Result<Decoded, Issue> {
         let item = self.root(name).map_err(Issue::error)?;
         self.decode_type(&item.body, value, limits)
     }
 
     /// Decode `value` with any type of this schema (such as the body of an
     /// instance of a generic type).
-    pub fn decode_type(&self, ty: &Type, value: &Value, limits: &Limits) -> Result<Value, Issue> {
+    pub fn decode_type(&self, ty: &Type, value: &Value, limits: &Limits) -> Result<Decoded, Issue> {
         let mut w = Walker::new(self, *limits, Mode::Decode, None);
         w.budget(std::slice::from_ref(value)).map_err(Issue::error)?;
         match w.value(value, ty, None) {
-            Some(out) if w.issues.is_empty() => Ok(out),
+            Some(out) if w.issues.is_empty() => Ok(hide(out, &w.secrets)),
             _ => Err(w
                 .issues
                 .into_iter()
@@ -204,21 +236,32 @@ impl Schema {
         }
     }
 
+    /// Encode a decoded value with the type `name` (spec §15): the value a
+    /// writer writes, its secrets in full (the receiver needs them). It is
+    /// checked with the type as [`Schema::decode`] checks a value, so
+    /// encoding what was decoded gives the same value back.
+    pub fn encode(&self, name: &str, value: &Decoded) -> Result<Value, Issue> {
+        self.decode(name, &value.clone().reveal()).map(Decoded::reveal)
+    }
+
     /// Decode the values of a stream (spec §15): each one, on its own, with
     /// the type a `Stream` definition `name` holds (or with `name` itself, if
     /// it isn't one). An error names the value's index: `$[3].total`.
-    pub fn decode_stream(&self, name: &str, values: &[Value]) -> Result<Vec<Value>, Issue> {
+    pub fn decode_stream(&self, name: &str, values: &[Value]) -> Result<Vec<Decoded>, Issue> {
+        values.iter().enumerate().map(|(i, v)| self.decode_item(name, i, v)).collect()
+    }
+
+    /// Decode the value at `index` of a stream, as it is read (spec §15,
+    /// "Streams"): as [`Schema::decode_stream`] decodes each, an error naming
+    /// the index. Reading a stream's values one at a time
+    /// ([`haus::stream::values`]) and decoding each before reading the next,
+    /// an item's error comes before a syntax error in a later item.
+    pub fn decode_item(&self, name: &str, index: usize, value: &Value) -> Result<Decoded, Issue> {
         let item = self.root(name).map_err(Issue::error)?;
-        values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                self.decode_type(&item.body, v, &Limits::default()).map_err(|mut e| {
-                    e.path.insert(0, Segment::Index(i));
-                    e
-                })
-            })
-            .collect()
+        self.decode_type(&item.body, value, &Limits::default()).map_err(|mut e| {
+            e.path.insert(0, Segment::Index(index));
+            e
+        })
     }
 
     /// Every problem with `values` (a file's top-level values) as the type
@@ -229,38 +272,81 @@ impl Schema {
     }
 
     /// [`Schema::check`] with options: every error (spec §14, "Every
-    /// error") or only the first, and whether it stopped at [`MAX_ISSUES`].
+    /// error") or only the first, and whether it stopped at [`MAX_ERRORS`].
     pub fn check_report(&self, name: &str, values: &[Value], options: &CheckOptions) -> CheckReport {
         self.check_mode(name, values, None, options)
     }
 
     /// [`Schema::check_text`] with options: every error (spec §14, "Every
-    /// error") or only the first, and whether it stopped at [`MAX_ISSUES`].
-    /// A syntax or limit error of the text is its only issue.
+    /// error") or only the first, and whether it stopped at [`MAX_ERRORS`].
+    ///
+    /// A document (a type that isn't a `Stream`) with a syntax or limit
+    /// error has that one issue. A `Stream` is checked item by item, as a
+    /// stream decoder reads it (spec §14, §15): a syntax or limit error ends
+    /// the check, after the issues of the items before it, and when stopping
+    /// at the first error, an item's error before it is the only error.
     pub fn check_text_report(&self, name: &str, text: &str, options: &CheckOptions) -> CheckReport {
-        let values = match haus::parse_with(text, &options.limits) {
-            Ok(values) => values,
-            Err(e) => {
-                let end = text[e.offset..].chars().next().map_or(e.offset, |c| e.offset + c.len_utf8());
-                let issue = Issue {
-                    span: Some(e.offset..end.max(e.offset)),
-                    position: Some(Position { line: e.line, column: e.column }),
-                    ..Issue::new(Severity::Error, e.code, e.reason, vec![])
-                };
-                return CheckReport { issues: vec![issue], stopped: false };
+        let mut report = match haus::parse_with(text, &options.limits) {
+            Ok(values) => {
+                let nodes = locate(text).filter(|n| n.len() == values.len());
+                self.check_mode(name, &values, nodes.as_deref(), options)
             }
+            Err(e) => match self.root(name) {
+                Ok(root) if root.stream => self.check_stream_text(&root.body, text, options),
+                _ => CheckReport { issues: vec![syntax_issue(text, e)], stopped: false },
+            },
         };
-        let nodes = locate(text).filter(|n| n.len() == values.len());
-        let lines = Lines::new(text);
-        let mut report = self.check_mode(name, &values, nodes.as_deref(), options);
-        for i in &mut report.issues {
-            // No span: the start of the file (an empty file, say).
-            let span = i.span.clone().unwrap_or(0..text.chars().next().map_or(0, char::len_utf8));
-            let (line, column) = lines.position(span.start);
-            i.position = Some(Position { line, column });
-            i.span = Some(span);
-        }
+        place(&mut report.issues, text);
         report
+    }
+
+    /// A stream whose text has a syntax or limit error, checked item by item
+    /// up to it: its items are read one at a time, each parsed, then checked.
+    fn check_stream_text(&self, body: &Type, text: &str, options: &CheckOptions) -> CheckReport {
+        let mut check = StreamCheck::new(self, body, *options);
+        let mut reader = Reader::new(StreamOptions { limits: options.limits, ..StreamOptions::default() });
+        let mut issues = vec![];
+        // The current item's text: from `start`, up to the comma of the last part pushed.
+        let (mut start, mut end) = (0, 0);
+        let mut failed = None;
+        // An item ends only at a top-level comma, and a comma never waits for
+        // more input: each part that ends at one completes at most one item.
+        for part in text.as_bytes().split_inclusive(|&b| b == b',') {
+            end += part.len();
+            match reader.push(part) {
+                Ok(values) => values.iter().for_each(|v| {
+                    issues.extend(check.located(v, text, start..end));
+                    start = end;
+                }),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+            if check.done() {
+                break;
+            }
+        }
+        if failed.is_none() && !check.done() {
+            match reader.finish() {
+                Ok(values) => values.iter().for_each(|v| issues.extend(check.located(v, text, start..text.len()))),
+                Err(e) => failed = Some(e),
+            }
+        }
+        if let Some(e) = failed.filter(|_| !check.done()) {
+            issues.push(syntax_issue(text, e));
+        }
+        CheckReport { issues, stopped: check.stopped() }
+    }
+
+    /// A check of a stream's values one at a time, as they arrive (spec §14,
+    /// "Every error"; §15, "Streams"): `haus check -` on standard input. The
+    /// values are checked with the type a `Stream` definition `name` holds
+    /// (or with `name` itself, if it isn't one), each at `$[i]`. The cap on
+    /// errors ([`MAX_ERRORS`]) is one for all of them.
+    pub fn check_stream(&self, name: &str, options: &CheckOptions) -> Result<StreamCheck<'_>, Issue> {
+        let root = self.root(name).map_err(Issue::error)?;
+        Ok(StreamCheck::new(self, &root.body, *options))
     }
 
     /// Every problem with the data file `text` as the type `name`, with
@@ -327,11 +413,119 @@ impl Schema {
     }
 }
 
+/// A check of a stream's values one at a time ([`Schema::check_stream`]):
+/// each value is checked when it arrives, and the check ends at the cap on
+/// errors, or at the first error with [`CheckOptions::first`].
+pub struct StreamCheck<'s> {
+    schema: &'s Schema,
+    body: &'s Type,
+    options: CheckOptions,
+    /// The index of the next value.
+    index: usize,
+    /// The errors so far, every value's together.
+    errors: usize,
+    /// An error past [`MAX_ERRORS`] was found.
+    capped: bool,
+    /// Nothing more is checked: at the cap, the first error with `first`, or a fatal error.
+    done: bool,
+}
+
+impl<'s> StreamCheck<'s> {
+    fn new(schema: &'s Schema, body: &'s Type, options: CheckOptions) -> StreamCheck<'s> {
+        StreamCheck { schema, body, options, index: 0, errors: 0, capped: false, done: false }
+    }
+
+    /// The issues of the next value, without positions; none once the check is [done](Self::done).
+    pub fn check(&mut self, value: &Value) -> Vec<Issue> {
+        self.item(value, None)
+    }
+
+    /// The issues of the next value, parsed from `text` (its text in the
+    /// stream, comments and comma included), with spans and positions in `text`.
+    pub fn check_text(&mut self, value: &Value, text: &str) -> Vec<Issue> {
+        let mut issues = self.located(value, text, 0..text.len());
+        place(&mut issues, text);
+        issues
+    }
+
+    /// Whether the check is over: at the cap ([`StreamCheck::stopped`]), or
+    /// at the first error when stopping there. Later values aren't checked.
+    pub fn done(&self) -> bool {
+        self.done
+    }
+
+    /// Whether the check stopped at [`MAX_ERRORS`] errors, with more to report.
+    pub fn stopped(&self) -> bool {
+        self.capped
+    }
+
+    /// The next value, parsed from `text[range]`: its issues with spans in `text`.
+    fn located(&mut self, value: &Value, text: &str, range: Range<usize>) -> Vec<Issue> {
+        let nodes = locate(&text[range.clone()]).filter(|n| n.len() == 1);
+        let mut issues = self.item(value, nodes.as_deref());
+        for span in issues.iter_mut().filter_map(|i| i.span.as_mut()) {
+            *span = span.start + range.start..span.end + range.start;
+        }
+        issues
+    }
+
+    /// The issues of the next value, at `$[i]`, with `nodes` its place in its text.
+    fn item(&mut self, value: &Value, nodes: Option<&[Node]>) -> Vec<Issue> {
+        if self.done {
+            return vec![];
+        }
+        let index = self.index;
+        self.index += 1;
+        let mode = if self.options.first { Mode::First } else { Mode::Check };
+        let mut w = Walker::new(self.schema, self.options.limits, mode, nodes);
+        w.errors = self.errors;
+        let node = nodes.and_then(|n| n.first());
+        w.path.push(Step::Index(index));
+        match w.budget(std::slice::from_ref(value)) {
+            Ok(()) => {
+                w.value(value, self.body, node);
+            }
+            Err((code, message)) => {
+                w.fatal::<()>(code, message);
+                w.issues.iter_mut().for_each(|i| i.span = i.span.take().or_else(|| span(node)));
+            }
+        }
+        self.errors = w.errors;
+        self.capped |= w.capped;
+        self.done = w.fatal || w.capped || (self.options.first && self.errors > 0);
+        w.issues
+    }
+}
+
+/// The issue of a syntax or limit error of `text`: it ends the check.
+fn syntax_issue(text: &str, e: SyntaxError) -> Issue {
+    let next = text.get(e.offset..).and_then(|rest| rest.chars().next());
+    let end = next.map_or(e.offset, |c| e.offset + c.len_utf8());
+    Issue {
+        span: Some(e.offset..end),
+        position: Some(Position { line: e.line, column: e.column }),
+        ..Issue::new(Severity::Error, e.code, e.reason.clone(), vec![])
+    }
+    .with_syntax(e)
+}
+
+/// Spans and positions in `text` for the issues that have no position yet;
+/// one without a span is at the start of the file (an empty file, say).
+fn place(issues: &mut [Issue], text: &str) {
+    let lines = Lines::new(text);
+    for i in issues.iter_mut().filter(|i| i.position.is_none()) {
+        let span = i.span.clone().unwrap_or(0..text.chars().next().map_or(0, char::len_utf8));
+        let (line, column) = lines.position(span.start);
+        i.position = Some(Position { line, column });
+        i.span = Some(span);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// Stop at the first error; build the decoded value.
     Decode,
-    /// Report every problem and the hints, up to [`MAX_ISSUES`] in all.
+    /// Report every problem and the hints, up to [`MAX_ERRORS`] errors.
     Check,
     /// Check, and stop at the first error, keeping the hints before it.
     First,
@@ -353,11 +547,13 @@ struct Walker<'s, 'v> {
     fatal: bool,
     /// The errors in `issues`.
     errors: usize,
-    /// An issue past [`MAX_ISSUES`] was found: nothing more is checked.
+    /// An error past [`MAX_ERRORS`] was found: nothing more is checked.
     capped: bool,
     located: bool,
     /// Which fields the records being walked have.
     marks: Marks,
+    /// When decoding: the paths of the secrets decoded, to hide them in the result.
+    secrets: Vec<Vec<Segment>>,
 }
 
 /// For the records being walked, innermost last: which of its type's fields
@@ -437,6 +633,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             capped: false,
             located: nodes.is_some(),
             marks: Marks::default(),
+            secrets: vec![],
         }
     }
 
@@ -520,7 +717,7 @@ impl<'s, 'v> Walker<'s, 'v> {
     }
 
     /// Whether to stop: after a fatal error, the first error when decoding
-    /// or with [`CheckOptions::first`], or an issue past [`MAX_ISSUES`].
+    /// or with [`CheckOptions::first`], or an error past [`MAX_ERRORS`].
     fn stopped(&self) -> bool {
         self.fatal
             || self.capped
@@ -543,15 +740,16 @@ impl<'s, 'v> Walker<'s, 'v> {
         if severity == Severity::Hint && self.decoding() {
             return;
         }
-        if self.issues.len() >= MAX_ISSUES {
-            // One more than the cap: say that the check stopped (spec §14, "Every error").
+        let error = severity == Severity::Error;
+        if error && self.errors >= MAX_ERRORS {
+            // One error more than the cap: say that the check stopped (spec §14, "Every error").
             self.capped = true;
         } else {
-            self.errors += usize::from(severity == Severity::Error);
+            self.errors += usize::from(error);
             let span = span.filter(|_| self.located).map(|s| s.start..s.end.max(s.start + 1));
             self.issues.push(Issue {
                 span,
-                fix: fix.map(String::into_boxed_str),
+                more: fix.map(|fix| Box::new(More::Fix(fix))),
                 ..Issue::new(severity, code, message, self.path.iter().map(Step::segment).collect())
             });
         }
@@ -737,7 +935,8 @@ impl<'s, 'v> Walker<'s, 'v> {
 
     /// Check what's inside, then replace whatever was found there (messages
     /// quote values, keys and tags of the data, and paths may name keys) by
-    /// one error at the secret, with its type only.
+    /// one error at the secret, with its type only. When decoding, the
+    /// secret's place is kept, so that the result hides it ([`Decoded`]).
     fn secret(&mut self, v: &'v Value, item: &Type, loc: Loc) -> Option<Value> {
         let before = self.issues.len();
         let out = self.value(v, item, loc);
@@ -747,6 +946,9 @@ impl<'s, 'v> Walker<'s, 'v> {
         if errors > 0 {
             let message = format!("expected {} (a Secret: the value is not shown)", self.schema.describe(item));
             return self.error(Code::InvalidSecret, message, loc);
+        }
+        if self.decoding() && out.is_some() {
+            self.secrets.push(self.path.iter().map(Step::segment).collect());
         }
         out
     }
@@ -879,16 +1081,18 @@ impl<'s, 'v> Walker<'s, 'v> {
 
     /// [`Walker::record`], with the record's fields marked at `mark`.
     fn record_fields(&mut self, fields: &'v [(String, Value)], r: &Record, mark: Mark, loc: Loc) -> Option<Value> {
+        // Each missing field is an error of its own, all at the record (spec §14, "Every error").
         let missing: Vec<String> = (r.required().iter())
             .filter(|&&i| !self.marks.has(mark, r, i))
             .map(|&i| quote_key(&r.fields[i].key))
             .collect();
-        let mut ok = true;
-        if !missing.is_empty() {
-            let s = if missing.len() > 1 { "s" } else { "" };
+        let mut ok = missing.is_empty();
+        for key in missing {
+            if self.stopped() {
+                return None;
+            }
             let start = loc.map(|n| n.start..n.start + 1);
-            self.report(Severity::Error, Code::MissingField, format!("missing field{s} {}", missing.join(", ")), start);
-            ok = false;
+            self.report(Severity::Error, Code::MissingField, format!("missing field {key}"), start);
         }
         let mut out = Vec::with_capacity(fields.len());
         for (i, (key, x)) in fields.iter().enumerate() {
@@ -1183,7 +1387,7 @@ fn quote_key(k: &str) -> String {
 }
 
 /// A key that a path writes after a dot: `.price`.
-fn is_word(k: &str) -> bool {
+pub(crate) fn is_word(k: &str) -> bool {
     k.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
         && k.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }

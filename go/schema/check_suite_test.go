@@ -1,7 +1,6 @@
 package schema_test
 
 import (
-	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +49,8 @@ func showEntries(t *testing.T, v haus.Value) []string {
 
 // TestCheckSuite runs test-suite/check/cases.haus (spec §14, §15, §16): the
 // warnings of schema files (Schema.Warnings), and the hints and errors of
-// checking data text (Schema.CheckText), each in the order of their places.
+// checking data text (Schema.CheckTextResult, every error or the first),
+// each compared as a multiset of (code, place).
 func TestCheckSuite(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(suite, "..", "check", "cases.haus"))
 	if err != nil {
@@ -82,29 +82,35 @@ func TestCheckSuite(t *testing.T) {
 		case "Schema":
 			name = fmt.Sprintf("schema %q", text)
 			want = showEntries(t, get(r, "warnings"))
-			warnings := s.Warnings()
-			slices.SortStableFunc(warnings, func(a, b *haus.Error) int {
-				return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Column, b.Column))
-			})
 			got = []string{}
-			for _, w := range warnings {
+			for _, w := range s.Warnings() {
 				got = append(got, fmt.Sprintf("Warning %s %d %d", w.Code, w.Line, w.Column))
 			}
 		case "Data":
 			typ, data := str(get(r, "type")), str(get(r, "data"))
 			name = fmt.Sprintf("data %q as %s of %q", data, typ, text)
 			want = showEntries(t, get(r, "issues"))
-			issues := s.CheckText(typ, []byte(data))
-			slices.SortStableFunc(issues, func(a, b schema.Issue) int { return cmp.Compare(a.Offset, b.Offset) })
+			first := false
+			if f, ok := r.Get("first"); ok {
+				first = f.(haus.Variant).Tag.String() == "True"
+				name += " (first)"
+			}
+			result := s.CheckTextResult(typ, []byte(data), schema.CheckOptions{First: first})
 			got = []string{}
-			for _, i := range issues {
-				sev := "Error"
-				if i.Severity == schema.SeverityHint {
-					sev = "Hint"
+			for _, i := range result.Issues {
+				switch {
+				case i.Path == "": // a syntax or limit error of the text
+					got = append(got, fmt.Sprintf("Syntax %s %d %d", i.Code, i.Line, i.Column))
+				case i.Severity == schema.SeverityHint:
+					got = append(got, fmt.Sprintf("Hint %s %s", i.Code, i.Path))
+				default:
+					got = append(got, fmt.Sprintf("Error %s %s", i.Code, i.Path))
 				}
-				got = append(got, fmt.Sprintf("%s %s %s", sev, i.Code, i.Path))
 			}
 		}
+		// Multisets of (code, place): no order (spec §14), each as often as listed.
+		slices.Sort(got)
+		slices.Sort(want)
 		if !slices.Equal(got, want) {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, want)
 		}

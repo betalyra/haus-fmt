@@ -22,7 +22,7 @@
 //! type's id (`../shared/money#Money`), which no name in a file can be.
 
 use crate::codegen::unknown_type;
-use crate::schema::{self, Case, Field, Spread, Ty, TypeDef};
+use crate::schema::{self, Case, Field, PRELUDE, Spread, Ty, TypeDef};
 use crate::{Error, Result};
 use haus::ErrorCode as Code;
 use haus_schema::{Definition, InstanceId, Schema, SchemaFile, Type};
@@ -533,11 +533,20 @@ pub(crate) fn module_names(
         .collect()
 }
 
-/// Checks the codecs' ids (spec §13.4): each names a type of the schema
-/// that the generated code has. Types used inside packages' types are
-/// among them: the units include the codec closure ([`units`]).
+/// Checks the codecs' ids (spec §13.4): one codec per id, and each names a
+/// type of the schema that the generated code has, or a type of the prelude
+/// without parameters (`prelude#Decimal`). Types used inside packages'
+/// types are among them: the units include the codec closure ([`units`]).
+/// Both are mistakes of the build's configuration, rejected: two codecs for
+/// one id without a code (not a mistake in a schema or data), and a codec
+/// whose id names no type as `unused-codec` (spec §13.4: which MAY be an
+/// error instead of a warning).
 pub(crate) fn check_codecs<'a>(units: &[Unit], ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let ids: Vec<&str> = ids.into_iter().collect();
+    let mut seen = HashSet::new();
+    if let Some(twice) = ids.iter().find(|id| !seen.insert(**id)) {
+        return Err(Error::config(format!("two codecs for {twice}: an id has one codec")));
+    }
     if ids.is_empty() {
         return Ok(());
     }
@@ -551,19 +560,27 @@ pub(crate) fn check_codecs<'a>(units: &[Unit], ids: impl IntoIterator<Item = &'a
         .collect();
     known.sort();
     known.dedup();
-    match ids.iter().find(|c| !known.iter().any(|k| k == *c)) {
+    let prelude = |id: &str| id.strip_prefix("prelude#").is_some_and(|n| PRELUDE.contains(&(n, 0)));
+    match ids.iter().find(|c| !prelude(c) && !known.iter().any(|k| k == *c)) {
         Some(codec) => Err(Error::new(
-            Code::UnknownType,
-            format!("a codec for {codec}, but the schema has no such type (it has {})", known.join(", ")),
+            Code::UnusedCodec,
+            format!(
+                "a codec for {codec}, but the schema has no such type (it has {}, and the prelude's)",
+                known.join(", ")
+            ),
         )),
         None => Ok(()),
     }
 }
 
-/// The ids of the named types `ty` uses, directly or not, and of std/time types.
+/// The ids of the named types `ty` uses, directly or not, and of std/time
+/// and prelude types (`prelude#Decimal`).
 fn walk(schema: &Schema, ty: &Type, seen: &mut HashSet<InstanceId>, out: &mut HashSet<String>) {
     match ty {
-        Type::Builtin(_) | Type::Param(_) => {}
+        Type::Param(_) => {}
+        Type::Builtin(b) => {
+            out.insert(format!("prelude#{}", b.name()));
+        }
         Type::Time(name) => {
             out.insert(format!("std/time#{name}"));
         }

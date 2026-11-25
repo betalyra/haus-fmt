@@ -19,7 +19,8 @@ import org.hausfmt.SchemaTypes.Typ;
  * rule is checked only where a codec applies it: a schema that reaches {@code Currency} without a
  * codec for it checks currencies for their shape only. That is allowed, never an error, but not
  * silent. Codecs are given to each decoding call ({@link DecodeOptions}), so the warnings are asked
- * for with them: {@link SchemaType#missingCodecs} and {@link Schema#missingCodecs}.
+ * for with them: {@link SchemaType#missingCodecs} and {@link Schema#missingCodecs}. Codecs for an
+ * id that no type has are pointed out the same way, by {@link Schema#unusedCodecs}.
  */
 public final class Profiles {
   private Profiles() {}
@@ -98,6 +99,35 @@ public final class Profiles {
       out.add(missingCodec(id));
     }
     return List.copyOf(out);
+  }
+
+  /**
+   * The {@code unused-codec} warnings for {@code codecs} with a schema whose files have the type
+   * ids {@code ids}: one for each codec whose id is none of them nor a type of the prelude or of
+   * std/time, sorted by id, at no place.
+   */
+  static List<HausException> unusedCodecs(Set<String> ids, Codecs codecs) {
+    Set<String> unused = new TreeSet<>();
+    for (String id : codecs.ids()) {
+      if (!ids.contains(id) && !standardId(id)) {
+        unused.add(id);
+      }
+    }
+    List<HausException> out = new ArrayList<>();
+    for (String id : unused) {
+      out.add(HausException.of(ErrorCode.UNUSED_CODEC, "a codec is set for " + id
+          + ", but no type has that id: it never runs, and its values are checked for their shape only"));
+    }
+    return List.copyOf(out);
+  }
+
+  /** Whether {@code id} is the id of a type of the prelude or of std/time. */
+  private static boolean standardId(String id) {
+    if (id.startsWith("prelude#")) {
+      String name = id.substring("prelude#".length());
+      return SchemaTypes.BUILTINS.containsKey(name) || SchemaLoader.GENERIC.containsKey(name);
+    }
+    return id.startsWith("std/time#") && StdTime.TYPES.contains(id.substring("std/time#".length()));
   }
 
   /** The warning for a type of {@link #PROFILED_TYPES} without its codec. */

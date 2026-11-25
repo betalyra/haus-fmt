@@ -28,6 +28,7 @@ const Error = errors.Error;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const Module = schema_mod.Module;
+const decoding = @import("decode.zig");
 const json = @import("json.zig");
 const files = @import("files.zig");
 const Read = files.Read;
@@ -144,6 +145,15 @@ pub const Build = struct {
         const gpa = b.gpa;
         b.arena_state.deinit();
         gpa.destroy(b);
+    }
+
+    /// The `unused-codec` warnings for `codecs` with this build (spec
+    /// §13.4): the codecs whose id is no type of the prelude, a standard
+    /// module, or the build's files and packages.
+    pub fn unusedCodecs(b: *const Build, out_arena: Allocator, codecs: *const decoding.Codecs) Allocator.Error![]const decoding.CodecWarning {
+        const list = try out_arena.alloc(*const Schema, b.schemas.items.len);
+        for (b.schemas.items, list) |s, *slot| slot.* = s;
+        return decoding.unusedCodecs(out_arena, codecs, list);
     }
 
     /// Every package the schema reaches, as `name@version`, sorted.

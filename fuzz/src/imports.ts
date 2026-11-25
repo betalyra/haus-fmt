@@ -375,16 +375,6 @@ export async function run(argv: readonly string[]): Promise<number> {
     return cases.map((_, i) => byRunner.map((rs) => rs[i]!))
   }
   const patternOf = (c: ImportCase, rs: readonly string[]) => pattern(allNames, rs, c.suspects <= 1)
-  /**
-   * Disagreements with Lean that are known and reported, not counted as
-   * failures (fuzz/README.md, "Relative imports"). Lean's resolver reads a
-   * file's imports with a scanner of its own (Haus/Packages/SchemaFile.lean),
-   * which calls a word that isn't a module (`import Lib/x`, `import .`)
-   * `unknown-module`; Lean's schema-file checker and every binding say
-   * `schema-syntax`, and the schema-file fuzzer compares that.
-   */
-  const known = (rs: readonly string[]): string | undefined =>
-    useLean && rs[0] === "err unknown-module" && rs.slice(1).every((o) => o === "err schema-syntax") ? "Lean's import scanner: unknown-module for a word that is no module" : undefined
 
   /** Smaller cases: an entry of the tree or a line of a file removed, the root option dropped. */
   const smaller = (c: ImportCase): ImportCase[] => {
@@ -422,7 +412,6 @@ export async function run(argv: readonly string[]): Promise<number> {
   const MAX_SHRUNK = 10
   const found = new Map<string, { c: ImportCase; count: number }>()
   const outcomes = new Map<string, number>()
-  const knownCounts = new Map<string, number>()
   console.log(`seed ${seed}: ${count} file trees (in ${trees}) through ${allNames.join(", ")}`)
   for (let done = 0; done < count; done += batch) {
     const cases = Array.from({ length: Math.min(batch, count - done) }, () => importCase(rng))
@@ -432,8 +421,6 @@ export async function run(argv: readonly string[]): Promise<number> {
       outcomes.set(v, (outcomes.get(v) ?? 0) + 1)
       const p = patternOf(cases[i]!, rs)
       if (p === "") return
-      const k = known(rs)
-      if (k !== undefined) return void knownCounts.set(k, (knownCounts.get(k) ?? 0) + 1)
       const f = found.get(p)
       if (f) return void f.count++
       if (found.size >= MAX_SHRUNK) return void found.set(p, { c: cases[i]!, count: 1 })
@@ -442,7 +429,6 @@ export async function run(argv: readonly string[]): Promise<number> {
     })
   }
   console.log(`outcomes (${allNames[0]}): ${[...outcomes].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ")}`)
-  for (const [k, n] of knownCounts) console.log(`known, not counted: ${k}: ${n} cases`)
   mkdirSync(join(out, "failures"), { recursive: true })
   const reports = [...found].map(([p, f], n) => {
     const rs = runAll([f.c])[0]!

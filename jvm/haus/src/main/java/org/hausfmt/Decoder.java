@@ -235,13 +235,17 @@ final class Decoder {
   /**
    * Decodes {@code v} as {@code item}, and replaces any error inside by one at the secret itself,
    * with its type only (spec §15): messages quote values, keys and tags of the data, and paths may
-   * name keys.
+   * name keys. Decoding gives the value hidden in a {@link Value.Secret} (spec §15,
+   * "decode.secret.generic-decoders"); encoding takes a hidden or a plain value, and gives the plain
+   * value, written in full.
    */
   private Value secret(Value v, Typ item) {
+    Value input = v instanceof Value.Secret s ? s.reveal() : v;
     int at = path.size();
     int d = depth;
     try {
-      return value(v, item);
+      Value out = value(input, item);
+      return encoding ? out : new Value.Secret(out);
     } catch (HausException e) {
       path.truncate(at);
       depth = d;
@@ -667,6 +671,8 @@ final class Decoder {
         return "an array";
       case RECORD:
         return "a record";
+      case SECRET:
+        return "a Secret";
       default:
         return "the tag " + SchemaText.quote(((Value.Variant) v).tag());
     }

@@ -71,7 +71,9 @@ func NewCodecs(codecs ...Codec) (*Codecs, error) {
 // none reports whether there are no codecs; c may be nil.
 func (c *Codecs) none() bool { return c == nil || len(c.byID) == 0 }
 
-// forType returns the codec for a named type without arguments, or nil.
+// forType returns the codec for a named type without arguments, or nil: a
+// type of the schema's files and packages, of std/time, or of the prelude
+// (a codec for prelude#Decimal applies to every Decimal, spec §13.4).
 func (c *Codecs) forType(t *typ) Codec {
 	switch {
 	case len(c.byID) == 0:
@@ -81,8 +83,21 @@ func (c *Codecs) forType(t *typ) Codec {
 	case t.kind == kTime:
 		return c.byID["std/time#"+t.name]
 	}
+	if id, ok := preludeIDs[t.kind]; ok {
+		return c.byID[id]
+	}
 	return nil
 }
+
+// preludeIDs are the ids of the prelude's types without parameters, by
+// kind: prelude#Decimal.
+var preludeIDs = func() map[kind]string {
+	m := map[kind]string{}
+	for name, k := range builtins {
+		m[k] = "prelude#" + name
+	}
+	return m
+}()
 
 func (w *walker) applyCodec(codec Codec, v haus.Value, changed bool) (haus.Value, bool, error) {
 	if _, err := codec.Decode(v); err != nil {
@@ -105,15 +120,15 @@ func (t Type) ID() string {
 }
 
 // DecodeAs decodes v with the type and then with the codec, which must be
-// for the type itself or for the std/time type it stands for, and returns
-// the host value.
+// for the type itself or for the std/time or prelude type it stands for,
+// and returns the host value.
 func DecodeAs[T any](t Type, v haus.Value, codec Codec) (T, error) {
 	var zero T
 	out, err := t.Decode(v)
 	if err != nil {
 		return zero, err
 	}
-	if id := hostID(t); id != codec.TypeID() {
+	if id := hostID(t); id != codec.TypeID() && t.ID() != codec.TypeID() {
 		return zero, fmt.Errorf("the codec is for %s, not for %s", codec.TypeID(), id)
 	}
 	x, err := codec.Decode(out)
@@ -132,11 +147,14 @@ func DecodeAs[T any](t Type, v haus.Value, codec Codec) (T, error) {
 }
 
 // EncodeFrom encodes a host value with the codec and checks the result
-// against the type, as [Type.Encode] does.
+// against the type, as [Type.Encode] does. A codec that can't write the
+// host value, or whose rules reject it, fails with cannot-encode at the
+// type's place, $ (spec §13.4).
 func EncodeFrom[T any](t Type, x T, codec Codec) (haus.Value, error) {
 	v, err := codec.Encode(x)
 	if err != nil {
-		return nil, err
+		return nil, &haus.Error{Code: haus.CodeCannotEncode, Path: "$",
+			Message: fmt.Sprintf("%s can't encode the value: %s", codec.TypeID(), messageOf(err))}
 	}
 	return t.Encode(v)
 }
@@ -146,8 +164,14 @@ func hostID(t Type) string {
 	if t.t == nil {
 		return ""
 	}
-	if body := t.t.inst.resolved; body.kind == kTime && t.t.inst.body.kind != kRef {
-		return "std/time#" + body.name
+	body := t.t.inst.resolved
+	if t.t.inst.body.kind != kRef {
+		if body.kind == kTime {
+			return "std/time#" + body.name
+		}
+		if id, ok := preludeIDs[body.kind]; ok {
+			return id
+		}
 	}
 	return t.t.inst.id
 }
@@ -174,14 +198,22 @@ var InstantTime = NewCodec("std/time#Instant",
 // <redacted>, and [Secret.Reveal] gives it out. It is the host type of
 // Secret a for typed decoding; the data is the same as for a.
 type Secret[T any] struct {
-	value T
+	// A pointer, which fmt shows as an address where it can't call Format
+	// (a secret inside a struct's unexported fields), as haus.Secret does.
+	hidden *T
 }
 
 // NewSecret wraps a value.
-func NewSecret[T any](v T) Secret[T] { return Secret[T]{v} }
+func NewSecret[T any](v T) Secret[T] { return Secret[T]{&v} }
 
-// Reveal returns the value.
-func (s Secret[T]) Reveal() T { return s.value }
+// Reveal returns the value; the zero value of T for the zero Secret.
+func (s Secret[T]) Reveal() T {
+	if s.hidden == nil {
+		var zero T
+		return zero
+	}
+	return *s.hidden
+}
 
 const redacted = "<redacted>"
 

@@ -381,6 +381,19 @@ func TestSecretErrors(t *testing.T) {
 	if secret.Reveal() != "hunter2" {
 		t.Error("Reveal")
 	}
+	// In an unexported field fmt can't call Format: it shows the pointer, not the value.
+	type config struct {
+		name string
+		key  schema.Secret[string]
+	}
+	held := config{name: "prod", key: secret}
+	if shown := fmt.Sprintf("%v %+v %#v", held, held, held); strings.Contains(shown, "hunter2") {
+		t.Errorf("shown: %s", shown)
+	}
+	var zero schema.Secret[string]
+	if zero.Reveal() != "" || zero.String() != "<redacted>" {
+		t.Error("the zero Secret")
+	}
 }
 
 func TestCodecs(t *testing.T) {

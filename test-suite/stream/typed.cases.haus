@@ -23,6 +23,8 @@ Err { type: "Log", text: "{ level: Info, msg: \"a\" }, { level: Info }, { level:
 Err { type: "Log", text: "{ level: Info, msg: \"a\" }, [1]", code: "type-mismatch", path: "$[1]" },
 Err { type: "Points", text: "{ x: 1, y: 2 }, { x: 1, y: 2.5 }, { x: 0, y: 0 }", code: "not-an-integer", path: "$[1].y" },
 Err { type: "Points", text: "{ x: 1, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 99999999999 }", code: "out-of-range", path: "$[2].y" },
+// Items are read one at a time: an item's error comes before a later item's syntax error.
+Err { type: "Names", text: "1,\n\"ok\",\n\"ok\" \"oops\"", code: "type-mismatch", path: "$[0]" },
 
 // ── a type that isn't a stream takes one value ──
 Ok { type: "Point", text: "{ x: 1, y: 2 },", output: { x: 1, y: 2 } },

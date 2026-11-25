@@ -119,6 +119,7 @@ export const ERROR_CODES = {
   "unlisted-field": { category: "hints", hint: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers." },
   "unlisted-tag": { category: "hints", hint: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers." },
   "missing-codec": { category: "hints", hint: "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type." },
+  "unused-codec": { category: "hints", hint: "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them." },
 } as const
 
 /** An error code (spec §17): stable, the same in every binding. */

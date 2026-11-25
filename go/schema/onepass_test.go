@@ -63,7 +63,7 @@ func checkParse(t *testing.T, label string, ty schema.Type, src []byte) {
 			want, werr = ty.DecodeWith(v, opts)
 		}
 		got, err := ty.ParseWith(src, opts)
-		if !sameError(err, werr) || err == nil && !haus.Equals(got, want) {
+		if !sameError(err, werr) || err == nil && !haus.Equals(revealed(got), revealed(want)) {
 			t.Fatalf("%s: Parse (%+v) of %q gives %v (%v), Parse and Decode %v (%v)", label, lim, src, got, err, want, werr)
 		}
 	}

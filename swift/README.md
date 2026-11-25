@@ -117,7 +117,7 @@ let decoded = try order.decode(try parse(text))  // the value an encoder writes 
 let json = try order.toJSON(decoded)             // schema-based JSON (§16.3)
 ```
 
-Errors have a code and the place of the failing value, `$.items[2].price`. `checkTime("Date", "2026-02-30")` checks a std/time text by its profile, and `Secret<T>` holds a value that is never printed.
+Errors have a code and the place of the failing value, `$.items[2].price`. `checkTime("Date", "2026-02-30")` checks a std/time text by its profile, and `Secret<T>` holds a value that is never printed. Decoding into a `HausValue` gives a `Secret` type's value as `.secret(Secret<HausValue>)`, hidden: `stringify`, `canonical` and hashing refuse it (`cannot-encode`), and `SchemaType.encode` writes it in full. A `Secret` is written only by the schema's encoder: Foundation's `JSONEncoder` fails on it.
 
 ### Swift types
 
@@ -132,7 +132,7 @@ let order = try schema.type("Order").decode(Order.self, fromText: text)
 let value = try schema.type("Order").encode(order)       // a HausValue the type accepts
 ```
 
-Records are structs (or `[String: V]` for a `Map`), variants enums whose cases are the tags with a lowercase first letter (`Shipped` is `shipped`, `HTTPError` `httpError`), with the fields of a record case as labelled values and positional arguments as `_0`, `_1`. A payload-less closed variant can also be a `String` raw-value enum. `Maybe` is an `Optional`, integers any fixed-width integer (range checked, `out-of-range`), `Float64` a `Double`, `Decimal` a `HausNumber` (exact), `Bytes` `[UInt8]`, a std/time value its text, `Any` a `HausValue`. An enum with a case `unknown(HausValue)` keeps the tags an open variant doesn't list; without it, they are `unknown-tag`. A `HausCodec` chooses another host type for a named type by its id (§13.4), such as Foundation's `Date` for `std/time#Date`.
+Records are structs (or `[String: V]` for a `Map`), variants enums whose cases are the tags with a lowercase first letter (`Shipped` is `shipped`, `HTTPError` `httpError`), with the fields of a record case as labelled values and positional arguments as `_0`, `_1`. A payload-less closed variant can also be a `String` raw-value enum. `Maybe` is an `Optional`, integers any fixed-width integer (range checked, `out-of-range`), `Float64` a `Double`, `Decimal` a `HausNumber` (exact), `Bytes` `[UInt8]`, a std/time value its text, `Any` a `HausValue`. An enum with a case `unknown(HausValue)` keeps the tags an open variant doesn't list; without it, they are `unknown-tag`. A `HausCodec` chooses another host type for a named type by its id (§13.4), such as Foundation's `Date` for `std/time#Date`; an error of its `hausBase` when encoding is `cannot-encode`. Its `HausBase` decides what it gets for a part with a codec of its own: that codec's Swift value, or, with the part's base type, the value the schema decoded, which a codec that checks a profile's rule should use.
 
 [`Examples/quickstart`](Examples/quickstart/main.swift) and [`Examples/order`](Examples/order/main.swift) do the same as the other bindings' examples, on the same files: `swift run quickstart`, `swift run order`.
 

@@ -406,6 +406,25 @@ fn profile_vectors_parse() {
         vectors,
         "only an Accept has an output",
     );
+    // Only a Reject has looser, an array of the package's types.
+    error(
+        replace(r#"Accept { type: "Order", value: "{ id: 1, total: 5 }", looser: ["Order"] },"#),
+        "profile-vectors",
+        vectors,
+        "only a Reject has looser",
+    );
+    error(
+        replace(r#"Reject { type: "Order", value: "{ id: -1, total: 5 }", looser: "Order" },"#),
+        "profile-vectors",
+        vectors,
+        "the looser of Reject is not an array of type names",
+    );
+    error(
+        replace(r#"Reject { type: "Order", value: "{ id: -1, total: 5 }", looser: ["Nope"] },"#),
+        "profile-vectors",
+        vectors,
+        "the looser of Reject, Nope, is not a type of the package",
+    );
     // The type is one of the package's own, without parameters.
     error(
         replace(r#"Accept { type: "Id", value: "1" },"#),

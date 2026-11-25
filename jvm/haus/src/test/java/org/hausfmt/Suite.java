@@ -60,6 +60,27 @@ final class Suite {
     return Haus.parseAll(bytes(p)).stream().map(v -> (Value.Variant) v).collect(Collectors.toList());
   }
 
+  /** {@code v} with every secret a decoder hid in it revealed, for comparing decoded values. */
+  static Value revealed(Value v) {
+    if (v instanceof Value.Secret s) {
+      return revealed(s.reveal());
+    }
+    if (v instanceof Value.Array a) {
+      return Value.array(a.items().stream().map(Suite::revealed).toList());
+    }
+    if (v instanceof Value.Variant x) {
+      return Value.variant(x.tag(), x.args().stream().map(Suite::revealed).toList());
+    }
+    if (v instanceof Value.Record r) {
+      List<Value.Field> fields = new java.util.ArrayList<>();
+      for (int i = 0; i < r.size(); i++) {
+        fields.add(Value.field(r.keyAt(i), revealed(r.valueAt(i))));
+      }
+      return Value.record(fields);
+    }
+    return v;
+  }
+
   /** A string field of a case. */
   static String str(Value.Variant c, String key) {
     return ((Value.Text) c.payload().get(key)).value();

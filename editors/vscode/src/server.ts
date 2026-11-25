@@ -5,7 +5,7 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import {
-  checkData,
+  checkText,
   completeAt,
   contextOf,
   format,
@@ -17,6 +17,7 @@ import {
   importHint,
   infer,
   inferSchema,
+  MAX_ERRORS,
   missingImports,
   ModuleError,
   moduleOfType,
@@ -212,32 +213,44 @@ connection.onNotification("haus/settings", (settings: Record<string, FolderSetti
   validateAll()
 })
 
-/** Errors and hints from the data file's schema. */
-function schemaDiagnostics(document: TextDocument, values: Value[]): Diagnostic[] {
+/**
+ * Errors and hints from the data file's schema, and whether the data text was
+ * checked with it (then its syntax error, if any, is among them: a stream is
+ * read item by item, so the errors of the items before it are too, spec §14).
+ */
+function schemaDiagnostics(document: TextDocument): { diagnostics: Diagnostic[]; checked: boolean } {
   const link = schemaLink(document)
-  if (!link) return []
+  if (!link) return { diagnostics: [], checked: false }
   const range = (start: number, end: number): Range => ({ start: document.positionAt(start), end: document.positionAt(end) })
   const at = range(0, 0)
+  const unchecked = (message: string) => ({ diagnostics: [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message }], checked: false })
   const name = link.path.split(/[\\/]/).pop()!
   const text = schemaText(link.path)
-  if (text === undefined) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `schema file not found: ${link.path}` }]
+  if (text === undefined) return unchecked(`schema file not found: ${link.path}`)
   let file: SchemaFile
   try {
     file = compileSchema(text, link.path)
   } catch (e) {
-    if (e instanceof ModuleError) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: settingsMessage(e) }]
+    if (e instanceof ModuleError) return unchecked(settingsMessage(e))
     if (!(e instanceof HausSyntaxError)) throw e
-    return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `${name}: ${e.message}` }]
+    return unchecked(`${name}: ${e.message}`)
   }
-  return checkData(file, link.type, values).map((issue) => ({
+  const report = checkText(file, link.type, document.getText())
+  const diagnostics = report.issues.map((issue): Diagnostic => ({
     range: range(issue.start, issue.end),
     severity: issue.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Hint,
     // A deprecated field or tag the data uses is struck through, at the field or the tag (spec §14);
     // other hints are fields and tags not in the schema (dotted, see extension.ts).
     ...(issue.code === "deprecated" ? { code: "deprecated", tags: [DiagnosticTag.Deprecated] } : issue.severity === "hint" ? { code: "not-in-schema" } : {}),
-    source: `haus (${name})`,
+    // A syntax error of the data (no path) is the parser's, as without a schema.
+    source: issue.path === undefined ? "haus" : `haus (${name})`,
     message: issue.message,
   }))
+  // The check stops after MAX_ERRORS errors (spec §14): say so.
+  const stopped: Diagnostic[] = report.stopped
+    ? [{ range: at, severity: DiagnosticSeverity.Information, source: `haus (${name})`, message: `stopped after ${MAX_ERRORS} errors: fix these to see the rest` }]
+    : []
+  return { diagnostics: [...diagnostics, ...stopped], checked: true }
 }
 
 // ── completion ───────────────────────────────────────────────
@@ -299,9 +312,15 @@ function validate(document: TextDocument): void {
       diagnostics.push(...uncheckedProfiles(document.getText()).map(profileDiagnostic(document)))
     }
     else {
-      const { values, comments } = parseDocument(document.getText())
-      parsed.set(document.uri, { values, comments, inference: infer(values) })
-      diagnostics.push(...schemaDiagnostics(document, values))
+      const fromSchema = schemaDiagnostics(document)
+      try {
+        const { values, comments } = parseDocument(document.getText())
+        parsed.set(document.uri, { values, comments, inference: infer(values) })
+      } catch (e) {
+        // Checked with the schema: the syntax error is among its diagnostics, after those of the items before it.
+        if (!(e instanceof HausSyntaxError) || !fromSchema.checked) throw e
+      }
+      diagnostics.push(...fromSchema.diagnostics)
     }
   } catch (e) {
     // The packages or folders of haus.packages can't be used (one was removed, say), or the root doesn't contain the file.

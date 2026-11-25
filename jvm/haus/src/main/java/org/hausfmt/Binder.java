@@ -570,10 +570,14 @@ final class Binder {
         throw error(path, ErrorCode.CANNOT_ENCODE, codec.typeId() + " takes a " + codec.hostType().getName() + ", not "
             + (x == null ? "null" : "a " + x.getClass().getName()));
       }
+      // A host value the codec can't write, or that its rules reject, is cannot-encode at the
+      // codec's type's place (spec §13.4).
       try {
         return codec.encode(codec.hostType().cast(x));
       } catch (HausException e) {
-        throw error(path, e.code(), e.reason());
+        throw error(path, ErrorCode.CANNOT_ENCODE, codec.typeId() + " can't encode the value: " + e.reason());
+      } catch (RuntimeException e) {
+        throw error(path, ErrorCode.CANNOT_ENCODE, codec.typeId() + " can't encode the value: " + e.getMessage());
       }
     }
   }
@@ -965,7 +969,8 @@ final class Binder {
 
     @Override
     Object read(Value v, Path path) {
-      return Secret.of(elem.read(v, path));
+      // The schema decoded it hidden (spec §15); the host Secret hides it from here on.
+      return Secret.of(elem.read(v instanceof Value.Secret s ? s.reveal() : v, path));
     }
 
     @Override

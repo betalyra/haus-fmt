@@ -49,6 +49,8 @@ final class TreeBuilder extends WriteCheck {
       case RECORD:
         enter(depth);
         return fields(new Node(v, null), (Value.Record) v, depth);
+      case SECRET:
+        throw secretRefused(path);
       default:
         Value.Variant variant = (Value.Variant) v;
         checkTag(variant.tag());

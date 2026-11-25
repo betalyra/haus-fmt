@@ -11,9 +11,30 @@ mod travel {
     haus::include_schema!("travel");
 }
 
-use haus::{Codec, Value};
+/// looser.schema.haus with iso's codec for Money and [`LooseCurrency`] (see build.rs).
+mod looser {
+    haus::include_schema!("looser");
+}
+
+use haus::{Codec, Coded, Value};
 use haus_geo::{Bounds, Point, Wgs84, Wgs84BBox};
 use haus_money::{CurrencyCode, Iso, IsoCurrency, IsoMoney};
+
+/// An application's codec for `Currency` that accepts every value of its
+/// schema: looser than the iso profile (the vectors' `looser`).
+pub struct LooseCurrency;
+
+impl Codec for LooseCurrency {
+    const ID: &'static str = haus_money::CURRENCY_ID;
+    type Base = haus_money::Currency;
+    type Target = haus_money::Currency;
+    fn decode(currency: haus_money::Currency) -> Result<haus_money::Currency, String> {
+        Ok(currency)
+    }
+    fn encode(currency: &haus_money::Currency) -> haus_money::Currency {
+        currency.clone()
+    }
+}
 
 // ── the vectors ──
 
@@ -21,19 +42,31 @@ const MONEY: &str = include_str!("../../../extensions/money/profiles/iso.vectors
 const GEO: &str = include_str!("../../../extensions/geo/profiles/wgs84.vectors.haus");
 const UUID: &str = include_str!("../../../extensions/uuid/profiles/rfc9562.vectors.haus");
 
-/// A test vector: `Accept { type, value, output?, note? }` or `Reject { type, value, note? }`.
+/// A test vector: `Accept { type, value, output?, note? }` or `Reject { type, value, looser?, note? }`.
 #[derive(Debug)]
 struct Vector {
     accept: bool,
     ty: String,
     value: String,
     output: Option<String>,
+    /// The types whose codecs are made looser, for a Reject run again.
+    looser: Vec<String>,
 }
 
 fn vectors(text: &str) -> Vec<Vector> {
     let string = |v: &Value, key: &str| match v.get(key) {
         Some(Value::String(s)) => Some(s.clone()),
         _ => None,
+    };
+    let strings = |v: &Value, key: &str| match v.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|t| match t {
+                Value::String(s) => s.clone(),
+                other => panic!("not a type name: {other:?}"),
+            })
+            .collect(),
+        _ => vec![],
     };
     haus::parse(text)
         .expect("the vectors parse")
@@ -44,6 +77,7 @@ fn vectors(text: &str) -> Vec<Vector> {
                 ty: string(&args[0], "type").expect("a type"),
                 value: string(&args[0], "value").expect("a value"),
                 output: string(&args[0], "output"),
+                looser: strings(&args[0], "looser"),
             },
             other => panic!("not a vector: {other:?}"),
         })
@@ -56,18 +90,21 @@ fn normal<C: Codec>(text: &str) -> Result<String, String> {
     haus::to_string(&base).map_err(|e| e.to_string())
 }
 
-/// Checks a vector with the codec `C`, as generated code runs it (`haus::de::codec`).
+/// `text` decoded as the codec's type: the codec runs ([`Coded`], spec §13.4).
+fn decode<C: Codec>(text: &str) -> Result<C::Target, haus::Error> {
+    haus::from_str::<Coded<C>>(text).map(Coded::into_inner)
+}
+
+/// Checks a vector with the codec `C`, decoding the value as its type.
 fn check<C: Codec>(v: &Vector) -> Result<(), String>
 where
     C::Target: PartialEq + std::fmt::Debug,
 {
     // Every vector is valid under the schema: what the codec rejects, the profile rejects.
     let written = normal::<C>(&v.value)?;
-    let value = &haus::parse(&v.value).map_err(|e| e.to_string())?[0];
-    let decoded = haus::de::codec::<C>(value, haus::Decoder::default());
-    match (v.accept, decoded) {
-        (false, Err(e)) if e.code == haus::ErrorCode::CodecRejected => Ok(()),
-        (false, Err(e)) => Err(format!("rejected with {:?}: {e}", e.code)),
+    match (v.accept, decode::<C>(&v.value)) {
+        (false, Err(haus::Error::Decode(e))) if e.code == haus::ErrorCode::CodecRejected => Ok(()),
+        (false, Err(e)) => Err(format!("rejected with {:?}: {e}", e.code())),
         (false, Ok(x)) => Err(format!("accepted: {x:?}")),
         (true, Err(e)) => Err(format!("rejected: {e}")),
         (true, Ok(x)) => {
@@ -81,14 +118,29 @@ where
                 return Err(format!("encoded as {encoded}, but the schema alone writes {written}"));
             }
             // Decode, encode, decode is decode.
-            let again =
-                haus::de::codec::<C>(&haus::parse(&encoded).map_err(|e| e.to_string())?[0], haus::Decoder::default())
-                    .map_err(|e| format!("{encoded} doesn't decode again: {e}"))?;
+            let again = decode::<C>(&encoded).map_err(|e| format!("{encoded} doesn't decode again: {e}"))?;
             if again != x {
                 return Err(format!("{encoded} decodes again as {again:?}, not {x:?}"));
             }
             Ok(())
         }
+    }
+}
+
+/// A Reject vector with `looser: ["Currency"]`, run again with
+/// [`LooseCurrency`] and iso's codec for `Money`, inside an application's
+/// type (looser.schema.haus): the profile's rule is checked on the values
+/// the schema decoded, so the value is still rejected (spec §13.4).
+fn check_looser(v: &Vector) -> Result<(), String> {
+    if v.looser.is_empty() {
+        return Ok(());
+    }
+    if v.ty != "Money" || v.looser != ["Currency"] {
+        return Err(format!("no application type for {} with looser {:?}", v.ty, v.looser));
+    }
+    match haus::from_str::<looser::Root>(&format!("{{ value: {} }}", v.value)) {
+        Err(haus::Error::Decode(e)) if e.code == haus::ErrorCode::CodecRejected && e.place() == "$.value" => Ok(()),
+        other => Err(format!("with a looser Currency codec: {other:?}")),
     }
 }
 
@@ -108,11 +160,24 @@ fn run(text: &str, check: impl Fn(&Vector) -> Result<(), String>) -> (usize, usi
 #[test]
 fn the_iso_vectors() {
     let (accepted, rejected) = run(MONEY, |v| match v.ty.as_str() {
-        "Money" => check::<Iso>(v),
+        "Money" => check::<Iso>(v).and_then(|()| check_looser(v)),
         "Currency" => check::<IsoCurrency>(v),
         other => Err(format!("no codec for {other}")),
     });
     assert!(accepted > 0 && rejected > 0, "{accepted} accepted, {rejected} rejected");
+    assert!(vectors(MONEY).iter().any(|v| !v.looser.is_empty()), "a vector with looser");
+}
+
+#[test]
+fn a_value_decoded_as_a_codecs_type_runs_the_codec() {
+    // Spec §13.4: decoding CHF as a Currency runs the codec for Currency; the generated type is the base.
+    assert_eq!(decode::<IsoCurrency>("CHF").unwrap(), code("CHF"));
+    let e = haus::from_str::<Coded<IsoCurrency>>("Bitcoin").unwrap_err();
+    assert_eq!(e.code(), Some(haus::ErrorCode::CodecRejected));
+    assert!(haus::from_str::<haus_money::Currency>("Bitcoin").is_ok(), "the schema alone takes it");
+    // In schema-based JSON too.
+    let json = haus::json::to_string(&Coded::<IsoCurrency>(code("EUR"))).unwrap();
+    assert_eq!(haus::json::from_str::<Coded<IsoCurrency>>(&json).unwrap(), Coded(code("EUR")));
 }
 
 #[test]

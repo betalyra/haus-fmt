@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Data files checked with a schema: a `Stream` file is checked item by item, so a syntax error shows together with the errors of the items before it. Each missing field is an error of its own. The check stops after 200 errors (hints don't count) and says so with a note at the start of the file.
+
 ## 0.2.0
 
 - Schema files: an import of an official package with profiles (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) gets a note (`missing-codec`, information) that the editor doesn't check the profiles' rules: your application checks them by adding a codec.

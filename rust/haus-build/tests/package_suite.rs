@@ -212,7 +212,7 @@ fn failure(case: &Value) -> Option<String> {
     modes.iter().for_each(|(path, mode)| chmod(path, mode | 0o700));
     match (variant(field(case, "expect").expect("expect")), result) {
         (("Ok", _), Ok(())) => None,
-        (("Ok", _), Err(e)) => Some(format!("failed with {}: {e}", e.code())),
+        (("Ok", _), Err(e)) => Some(format!("failed with {:?}: {e}", e.code())),
         (("Err", [want]), Ok(())) => Some(format!("generated code, expected {}", string(field(want, "code").unwrap()))),
         (("Err", [want]), Err(e)) => {
             let message = e.to_string();
@@ -223,9 +223,9 @@ fn failure(case: &Value) -> Option<String> {
                 .collect();
             let shown: Vec<String> =
                 strings(field(want, "hides")).into_iter().filter(|h| message.contains(h)).collect();
-            match (e.code().as_str() == code, missing.is_empty(), shown.is_empty()) {
+            match (e.code().map(|c| c.as_str()) == Some(code), missing.is_empty(), shown.is_empty()) {
                 (true, true, true) => None,
-                (false, _, _) => Some(format!("failed with {}, expected {code}: {message}", e.code())),
+                (false, _, _) => Some(format!("failed with {:?}, expected {code}: {message}", e.code())),
                 (_, false, _) => Some(format!("the message doesn't mention {missing:?}: {message}")),
                 (_, _, false) => Some(format!("the message shows {shown:?}: {message}")),
             }
@@ -290,6 +290,6 @@ fn package_suite() {
         npm.len(),
         cargo.len(),
     );
-    assert_eq!((cases.len(), core.len(), npm.len(), cargo.len()), (133, 87, 46, 0), "the suite's cases");
+    assert_eq!((cases.len(), core.len(), npm.len(), cargo.len()), (136, 90, 46, 0), "the suite's cases");
     assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), run.len(), failures.join("\n"));
 }

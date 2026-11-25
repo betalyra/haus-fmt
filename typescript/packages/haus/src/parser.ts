@@ -181,6 +181,19 @@ export class Parser {
   }
 
   /**
+   * The values of `parseSequence`, one at a time: each is given before the
+   * next is read, so a syntax error is thrown when the reading reaches it
+   * (a stream checked item by item, spec §14).
+   */
+  *sequence(): Generator<Value, void, undefined> {
+    const r = this.r
+    r.begin()
+    if (r.atEnd()) return
+    do yield r.guarded(() => readValue(r))
+    while (r.nextTop())
+  }
+
+  /**
    * Exactly one value surrounded by trivia, optionally followed by the ',' that
    * ends the text (used by the stream reader, which passes each item with its
    * comma). Fails as parseSequence fails on the same text: an empty item is

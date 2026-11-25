@@ -140,8 +140,8 @@ fn invalid_schemas_are_rejected() {
             };
             let why = |what: &str, result: Result<String, haus_build::Error>| match result {
                 Ok(_) => Some(format!("{name} ({what}): accepted")),
-                Err(e) if e.code().as_str() != expected => {
-                    Some(format!("{name} ({what}): {} ({e}), expected {expected}", e.code()))
+                Err(e) if e.code().map(|c| c.as_str()) != Some(expected) => {
+                    Some(format!("{name} ({what}): {:?} ({e}), expected {expected}", e.code()))
                 }
                 Err(_) => None,
             };

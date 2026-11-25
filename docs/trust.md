@@ -37,7 +37,7 @@ The proofs use only Lean's standard axioms.
 ### What is not proven
 
 - **The bindings you use.** TypeScript, Rust, Python, Go, Zig and Roc are separate programs. They are tested against the reference, as described [below](#the-same-everywhere), but testing is not proof.
-- **Running time in the bindings.** The linear bound is about the reference parser in its cost model. The bindings' own speed is not proven; they have tests with hostile inputs that would make a quadratic implementation slow. Converting a long hex literal to decimal is quadratic in its digits, which the number limit keeps small.
+- **Running time in the bindings.** The linear bound is about the reference parser in its cost model. The bindings' own speed is not proven; they have tests with hostile inputs that would make a quadratic implementation slow. Converting a long hex literal to decimal is quadratic in its digits, which the number limit keeps small when parsing. Constructors of values built in code check no limit (spec §11), so a number built from a million hex digits is slow before any writer rejects it: text from outside goes through the parser, not a constructor.
 - **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered, and neither are error positions. The hash proofs are about the text that is hashed, not SHA-256 itself.
 - **Imports in schema files.** Finding packages is modelled and proven on its own, but the Lean schema-file reader doesn't bring in the definitions of imported packages.
 

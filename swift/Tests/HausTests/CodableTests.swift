@@ -99,7 +99,7 @@ struct CodableTests {
         #expect(order.key.reveal() == "hunter2" && "\(order.key)" == "<redacted>")
         #expect(order.level == .debug)
         // What the schema decodes, written back.
-        #expect(try type.encode(order) == type.decode(parse(Self.orderText)))
+        #expect(try type.encode(order) == revealed(type.decode(parse(Self.orderText))))
         #expect(try type.decode(Order.self, fromJSON: type.toJSON(order)) == order)
     }
 
@@ -223,6 +223,53 @@ struct CodableTests {
             try schema.type("Money").decode(Cents.Base.self, fromText: "1")
         }
         #expect(elsewhere?.code == .typeMismatch)
+    }
+
+    /// A codec's error when encoding is `cannot-encode`, at the place of
+    /// the codec's type (spec §13.4).
+    @Test func codecEncodeRejection() throws {
+        struct Strict: HausCodec {
+            static let hausTypeID = "prelude#Decimal"
+            let value: HausNumber
+            init(hausBase: HausNumber) { value = hausBase }
+            var hausBase: HausNumber { get throws { throw HausCodecError("not this one") } }
+        }
+        struct Bill: Codable { let total: Strict }
+        let schema = try HausSchema(parsing: "type Bill = { total: Decimal }")
+        let error = #expect(throws: HausError.self) {
+            try schema.type("Bill").encode(Bill(total: Strict(hausBase: HausNumber(1))))
+        }
+        #expect(error?.code == HausError.Code.cannotEncode && error?.path == "$.total", "\(String(describing: error))")
+    }
+
+    /// Secrets stay hidden (spec §15): the generic decoder gives
+    /// `HausValue.secret`, which the writers refuse and the schema writes in
+    /// full; a `Secret` can't be written by Foundation's `JSONEncoder`.
+    @Test func secretsStayHidden() throws {
+        let schema = try HausSchema(parsing: "type Config = { name: String, key: Secret String }")
+        let type = try schema.type("Config")
+        let decoded = try type.decode(parse(#"{ name: "a", key: "hunter2" }"#))
+        guard case .secret(let key)? = decoded["key"] else {
+            Issue.record("not hidden: \(String(describing: decoded["key"]))")
+            return
+        }
+        #expect(key.reveal() == "hunter2")
+        var dumped = ""
+        dump(decoded, to: &dumped)
+        for shown in ["\(decoded)", String(reflecting: decoded), dumped] {
+            #expect(!shown.contains("hunter2"), "\(shown)")
+        }
+        let written = #expect(throws: HausError.self) { try stringify(decoded) }
+        let inCanonical = #expect(throws: HausError.self) { try canonical(decoded) }
+        for error in [written, inCanonical] {
+            #expect(error?.code == HausError.Code.cannotEncode && error?.message.contains("hunter2") == false)
+        }
+        #expect(decoded != decoded)
+        #expect(try type.encode(decoded) == parse(#"{ name: "a", key: "hunter2" }"#))
+        #expect(try stringify(type.encode(decoded)).contains(#""hunter2""#))
+        #expect(try type.toJSON(decoded) == #"{"name":"a","key":"hunter2"}"#)
+        #expect(try revealed(type.decode(type.encode(decoded))) == revealed(decoded))
+        #expect(throws: EncodingError.self) { try JSONEncoder().encode(["key": Secret("hunter2")]) }
     }
 
     @Test func streams() throws {

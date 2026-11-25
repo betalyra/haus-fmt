@@ -10,7 +10,9 @@ import (
 // Kind is the kind of a [Value] (spec §1).
 type Kind int
 
-// The six kinds of value.
+// The six kinds of value, and KindSecret, a [Secret]: no kind of the
+// format, but the hidden value of a Secret type that a decoder applying a
+// schema gives.
 const (
 	KindNumber Kind = iota + 1
 	KindString
@@ -18,6 +20,7 @@ const (
 	KindArray
 	KindRecord
 	KindVariant
+	KindSecret
 )
 
 // String returns the kind's name in lowercase, such as "record".
@@ -35,12 +38,16 @@ func (k Kind) String() string {
 		return "record"
 	case KindVariant:
 		return "variant"
+	case KindSecret:
+		return "secret"
 	}
 	return "invalid"
 }
 
 // Value is a haus value (spec §1): a [Number], [String], [Bytes], [Array],
-// [Record] or [Variant]. The set is closed: no other type implements Value.
+// [Record] or [Variant]. The set is closed: no other type implements Value,
+// but for [Secret], the hidden value of a Secret type that only a decoder
+// applying a schema gives, and that writers refuse.
 //
 // Use a type switch to tell the kinds apart:
 //

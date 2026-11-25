@@ -54,15 +54,18 @@ haus check --first order.haus      # stop at the first error
 A **data file** is first parsed. If it is valid and has a schema, it is
 checked against it: every error, and hints for fields and tags an open type
 doesn't list and for deprecated ones the data uses. Hints never fail a check.
-The errors are those of spec §14, "Every error": each failing place once,
-nothing below a value that failed at its own level (a string where a record
-is expected is one error, its contents aren't looked at), and an error inside
-a `Secret` once, at the secret. A file with a syntax error has that one
-error. The check stops after 200 problems per file (errors and hints) and
-then says so (`note: order.haus: stopped after 200 problems; there may be
-more`, and `"stopped": true` with `--json`). `--first` stops at the first
-error of each file instead, keeping the hints found before it; on standard
-input, at the first error of the stream. The schema is, in this order:
+The errors are those of spec §14, "Every error": each error once (a record
+missing two fields has two `missing-field` errors), nothing below a value
+that failed at its own level (a string where a record is expected is one
+error, its contents aren't looked at), and an error inside a `Secret` once,
+at the secret. A document with a syntax error has that one error; a file
+checked against a `Stream` type is read item by item, so a syntax error ends
+its check after the errors of the items before it. The check stops after 200
+errors per file (hints don't count) and then says so (`note: order.haus:
+stopped after 200 errors; there may be more`, and `"stopped": true` with
+`--json`). `--first` stops at the first error of each file instead, keeping
+the hints found before it; on standard input, at the first error of the
+stream. The schema is, in this order:
 
 1. the one given with `--schema FILE[#Type]` (type default `Root`), for every data file checked;
 2. `x.schema.haus` next to `x.haus`, type `Root`;
@@ -133,7 +136,7 @@ column in the whole input, so `tail -f events.haus | haus check -` reports
 each bad event as it arrives (see "Streams and `tail -f`" below). Its schema
 is the one given with `--schema`, loaded once the first value is complete.
 Against a `Stream` type every value is checked (`at: $[3].status`) and the
-limit of 200 problems is per value; against any other type the first value is
+limit of 200 errors is one for the whole stream; against any other type the first value is
 checked, and a second one is an error (`not-one-value`). An excerpt shows
 the value's last line up to its comma. A syntax error ends the check, since
 nothing after it can be trusted.
@@ -182,7 +185,7 @@ value by value.
 | `files[].ok` | the file has no errors |
 | `files[].error` | why the file couldn't be read (then the exit code is 2) |
 | `files[].diagnostics[]` | the error form of spec §17, with `severity` first |
-| `files[].stopped` | `true` when the check stopped after 200 problems: the file may have more; absent otherwise |
+| `files[].stopped` | `true` when the check stopped after 200 errors: the file may have more; absent otherwise |
 | `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose profiles aren't checked, in schema files) |
 | `code`, `message`, `hint`, `docs` | always: the [error code](/docs/errors), the message, a fix, its documentation |
 | `file` | when the place is in another file than the one checked: the data file's schema, when that schema is broken |
