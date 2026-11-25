@@ -59,6 +59,8 @@ func suiteJSON(_ v: HausValue) -> String {
     case .record(let r): #"{"rec":{\#(r.map { json($0.key) + ":" + suiteJSON($0.value) }.joined(separator: ","))}}"#
     case .variant(let tag, let args) where args.isEmpty: #"{"tag":\#(json(tag.name))}"#
     case .variant(let tag, let args): #"{"tag":\#(json(tag.name)),"args":\#(json(args.map(suiteJSON)))}"#
+    // The runners compare what was decoded, so a secret is compared by its value.
+    case .secret(let s): suiteJSON(s.reveal())
     }
 }
 
