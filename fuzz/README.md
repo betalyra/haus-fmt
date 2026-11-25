@@ -63,6 +63,7 @@ them report codes.
 | Swift | [`swift-runner/`](swift-runner): a package of its own on [`../swift`](../swift) (a directory named `swift` would clash with it: SwiftPM names packages by their directory) |
 | JVM | [`jvm/`](jvm) (`jvm-runner`) |
 | Zig | [`zig/test/fuzz_runner.zig`](../zig/test/fuzz_runner.zig) (`zig-runner`, built by `zig build fuzz-runner`) |
+| OCaml | [`ocaml/fuzz/runner.ml`](../ocaml/fuzz/runner.ml) (`ocaml/_build/default/fuzz/runner.exe`, built by dune): a clean-room test implementation of the spec, with `--stream`, `--canonical`, and `--format STYLE` / `--write STYLE` (`--indent N --width N`) in the formatter protocol below, not yet in the formatter fuzzer's runner list |
 | Stream readers | the same runners with `--stream` (TypeScript: in this process) |
 
 A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`

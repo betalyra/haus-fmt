@@ -1,0 +1,3 @@
+(library
+ (name haus)
+ (libraries digestif))

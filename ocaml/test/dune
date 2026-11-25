@@ -1,0 +1,19 @@
+(executable
+ (name suite)
+ (modules suite json format_suite)
+ (libraries haus))
+
+(executable
+ (name unit)
+ (modules unit)
+ (libraries haus))
+
+(rule
+ (alias runtest)
+ (action
+  (run %{exe:suite.exe})))
+
+(rule
+ (alias runtest)
+ (action
+  (run %{exe:unit.exe})))
