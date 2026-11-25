@@ -5,7 +5,7 @@
 #   sh fuzz/build.sh              everything
 #   sh fuzz/build.sh lean swift   only those parts (CI builds each part on its own runner)
 #
-# Parts: lean, rust, typescript, python, go, zig, swift, jvm, roc.
+# Parts: lean, rust, typescript, python, go, zig, swift, jvm, roc, ocaml.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -55,10 +55,14 @@ roc() {
   (cd fuzz/roc && command roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
 }
 
-parts=${*:-lean rust typescript python go zig swift jvm roc}
+# The OCaml runner (ocaml/fuzz/runner.ml, a clean-room test implementation):
+# ocaml/_build/default/fuzz/runner.exe. Needs OCaml 5 with dune and digestif.
+ocaml() { (cd ocaml && command dune build fuzz/runner.exe); }
+
+parts=${*:-lean rust typescript python go zig swift jvm roc ocaml}
 for part in $parts; do
   case $part in
-    lean | rust | typescript | python | go | zig | swift | jvm | roc) $part ;;
+    lean | rust | typescript | python | go | zig | swift | jvm | roc | ocaml) $part ;;
     *) echo "fuzz/build.sh: unknown part '$part'" >&2; exit 2 ;;
   esac
 done

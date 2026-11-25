@@ -37,6 +37,8 @@ export const SWIFT = join(root, "fuzz/.build/swift-runner")
 export const JVM = join(root, "fuzz/.build/jvm-runner/bin/jvm-runner")
 /** The Zig runner (zig/test/fuzz_runner.zig, built by `zig build fuzz-runner`): the parser, stream reader, canonical form, formatter and writers. */
 export const ZIG = join(root, "zig/zig-out/bin/zig-runner")
+/** The OCaml runner (ocaml/fuzz/runner.ml, a clean-room test implementation built by dune): the parser, stream reader, canonical form, formatter and writers. */
+export const OCAML = join(root, "ocaml/_build/default/fuzz/runner.exe")
 
 /** JSON with object keys sorted, so field order doesn't matter. */
 export function normalize(json: string): string {
@@ -173,6 +175,8 @@ export const runners: readonly Runner[] = [
   external("jvm-stream", JVM, ["--stream"], { codes: true }),
   external("zig", ZIG, [], { codes: true }),
   external("zig-stream", ZIG, ["--stream"], { codes: true }),
+  external("ocaml", OCAML, [], { codes: true }),
+  external("ocaml-stream", OCAML, ["--stream"], { codes: true }),
 ]
 
 /**
@@ -189,6 +193,7 @@ export const canonicalRunners: readonly Runner[] = [
   external("swift", SWIFT, ["--canonical"], { codes: true }),
   external("jvm", JVM, ["--canonical"], { codes: true }),
   external("zig", ZIG, ["--canonical"], { codes: true }),
+  external("ocaml", OCAML, ["--canonical"], { codes: true }),
 ]
 
 /** The runners in use: the parsers, or with `--canonical` the canonical forms. */
