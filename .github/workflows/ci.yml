@@ -603,6 +603,9 @@ jobs:
             files: fuzz/.build/jvm-runner
           - part: roc
             files: fuzz/.build/roc-runner fuzz/.build/roc-time-runner fuzz/.build/roc-profile-runner fuzz/.build/roc-schema-runner fuzz/.build/roc-json-runner
+          # The clean-room OCaml implementation (ocaml/), built with dune.
+          - part: ocaml
+            files: ocaml/_build/default/fuzz/runner.exe
     steps:
       - uses: actions/checkout@v5
       - if: matrix.part == 'lean'
@@ -657,8 +660,14 @@ jobs:
           path: fuzz/swift-runner/.build
           key: fuzz-swift-${{ runner.os }}-${{ hashFiles('swift/Package.swift', 'swift/Sources/**', 'fuzz/swift-runner/Package.swift', 'fuzz/swift-runner/Sources/**') }}
           restore-keys: fuzz-swift-${{ runner.os }}-
+      - if: matrix.part == 'ocaml'
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4"
+      - if: matrix.part == 'ocaml'
+        run: opam install --yes dune digestif
       - name: Build
-        run: sh fuzz/build.sh ${{ matrix.part }}
+        run: ${{ matrix.part == 'ocaml' && 'opam exec -- ' || '' }}sh fuzz/build.sh ${{ matrix.part }}
       # Artifacts drop the executable bit, so the runners travel as a tarball.
       - name: Pack
         run: tar -czf "fuzz-runners-$(echo '${{ matrix.part }}' | tr ' ' -).tgz" ${{ matrix.files }}
