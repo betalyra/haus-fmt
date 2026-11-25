@@ -15,6 +15,31 @@ fn field(val: Value, key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// A looser codec than any profile's: every value its type's schema
+/// accepts, kept as a host value of its own (its canonical text).
+const accept_all = haus.Codec([]const u8).init("(set per type)", struct {
+    fn dec(arena: Allocator, d: haus.Decoded, _: *haus.decoding.Reason) haus.decoding.CodecError![]const u8 {
+        const v = haus.decoding.toValue(arena, d, null) catch return error.OutOfMemory;
+        return haus.canonical(arena, v, .{}) catch error.OutOfMemory;
+    }
+}.dec, struct {
+    fn enc(arena: Allocator, text: []const u8, _: *haus.decoding.Reason) haus.decoding.CodecError!haus.Decoded {
+        const v = (haus.parse(arena, text, .{}) catch return error.OutOfMemory).value;
+        return .{ .any = v };
+    }
+}.enc);
+
+/// Whether decoding `text` with `codecs` is `codec-rejected`.
+fn rejected(arena: Allocator, def: *const haus.schema.Def, text: []const u8, codecs: *const haus.Codecs, d: *haus.Diagnostic) bool {
+    _ = haus.decoding.decodeText(arena, arena, def, text, .{ .codecs = codecs, .diagnostic = d }) catch return d.code == .@"codec-rejected";
+    return false;
+}
+
+fn looserList(vec: Value) ?[]const Value {
+    for (vec.variant.args[0].record) |f| if (std.mem.eql(u8, f.key, "looser")) return f.value.array;
+    return null;
+}
+
 const Package = struct { dir: []const u8, profile: []const u8, codecs: []const *const haus.AnyCodec };
 
 pub fn main(init: std.process.Init) !void {
@@ -65,9 +90,27 @@ pub fn main(init: std.process.Init) !void {
                 }
                 // Valid for the shape, rejected by the rule.
                 _ = haus.decoding.decodeText(arena, arena, def, text, .{ .diagnostic = &d }) catch break :blk false;
-                _ = haus.decoding.decodeText(arena, arena, def, text, .{ .codecs = &codecs, .diagnostic = &d }) catch
-                    break :blk d.code == .@"codec-rejected";
-                break :blk false;
+                if (!rejected(arena, def, text, &codecs, &d)) break :blk false;
+                // `looser: ["T", …]`: again with, for each T, a codec that
+                // accepts every value of T's schema (a host type of its
+                // own); the codec for `type` still rejects the value.
+                const looser = looserList(vec) orelse break :blk true;
+                var list: std.ArrayList(*const haus.AnyCodec) = .empty;
+                var ids: std.ArrayList([]const u8) = .empty;
+                for (looser) |type_name| try ids.append(arena, try std.fmt.allocPrint(arena, "{s}#{s}", .{ module, type_name.string }));
+                for (p.codecs) |c| {
+                    for (ids.items) |id| {
+                        if (std.mem.eql(u8, c.id, id)) break;
+                    } else try list.append(arena, c);
+                }
+                for (ids.items) |id| {
+                    const c = try arena.create(haus.AnyCodec);
+                    c.* = accept_all.any;
+                    c.id = id;
+                    try list.append(arena, c);
+                }
+                var with_looser = try haus.Codecs.init(arena, list.items);
+                break :blk rejected(arena, def, text, &with_looser, &d);
             };
             if (ok) passed += 1 else {
                 failures += 1;

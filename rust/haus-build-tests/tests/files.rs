@@ -43,8 +43,8 @@ fn files_with_the_same_name_have_different_ids() {
 pub struct Cents;
 
 impl Codec for Cents {
-    const ID: &'static str = app_typed::up_shared_money::Money::ID;
-    type Base = app_typed::up_shared_money::Money;
+    const ID: &'static str = app_typed::up_shared_money::MoneyBase::ID;
+    type Base = app_typed::up_shared_money::MoneyBase;
     type Target = (i128, String);
 
     fn decode(money: Self::Base) -> Result<(i128, String), String> {
@@ -53,8 +53,32 @@ impl Codec for Cents {
     }
 
     fn encode((cents, currency): &(i128, String)) -> Self::Base {
-        app_typed::up_shared_money::Money { amount: haus::Decimal::from_scaled(*cents, 2), currency: currency.clone() }
+        app_typed::up_shared_money::MoneyBase {
+            amount: haus::Decimal::from_scaled(*cents, 2),
+            currency: currency.clone(),
+        }
     }
+}
+
+#[test]
+fn a_value_decoded_as_a_type_with_a_codec_runs_the_codec() {
+    // Spec §13.4: the generated name of a type with a codec is its host type, decoded through the codec.
+    use app_typed::up_shared_money::{Money, MoneyBase};
+    const EUROS: &str = r#"{ amount: 1.50, currency: "EUR" }"#;
+    let money: Money = from_str(EUROS).unwrap();
+    assert_eq!(money.into_inner(), (150, "EUR".to_owned()));
+    assert_eq!(to_string(&haus::Coded::<Cents>((150, "EUR".to_owned()))).unwrap(), EUROS);
+    let e = from_str::<Money>(&EUROS.replace("1.50", "1.505")).unwrap_err();
+    assert_eq!(e.code(), Some(haus::ErrorCode::CodecRejected), "{e}");
+    assert!(e.to_string().contains("more than 2 decimal places"), "{e}");
+    // The type without the codec takes it, as the schema alone does.
+    assert_eq!(from_str::<MoneyBase>(&EUROS.replace("1.50", "1.505")).unwrap().amount.as_str(), "1.505");
+    // In schema-based JSON too.
+    let json = haus::json::to_string(&haus::json::from_str::<Money>(r#"{"amount":"1.50","currency":"EUR"}"#).unwrap());
+    assert_eq!(json.unwrap(), r#"{"amount":"1.50","currency":"EUR"}"#);
+    // Without a codec, the name is the type itself.
+    let plain: app::up_shared_money::Money = from_str(EUROS).unwrap();
+    assert_eq!(plain.amount.as_str(), "1.50");
 }
 
 #[test]

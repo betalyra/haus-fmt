@@ -2066,6 +2066,42 @@ Case {
   mode: Explicit {},
   expect: Err { code: "schema-syntax" },
 },
+Case {
+  name: "import-word-not-a-module",
+  about: "F2: a module is std/…, @org/name, ./… or ../…: any other word (Lib/a-b) is a syntax error, also when a file of that name exists",
+  files: [
+    File("app/a.schema.haus", "import Lib/a-b (T)\ntype Root = { t: T }"),
+    File("app/Lib/a-b.schema.haus", "type T = Int"),
+  ],
+  root: "app/a.schema.haus",
+  ecosystem: "core",
+  mode: Explicit {},
+  expect: Err { code: "schema-syntax" },
+},
+Case {
+  name: "import-dot-alone",
+  about: "F2: . alone is no module, a syntax error as Lib/x is; neither .schema.haus nor anything else is read",
+  files: [
+    File("app/a.schema.haus", "import . (T)\ntype Root = { t: T }"),
+    File("app/.schema.haus", "type T = Int"),
+  ],
+  root: "app/a.schema.haus",
+  ecosystem: "core",
+  mode: Explicit {},
+  expect: Err { code: "schema-syntax" },
+},
+Case {
+  name: "import-two-dots-alone",
+  about: "F2: .. starts with . but isn't a path (./… or ../…): unknown-module",
+  files: [
+    File("app/a.schema.haus", "import .. (T)\ntype Root = { t: T }"),
+    File("..schema.haus", "type T = Int"),
+  ],
+  root: "app/a.schema.haus",
+  ecosystem: "core",
+  mode: Explicit {},
+  expect: Err { code: "unknown-module" },
+},
 
 // ── the root (spec §13.3 "The root") ──
 Case {

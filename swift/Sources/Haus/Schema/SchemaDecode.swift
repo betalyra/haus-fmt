@@ -200,16 +200,25 @@ struct SchemaWalker {
 
     /// Decodes `v` as `item`, and replaces any error inside by one at the
     /// secret itself, with its type only (spec §15): messages quote values,
-    /// keys and tags of the data, and paths may name keys.
+    /// keys and tags of the data, and paths may name keys. Decoding gives the
+    /// value hidden, ``HausValue/secret(_:)`` (spec §15,
+    /// "decode.secret.generic-decoders"); encoding takes a hidden or a plain
+    /// value, and gives the plain value, written in full.
     mutating func secret(_ v: HausValue, _ item: SchemaNode) throws(HausError) -> HausValue? {
+        var input = v
+        var hidden = false
+        if case .secret(let s) = v { (input, hidden) = (s.reveal(), true) }
         let (at, depth) = (path.count, self.depth)
+        let out: HausValue?
         do {
-            return try value(v, item)
+            out = try value(input, item)
         } catch {
             path.removeLast(path.count - at)
             self.depth = depth
             throw invalidSecret(item)
         }
+        if encoding { return out ?? (hidden ? input : nil) }
+        return .secret(Secret(out ?? input))
     }
 
     @inline(never)
@@ -453,5 +462,6 @@ func found(_ v: HausValue) -> String {
     case .array: "an array"
     case .record: "a record"
     case .variant(let tag, _): "the tag \(quoteForMessage(tag.name))"
+    case .secret: "a Secret"
     }
 }

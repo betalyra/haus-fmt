@@ -14,7 +14,8 @@
  * is reported as one error at the secret, with its type and not its value.
  */
 import { deprecationNote, type Case, type Field, type Instance, type RecordType, type SchemaFile, type StdType, type Type, type VariantType } from "./schema-file.js"
-import { payloadHint, type CasePayload, type ErrorCode } from "./errors.js"
+import { checkWellFormed, formatPath, HausSyntaxError, payloadHint, type CasePayload, type ErrorCode } from "./errors.js"
+import { Parser, withDefaults, type Limits } from "./parser.js"
 import { toFloat } from "./float.js"
 import { checkStdTime } from "./std-time.js"
 import type { HRecord, HVariant, Value } from "./value.js"
@@ -26,12 +27,18 @@ export interface CheckIssue {
   readonly message: string
   /** A concrete fix, where the checker knows one (`wrong-payload`: what the tag's case takes); otherwise the catalogue's fix for the code applies. */
   readonly hint?: string
+  /** The place of a problem with the data (spec §15): `$.items[2].price`. None for a syntax or limit error of the text. */
+  readonly path?: string
+  /** For a syntax or limit error of the text (`checkText`): its line and column (spec §8). */
+  readonly line?: number
+  readonly column?: number
   /** UTF-16 offsets into the data text, `end` exclusive. */
   readonly start: number
   readonly end: number
 }
 
-const MAX_ISSUES = 200
+/** A check stops after this many errors (hints don't count) and says so (spec §14, "Every error"). */
+export const MAX_ERRORS = 200
 
 
 const RANGES: Record<string, readonly [bigint, bigint]> = {
@@ -140,11 +147,7 @@ const tags = (v: VariantType) => {
   return names.length === 0 ? "any tag" : `one of ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""}`
 }
 
-/**
- * Check parsed values (with locations, see `parseWithLocations`) against
- * type `typeName` of a schema file. A Stream type checks every value; any
- * other type expects exactly one.
- */
+/** How to check (`checkData`, `checkText`). */
 export interface CheckOptions {
   /**
    * Called for every value with the type the schema expects there (as
@@ -156,24 +159,126 @@ export interface CheckOptions {
   /**
    * Stop at the first error (`haus check --first`), with the hints found
    * before it. By default every error is reported (spec §14, "Every error"),
-   * up to 200 issues per call.
+   * up to MAX_ERRORS errors per check (hints don't count).
    */
   readonly first?: boolean
 }
 
+/** What a check found: the issues, as a set (their order is not specified, spec §14), and whether it stopped at MAX_ERRORS with more to check. */
+export interface CheckReport {
+  readonly issues: readonly CheckIssue[]
+  /** The check stopped after MAX_ERRORS errors: the data has more. */
+  readonly stopped: boolean
+}
+
+/**
+ * Check parsed values (with locations, see `parseWithLocations`) against
+ * type `typeName` of a schema file. A Stream type checks every value; any
+ * other type expects exactly one. To check a text (a stream item by item,
+ * with its syntax error), use `checkText`.
+ */
 export function checkData(file: SchemaFile, typeName: string, values: readonly Value[], options: CheckOptions = {}): CheckIssue[] {
-  const definition = file.definition(typeName)
-  if (!definition) return [{ severity: "error", code: "unknown-type", message: `the schema has no type ${typeName}`, start: 0, end: 1 }]
-  if (definition.params.length > 0) {
-    return [{ severity: "error", code: "wrong-arity", message: `${typeName} needs arguments, so it can't describe a whole file`, start: 0, end: 1 }]
+  const walk = walker(file, typeName, options)
+  if (walk === undefined) return rootIssues(file, typeName)
+  walk.document(values)
+  return walk.issues
+}
+
+/**
+ * Check a data text against type `typeName` of a schema file, as `haus
+ * check` does (spec §14, "Every error"). A `Stream` type is read item by
+ * item, each item parsed then checked, so a syntax or limit error ends the
+ * check after the errors of the items before it; any other type is parsed
+ * whole first, and a syntax error is its only issue. A syntax or limit
+ * error is an issue with its `line` and `column` and no `path`.
+ */
+export function checkText(file: SchemaFile, typeName: string, text: string, options: CheckOptions & { readonly limits?: Partial<Limits> } = {}): CheckReport {
+  const walk = walker(file, typeName, options)
+  if (walk === undefined) return { issues: rootIssues(file, typeName), stopped: false }
+  const parser = new Parser(text, undefined, withDefaults(options.limits ?? {}), true)
+  // An unpaired surrogate has no UTF-8 form: a syntax error at its place (the items before it are read and checked).
+  const surrogate = wellFormedError(text)
+  try {
+    if (!walk.stream) {
+      if (surrogate !== undefined) throw surrogate
+      walk.document(parser.parseSequence())
+    } else {
+      let i = 0
+      for (const item of parser.sequence()) {
+        // There is more: at the cap, the check says it stopped.
+        if (walk.halt()) break
+        if (surrogate !== undefined && (item.end ?? 0) > surrogate.offset) throw surrogate
+        walk.item(item, i++)
+      }
+      if (surrogate !== undefined) throw surrogate
+    }
+  } catch (e) {
+    if (!(e instanceof HausSyntaxError)) throw e
+    walk.syntax(surrogate !== undefined && surrogate.offset <= e.offset ? surrogate : e)
   }
+  return { issues: walk.issues, stopped: walk.stopped() }
+}
+
+const wellFormedError = (text: string): HausSyntaxError | undefined => {
+  try {
+    checkWellFormed(text)
+    return undefined
+  } catch (e) {
+    if (e instanceof HausSyntaxError) return e
+    throw e
+  }
+}
+
+/** The issue of a type that can't describe a whole file: none in the schema, or one with parameters. */
+const rootIssues = (file: SchemaFile, typeName: string): CheckIssue[] => [
+  file.definition(typeName) === undefined
+    ? { severity: "error", code: "unknown-type", message: `the schema has no type ${typeName}`, path: "$", start: 0, end: 1 }
+    : { severity: "error", code: "wrong-arity", message: `${typeName} needs arguments, so it can't describe a whole file`, path: "$", start: 0, end: 1 },
+]
+
+interface Walk {
+  /** What was found so far. */
+  readonly issues: CheckIssue[]
+  /** Whether the type is a `Stream`. */
+  readonly stream: boolean
+  /** The values of a whole text: every item of a stream, else exactly one. */
+  readonly document: (values: readonly Value[]) => void
+  /** The item at `index` of a stream. */
+  readonly item: (value: Value, index: number) => void
+  /** A syntax or limit error of the text: the last issue. */
+  readonly syntax: (e: HausSyntaxError) => void
+  /** Whether nothing more is checked, asked when there is more: at the cap (the check then says it stopped), or after the first error when asked to. */
+  readonly halt: () => boolean
+  /** Whether the check stopped at the cap with more to check. */
+  readonly stopped: () => boolean
+}
+
+function walker(file: SchemaFile, typeName: string, options: CheckOptions): Walk | undefined {
+  const definition = file.definition(typeName)
+  if (!definition || definition.params.length > 0) return undefined
   const root: Instance = definition.template
   const issues: CheckIssue[] = []
+  /** The place being checked (spec §15): keys and indexes from `$`. */
+  const path: (string | number)[] = []
+  let errors = 0
+  let capped = false
 
-  /** Whether checking stops: at the cap, or after the first error when asked to. */
-  const done = (): boolean => issues.length >= MAX_ISSUES || (options.first === true && issues.some((i) => i.severity === "error"))
+  const done = (): boolean => errors >= MAX_ERRORS || (options.first === true && errors > 0)
+  /** Whether nothing more is checked; at the cap, the check says it stopped. */
+  const halt = (): boolean => {
+    if (errors >= MAX_ERRORS) capped = true
+    return done()
+  }
   const report = (severity: CheckIssue["severity"], code: ErrorCode, message: string, start = 0, end = start + 1, hint?: string) => {
-    if (!done()) issues.push({ severity, code, message, ...(hint === undefined ? {} : { hint }), start, end: Math.max(end, start + 1) })
+    if (halt()) return
+    if (severity === "error") errors++
+    issues.push({ severity, code, message, ...(hint === undefined ? {} : { hint }), path: formatPath(path), start, end: Math.max(end, start + 1) })
+  }
+  /** `f` one step further in: a field's key, or an index. */
+  const inside = (step: string | number, f: () => void): void => {
+    path.push(step)
+    f()
+    path.pop()
   }
   /** A known tag with another payload than its case takes: the hint names the case. */
   const wrongPayload = (v: HVariant, message: string, takes: CasePayload) => report("error", "wrong-payload", message, ...at(v), payloadHint(v.tag, takes))
@@ -195,7 +300,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   const check = (v: Value, type: Type): void => {
     const t = resolve(type)
     options.onValue?.(v, type, hidden > 0 || t.kind === "secret")
-    if (done()) return
+    if (halt()) return
     switch (t.kind) {
       case "builtin":
         return builtin(v, t.name, type)
@@ -203,15 +308,15 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         return std(v, t.name, type)
       case "array":
         if (v.kind !== "array") return mismatch(v, type)
-        for (const item of v.items) check(item, t.item)
+        v.items.forEach((item, i) => inside(i, () => check(item, t.item)))
         return
       case "map":
         if (v.kind !== "record") return mismatch(v, type)
-        for (const x of v.fields.values()) check(x, t.value)
+        for (const [key, x] of v.fields) inside(key, () => check(x, t.value))
         return
       case "maybe":
         if (v.kind === "variant" && v.tag === "None" && v.args.length === 0) return
-        if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return check(v.args[0]!, t.item)
+        if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return inside(0, () => check(v.args[0]!, t.item))
         return v.kind === "variant" && (v.tag === "None" || v.tag === "Some")
           ? wrongPayload(v, `expected None or Some(…) (${describe(type)}), found ${found(v)}`, v.tag === "None" ? { kind: "none" } : { kind: "args", types: [describe(t.item)] })
           : report("error", notCase(v, ["None", "Some"]), `expected None or Some(…) (${describe(type)}), found ${found(v)}`, ...at(v))
@@ -225,8 +330,9 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         } finally {
           hidden--
         }
-        const inside = issues.splice(before)
-        if (inside.some((i) => i.severity === "error")) report("error", "invalid-secret", `expected ${describe(t.item)} (a Secret: the value is not shown)`, ...at(v))
+        const within = issues.splice(before).filter((i) => i.severity === "error").length
+        errors -= within
+        if (within > 0) report("error", "invalid-secret", `expected ${describe(t.item)} (a Secret: the value is not shown)`, ...at(v))
         return
       }
       case "record":
@@ -280,28 +386,31 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
     if (v.args.length !== 1 || arg!.kind !== "string") return report("error", "type-mismatch", `write ${name}("…") with one string`, ...at(v))
     // The std/time profile (spec/std/time.md): built-in rules, like the ranges of Int8.
     const reason = checkStdTime(name, arg!.value)
-    if (reason !== undefined) report("error", "invalid-time", reason, ...at(arg!))
+    if (reason !== undefined) inside(0, () => report("error", "invalid-time", reason, ...at(arg!)))
   }
 
   const record = (v: HRecord, t: RecordType): void => {
     const known = new Map<string, Field>(t.fields.map((f) => [f.key, f]))
-    const missing = t.fields.filter((f) => !f.optional && !v.fields.has(f.key)).map((f) => quoteKey(f.key))
-    if (missing.length > 0) {
-      const start = v.start ?? 0
-      report("error", "missing-field", `missing field${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`, start, start + 1)
-    }
+    // Each missing field is an error of its own, at the record (spec §14, "Every error").
+    const start = v.start ?? 0
+    for (const f of t.fields) if (!f.optional && !v.fields.has(f.key)) report("error", "missing-field", `missing field ${quoteKey(f.key)}`, start, start + 1)
     for (const [key, x] of v.fields) {
       const f = known.get(key)
       if (f) {
         const note = deprecationNote(quoteKey(key), f.attributes)
-        if (note !== undefined) report("hint", "deprecated", note, ...(v.keySpans?.get(key) ?? at(x)))
-        check(x, f.type)
+        inside(key, () => {
+          if (note !== undefined) report("hint", "deprecated", note, ...(v.keySpans?.get(key) ?? at(x)))
+          check(x, f.type)
+        })
         continue
       }
-      const [start, end] = v.keySpans?.get(key) ?? at(x)
+      const [keyStart, keyEnd] = v.keySpans?.get(key) ?? at(x)
       const hint = suggest(key, [...known.keys()].filter((k) => !v.fields.has(k)))
-      if (t.closed) report("error", "unknown-field", `${quoteKey(key)} is not a field of this closed record.${hint}`, start, end)
-      else report("hint", "unlisted-field", `${quoteKey(key)} is not in the schema; a reader ignores it.${hint}`, start, end)
+      inside(key, () =>
+        t.closed
+          ? report("error", "unknown-field", `${quoteKey(key)} is not a field of this closed record.${hint}`, keyStart, keyEnd)
+          : report("hint", "unlisted-field", `${quoteKey(key)} is not in the schema; a reader ignores it.${hint}`, keyStart, keyEnd),
+      )
     }
   }
 
@@ -333,15 +442,29 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         if (v.args.length !== items.length) {
           return wrongPayload(v, `${v.tag} takes ${items.length} argument${items.length === 1 ? "" : "s"} (${items.map(describe).join(", ")}), found ${v.args.length}`, { kind: "args", types: items.map(describe) })
         }
-        v.args.forEach((arg, i) => check(arg, items[i]!))
+        v.args.forEach((arg, i) => inside(i, () => check(arg, items[i]!)))
       }
     }
   }
 
-  if (root.stream) for (const v of values) check(v, root.body)
-  else if (values.length !== 1) {
-    const extra = values[1]
-    report("error", "not-one-value", `expected one value (${typeName} is not a Stream), found ${values.length}`, ...(extra ? at(extra) : [0, 1] as const))
-  } else check(values[0]!, root.body)
-  return issues
+  const item = (v: Value, index: number): void => inside(index, () => check(v, root.body))
+  return {
+    issues,
+    stream: root.stream,
+    item,
+    document: (values) => {
+      if (root.stream) values.forEach(item)
+      else if (values.length !== 1) {
+        const extra = values[1]
+        report("error", "not-one-value", `expected one value (${typeName} is not a Stream), found ${values.length}`, ...(extra ? at(extra) : [0, 1] as const))
+      } else check(values[0]!, root.body)
+    },
+    syntax: (e) => {
+      if (halt()) return
+      errors++
+      issues.push({ severity: "error", code: e.code, message: e.reason, ...(e.hint === undefined ? {} : { hint: e.hint }), line: e.line, column: e.column, start: e.offset, end: e.offset + 1 })
+    },
+    halt,
+    stopped: () => capped,
+  }
 }

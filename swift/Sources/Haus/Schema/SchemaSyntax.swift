@@ -361,6 +361,12 @@ struct SchemaParser {
             pos += 1
             while let c = byte(pos), Self.pathBytes.contains(c) { pos += 1 }
             let path = text(start, pos)
+            // `.` alone is no module, a syntax error as any other word is
+            // (`..` and `.x` are unknown-module, grammar `module`).
+            if path == "." {
+                pos = start
+                throw expected(noModule)
+            }
             if path.hasPrefix("./") || path.hasPrefix("../"), !isFilePath(path) {
                 throw SchemaFailure(
                     start, .schemaSyntax,

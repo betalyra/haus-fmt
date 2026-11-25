@@ -34,7 +34,7 @@ Their constructors build only haus values (spec §11): a number from any literal
 Number("01")  # invalid-number: not a number literal (also "NaN", "")
 Variant("lower")  # invalid-tag: tags are [A-Z][A-Za-z0-9_]*
 Record([("a", Number("1")), ("a", Number("2"))])  # duplicate-key
-String("\ud800")  # cannot-encode: a lone surrogate has no UTF-8 form (in a key or tag too)
+String("\ud800")  # cannot-encode: a lone surrogate has no UTF-8 form (in a key too; a tag with one is invalid-tag)
 Array([5])  # cannot-encode: not a haus value (so is Number(5))
 ```
 
@@ -294,7 +294,9 @@ s = schema.compile_schema(
 | `DateCodec` | nothing; it rejects the year 0000, which `datetime.date` lacks |
 | `InstantCodec` | fraction digits beyond microseconds, the fraction's spelling (`.25` → `.250000`), `Z` versus `+00:00` (written `Z`); rejects the year 0000 |
 
-A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject, which `HausDecodeError` reports with the code `codec-rejected`. Codecs for your own types use their ids (`my-app/order#Money`). A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`.
+A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject, which `HausDecodeError` reports with the code `codec-rejected` (inside a `Secret`, `invalid-secret` at the secret), and `HausEncodeError` with `cannot-encode` at the codec's type. Codecs for your own types use their ids (`my-app/order#Money`); a codec for a prelude or std/time type applies wherever that type occurs, in packages' types too, and a value decoded *as* a type runs its codec. A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`; two codecs for one id are a `ValueError` too.
+
+Codecs run from the inside out: a codec for `Money` gets the `Currency` as the codec for `Currency` made it. A rule that must hold of the value the schema decoded, whatever codecs the application sets for its parts (a profile's rule), goes in an optional `check(value)` (`schema.CheckedCodec`): it gets the value decoded without any codec, and raises `ValueError` to reject it.
 
 The official packages ship the codecs of their profiles: [`haus-fmt-money`](../extensions/money/python) (`haus_money.iso`: currencies are three letters A–Z), [`haus-fmt-geo`](../extensions/geo/python) (`haus_geo.wgs84`: latitudes and longitudes in range) and [`haus-fmt-uuid`](../extensions/uuid/python) (`haus_uuid.rfc9562`: a UUID in its lowercase text form, any version). They keep the value: a currency becomes its tag (`"EUR"`, instead of an `Unknown`), a `LatLng` stays `Tagged("LatLng", (lat, lng))`, `-0.0` included, and a `Uuid` becomes its text, a `str` (`haus_uuid.rfc9562_as_uuid`: a `uuid.UUID`).
 

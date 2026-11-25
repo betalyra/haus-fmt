@@ -1,16 +1,16 @@
 //! Typed streams (test-suite/stream/typed.schema.haus and typed.cases.haus,
 //! test-suite/README.md "Stream suite", spec §15 "Streams"), on the runtime
-//! checker: a `Stream a` type decodes the text's values with
-//! `Schema::decode_stream` (which puts the item's index in an error's path),
-//! any other type decodes the text's one value (`haus::from_str`, then
-//! `Schema::decode`).
+//! checker: a `Stream a` type reads the text's values one at a time and
+//! decodes each with `Schema::decode_item` (which puts the item's index in
+//! an error's path), any other type decodes the text's one value
+//! (`haus::from_str`, then `Schema::decode`).
 //!
 //! - `Ok { type, text, output }`: decoding succeeds; the decoded values
 //!   (the values an encoder writes) equal `output`, an array for a stream.
 //! - `Err { type, text, code, path }`: decoding fails with `code` at `path`.
 
 use haus::{Value, canonical, equals};
-use haus_schema::Schema;
+use haus_schema::{Decoded, Schema};
 use std::path::{Path, PathBuf};
 
 /// The suite's file `file`; `HAUS_STREAM_SUITE` names another directory holding them.
@@ -29,12 +29,25 @@ fn text<'a>(fields: &'a Value, key: &str) -> &'a str {
 }
 
 /// Decode `text` as the type `ty`: the decoded value (an array of the items
-/// for a stream), or the error's code and path.
+/// for a stream), or the error's code and path. A stream is read item by
+/// item (`haus::stream::values`), each decoded before the next is read: an
+/// item's error comes before a later item's syntax error.
 fn decode(schema: &Schema, ty: &str, text: &str) -> Result<Value, (String, String)> {
     let definition = schema.definition(ty).unwrap_or_else(|| panic!("no type {ty}"));
     if schema.instance(definition.template).stream {
-        let values = haus::parse(text).map_err(|e| (e.code.to_string(), format!("{}:{}", e.line, e.column)))?;
-        let items = schema.decode_stream(ty, &values).map_err(|e| (e.code.to_string(), e.path_string()))?;
+        let items = haus::stream::values(text.as_bytes())
+            .enumerate()
+            .map(|(i, item)| {
+                let value = item.map_err(|e| match e {
+                    haus::Error::Syntax(e) => (e.code.to_string(), format!("{}:{}", e.line, e.column)),
+                    other => (other.code().map(|c| c.to_string()).unwrap_or_default(), other.to_string()),
+                })?;
+                schema
+                    .decode_item(ty, i, &value)
+                    .map(Decoded::reveal)
+                    .map_err(|e| (e.code.to_string(), e.path_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Value::Array(items))
     } else {
         let value = haus::from_str::<Value>(text).map_err(|e| {
@@ -44,7 +57,7 @@ fn decode(schema: &Schema, ty: &str, text: &str) -> Result<Value, (String, Strin
             };
             (e.code().map(|c| c.to_string()).unwrap_or_default(), place)
         })?;
-        schema.decode(ty, &value).map_err(|e| (e.code.to_string(), e.path_string()))
+        schema.decode(ty, &value).map(Decoded::reveal).map_err(|e| (e.code.to_string(), e.path_string()))
     }
 }
 

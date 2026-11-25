@@ -1,0 +1,4 @@
+// A module is std/…, a package @org/name or a file ./name or ../name: a word
+// with a capital and a hyphen is no module either, a syntax error (grammar.ebnf).
+import Lib/a-b (T)
+type B = { t: T }

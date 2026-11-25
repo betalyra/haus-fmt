@@ -67,4 +67,7 @@ StreamTyped := [].{
 	## haus type `typed#Points`.
 	# A stream of Point: read it with Streaming and decode_point.
 
+	## haus type `typed#Names`.
+	# A stream of String: read it with Streaming and decode_string.
+
 }

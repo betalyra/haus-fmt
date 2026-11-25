@@ -222,7 +222,10 @@ const cents: Codec = {
 
 Either way it runs after the schema: a value the schema accepts and the codec
 rejects is `codec-rejected`, at the value's place, and encoding one is
-`cannot-encode`. Codecs for types the schema doesn't contain are ignored; two for
+`cannot-encode`. Any named type can have one: a package's, your own, and the
+prelude's and std/time's (`prelude#Decimal`, `std/time#Instant`), which then
+applies to every value of the type, in packages' types too. A codec whose id no
+type has never runs: `compiled.warnings` lists `unused-codec` for it. Two for
 one type are an error, and so is one for a record that a variant uses as a
 record case (`< Box R >`), whose fields sit beside `_tag` (`codec-unreachable`).
 
@@ -441,8 +444,12 @@ try {
 
 Syntax errors (`HausSyntaxError`, and `HausSchemaFileError` for schema files)
 have `line` and `column`; decoding and encoding errors (`HausDecodeError`,
-`HausEncodeError`) have a `path`, `$.items[2].price`. `checkData` gives each
-issue a `code` too, and schema-file warnings have one. `errorCode(e)` is the
+`HausEncodeError`) have a `path`, `$.items[2].price`. `checkText` (and
+`checkData`, for values already parsed) gives each issue a `code` and a
+`path` too, and schema-file warnings have a code. `checkText` checks a
+`Stream` item by item, so a syntax error comes after the errors of the items
+before it; it stops after `MAX_ERRORS` (200) errors, hints not counted, and
+then says so (`stopped`). `errorCode(e)` is the
 code of any error this package throws, and `invalid-utf8` for the TypeError
 of the UTF-8 decoder `parseStream` uses. `ERROR_CODES` lists them all.
 
@@ -452,7 +459,7 @@ of the UTF-8 decoder `parseStream` uses. `ERROR_CODES` lists them all.
 |---|---|
 | `parseStream(chunks)` | values one by one, from any chunked source |
 | `infer(values)`, `inferSchema` | the schema a file's data has |
-| `parseSchemaFile`, `checkData` | schema files and checking data against them, with positions |
+| `parseSchemaFile`, `checkText` | schema files and checking data against them, with positions |
 | `parseDocument`, `completeAt` | positions, comments and completions, for editors |
 
 Typed `.haus` imports: [`@haus-fmt/import`](../import). Effect: [`@haus-fmt/effect`](../effect).

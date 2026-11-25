@@ -18,9 +18,9 @@ import re
 from pathlib import Path
 
 from haus import Variant
-from haus.schema import CodecGroup, Unknown
+from haus.schema import CodecGroup, Tagged, Unknown
 
-__all__ = ["CURRENCY", "MONEY", "PACKAGE", "IsoCurrency", "is_currency", "iso"]
+__all__ = ["CURRENCY", "MONEY", "PACKAGE", "IsoCurrency", "IsoMoney", "is_currency", "iso"]
 
 
 def _package() -> Path:
@@ -51,15 +51,10 @@ class IsoCurrency:
     """
 
     def decode(self, value: object, /) -> str:
-        if not isinstance(value, Unknown):
-            raise TypeError("expected a currency tag")
-        tag, args = value.value.tag, value.value.args
-        if args or not is_currency(tag):
-            shown = tag if len(tag) <= 20 else tag[:20] + "…"
-            raise ValueError(
-                f"{shown}{'(…)' if args else ''} is not a currency of the iso profile: three letters A to Z"
-            )
-        return tag
+        if reason := _currency_error(value):
+            raise ValueError(reason)
+        assert isinstance(value, Unknown)
+        return value.value.tag
 
     def encode(self, value: object, /) -> Unknown:
         if not is_currency(value):
@@ -68,5 +63,40 @@ class IsoCurrency:
         return Unknown(Variant(value, ()))
 
 
-iso: CodecGroup = CodecGroup({CURRENCY: IsoCurrency()})
-"""The profile's codecs, by type id. A group: a schema without a `Currency` takes it too."""
+def _currency_error(value: object) -> str:
+    """Why a `Currency` the schema decoded (an `Unknown`) breaks the iso rule, or `""`."""
+    if not isinstance(value, Unknown):
+        return "expected a currency tag"
+    tag, args = value.value.tag, value.value.args
+    if args or not is_currency(tag):
+        shown = tag if len(tag) <= 20 else tag[:20] + "…"
+        return f"{shown}{'(…)' if args else ''} is not a currency of the iso profile: three letters A to Z"
+    return ""
+
+
+class IsoMoney:
+    """`Money` with the iso profile: its host value is unchanged, `Tagged("Money", (amount, currency))`
+    with the currency as the codec for `Currency` made it.
+
+    Its rule is checked on the value the schema decoded (`check`, spec §13.4): a `Money` is accepted
+    exactly when its currency is a currency of the iso profile, whatever codec the application sets for
+    `Currency`. With `IsoCurrency` the two agree; with a looser one of the application's, `Money(1, Bitcoin)`
+    is still rejected.
+    """
+
+    def check(self, value: object, /) -> None:
+        payload = value.payload if isinstance(value, Tagged) else None
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            raise TypeError("expected a Money")
+        if reason := _currency_error(payload[1]):
+            raise ValueError(reason)
+
+    def decode(self, value: object, /) -> object:
+        return value
+
+    def encode(self, value: object, /) -> object:
+        return value
+
+
+iso: CodecGroup = CodecGroup({CURRENCY: IsoCurrency(), MONEY: IsoMoney()})
+"""The profile's codecs, by type id. A group: a schema without a `Money` or `Currency` takes it too."""

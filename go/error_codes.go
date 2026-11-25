@@ -135,7 +135,7 @@ const (
 	CodeAttributeSpace ErrorCode = "attribute-space"
 	// CodeAttributeOnSpread is "attribute-on-spread": An attribute on a spread. The fields and tags a spread copies keep their own attributes.
 	CodeAttributeOnSpread ErrorCode = "attribute-on-spread"
-	// CodeUnknownModule is "unknown-module": An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).
+	// CodeUnknownModule is "unknown-module": An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf).
 	CodeUnknownModule ErrorCode = "unknown-module"
 	// CodeUnknownImport is "unknown-import": An import names a type the module doesn't have, or no type at all.
 	CodeUnknownImport ErrorCode = "unknown-import"
@@ -199,7 +199,7 @@ const (
 	CodeInvalidSecret ErrorCode = "invalid-secret"
 	// CodeCodecRejected is "codec-rejected": A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
 	CodeCodecRejected ErrorCode = "codec-rejected"
-	// CodeCannotEncode is "cannot-encode": Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
+	// CodeCannotEncode is "cannot-encode": Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
 	CodeCannotEncode ErrorCode = "cannot-encode"
 	// CodeCyclicValue is "cyclic-value": Encoding: a value contains itself, so it has no finite text.
 	CodeCyclicValue ErrorCode = "cyclic-value"
@@ -219,7 +219,7 @@ const (
 	CodeHausJSONNumber ErrorCode = "haus-json-number"
 	// CodeHausJSONBytes is "haus-json-bytes": A self-describing `_bytes` that isn't two lowercase hex digits per byte.
 	CodeHausJSONBytes ErrorCode = "haus-json-bytes"
-	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11).
+	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.
 	CodeInvalidTag ErrorCode = "invalid-tag"
 	// CodeInvalidBase64 is "invalid-base64": Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
 	CodeInvalidBase64 ErrorCode = "invalid-base64"
@@ -239,6 +239,8 @@ const (
 	CodeUnlistedTag ErrorCode = "unlisted-tag"
 	// CodeMissingCodec is "missing-codec": A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
 	CodeMissingCodec ErrorCode = "missing-codec"
+	// CodeUnusedCodec is "unused-codec": A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
+	CodeUnusedCodec ErrorCode = "unused-codec"
 )
 
 // The categories of the catalogue.
@@ -371,6 +373,7 @@ var errorCodeList = []ErrorCode{
 	CodeUnlistedField,
 	CodeUnlistedTag,
 	CodeMissingCodec,
+	CodeUnusedCodec,
 }
 
 var errorCatalogue = map[ErrorCode]ErrorInfo{
@@ -439,7 +442,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeAttributeTwice:          {CategorySchemaFiles, "The same attribute twice on one type, field or tag, for an attribute this version defines. One it doesn't define may appear twice, with a warning each (`unknown-attribute`).", "Keep one of them."},
 	CodeAttributeSpace:          {CategorySchemaFiles, "A space between an attribute's name and its `(`.", "Write the parenthesis right after the attribute's name, without a space."},
 	CodeAttributeOnSpread:       {CategorySchemaFiles, "An attribute on a spread. The fields and tags a spread copies keep their own attributes.", "Put the attribute on the fields or tags in the spread type."},
-	CodeUnknownModule:           {CategoryImports, "An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).", "Fix the module's name; a former standard module is now a package, which the message names."},
+	CodeUnknownModule:           {CategoryImports, "An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf).", "Fix the module's name; a former standard module is now a package, which the message names."},
 	CodeUnknownImport:           {CategoryImports, "An import names a type the module doesn't have, or no type at all.", "Import a type the module defines; the message lists them."},
 	CodeDuplicateImport:         {CategoryImports, "The same type name is imported twice.", "Import each name once."},
 	CodeImportUnavailable:       {CategoryImports, "The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there.", "Read the schema with a resolver that loads imports (from files or packages), or inline the types."},
@@ -471,7 +474,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeInvalidTime:             {CategoryDecoding, "A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md).", "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."},
 	CodeInvalidSecret:           {CategoryDecoding, "A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).", "Write a value of the secret's type; the value isn't shown, so check it where it comes from."},
 	CodeCodecRejected:           {CategoryDecoding, "A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.", "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."},
-	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.", "Pass a value of the host type the binding documents for the type."},
+	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.", "Pass a value of the host type the binding documents for the type."},
 	CodeCyclicValue:             {CategoryDecoding, "Encoding: a value contains itself, so it has no finite text.", "Break the cycle before encoding."},
 	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
 	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it.", "Build a smaller value, or raise the limit."},
@@ -481,7 +484,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeHausJSONVersion:         {CategoryJson, "A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.", "Read it with a newer version of haus, or write `\"_haus\": 1`."},
 	CodeHausJSONNumber:          {CategoryJson, "A self-describing `_num` that isn't a normalized number literal (§2): `\"1E5\"`, `\"01\"`, `\"0xff\"`, or not a string.", "Write the number's normalized literal (§2) as a string."},
 	CodeHausJSONBytes:           {CategoryJson, "A self-describing `_bytes` that isn't two lowercase hex digits per byte.", "Write the bytes as lowercase hex, two digits per byte."},
-	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`\"debug\"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11).", "Start the tag with a capital letter and use only letters, digits and `_`."},
+	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`\"debug\"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.", "Start the tag with a capital letter and use only letters, digits and `_`."},
 	CodeInvalidBase64:           {CategoryJson, "Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.", "Write standard base64, with padding."},
 	CodeMissingMember:           {CategoryJson, "Schema-based JSON: an object lacks a member its form needs, such as `\"_tag\"` for a variant or `\"value\"` for a tag with one argument.", "Add the member the message names."},
 	CodeUnexpectedMember:        {CategoryJson, "Schema-based JSON: an object has a member its form doesn't have, such as `\"value\"` next to a tag without payload (§16.3).", "Remove the member."},
@@ -491,4 +494,5 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeUnlistedField:           {CategoryHints, "A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo.", "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."},
 	CodeUnlistedTag:             {CategoryHints, "A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo.", "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."},
 	CodeMissingCodec:            {CategoryHints, "A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.", "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."},
+	CodeUnusedCodec:             {CategoryHints, "A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.", "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them."},
 }

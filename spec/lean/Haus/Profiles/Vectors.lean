@@ -12,7 +12,7 @@ import Haus.Parser
 A vectors file (`profiles/NAME.vectors.haus`) is a list of
 
     Accept { type: "T", value: "<haus text>", output?: "<haus text>", note?: "…" }
-    Reject { type: "T", value: "<haus text>", note?: "…" }
+    Reject { type: "T", value: "<haus text>", looser?: ["U", …], note?: "…" }
 
 `value` is haus text for the type `T` of the package's schema. An `Accept`
 passes when the profile's codec (§13.4: the schema, then the checker)
@@ -23,6 +23,12 @@ codec writes (§2): it says how the value is written back. A `Reject` passes
 when `value` is valid for the schema of `T` (the shape) and the codec
 rejects it, so the rejection comes from the profile's rule; a `Reject` the
 schema already rejects fails, with the schema's error.
+
+`looser` names types of the package for which the bindings run the `Reject`
+again with an application's codec that accepts every value of the type's
+schema. Here a codec is a check on the value the schema decoded (§13.4,
+`Codec.lean`), so no other codec can change what the profile's check sees:
+the vector runs once, and its `looser` types must be types of the package.
 -/
 
 namespace Haus.Profiles
@@ -68,6 +74,7 @@ structure Vector where
   type : String
   value : String
   output : Option String
+  looser : List String := []
 
 def strField (fs : List (String × Value)) (k : String) : Except String (Option String) :=
   match fs.lookup k with
@@ -81,11 +88,15 @@ def Vector.ofValue : Value → Except String Vector
     let accept ← if tag == "Accept" then pure true else if tag == "Reject" then pure false
       else throw s!"not Accept or Reject: {tag}"
     for (k, _) in fs do
-      unless ["type", "value", "output", "note"].contains k && (accept || k != "output") do
+      unless ["type", "value", "output", "looser", "note"].contains k && (accept || k != "output") && (!accept || k != "looser") do
         throw s!"unexpected field {k}"
     let some type ← strField fs "type" | throw "no type"
     let some value ← strField fs "value" | throw "no value"
-    return { accept, type, value, output := ← strField fs "output" }
+    let looser ← match fs.lookup "looser" with
+      | none => pure []
+      | some (.arr xs) => xs.mapM fun | .str s => pure s | _ => throw "looser is not a list of strings"
+      | some _ => throw "looser is not a list of strings"
+    return { accept, type, value, output := ← strField fs "output", looser }
   | _ => .error "not a vector"
 
 /-- Haus text that is exactly one value. -/
@@ -107,6 +118,7 @@ when it fails.
 -/
 def Vector.run (p : Profile) (vec : Vector) : Except String String := do
   let some check := p.check? vec.type | throw s!"{vec.type} is not a type of {p.name}"
+  if let some t := vec.looser.find? (p.check? · |>.isNone) then throw s!"looser: {t} is not a type of {p.name}"
   let v ← (parseOne vec.value).mapError (s!"value: " ++ ·)
   -- A `Reject` must have the shape of its type, so that the rule rejects it.
   if !vec.accept then

@@ -56,7 +56,11 @@ fn reports_errors_at_the_wrong_value() {
             "error 1: expected String, found the number 1",
         ]
     );
-    assert_eq!(issues(schema, "{ id: 1 }", "Root")[0], "error {: missing fields qty, day, status, tags");
+    // One error per missing field, all at the record (spec §14, "Every error").
+    assert_eq!(
+        issues(schema, "{ id: 1 }", "Root"),
+        ["qty", "day", "status", "tags"].map(|f| format!("error {{: missing field {f}"))
+    );
 }
 
 #[test]
@@ -175,7 +179,7 @@ fn positions_paths_and_syntax_errors() {
 fn many_problems_are_reported_up_to_a_limit() {
     let schema = Schema::parse("type Root = Array Int").unwrap();
     let data = format!("[{}]", vec!["\"x\""; 500].join(", "));
-    assert_eq!(schema.check_text("Root", &data).len(), haus_schema::MAX_ISSUES);
+    assert_eq!(schema.check_text("Root", &data).len(), haus_schema::MAX_ERRORS);
 }
 
 /// A check of a value built in code counts an empty record, array or record

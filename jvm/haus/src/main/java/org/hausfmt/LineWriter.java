@@ -85,6 +85,11 @@ final class LineWriter extends WriteCheck {
     } else if (v instanceof Value.Array) {
       enter(depth);
       items('[', ']', ((Value.Array) v).unsafeItems(), depth);
+    } else if (v instanceof Value.Secret) {
+      if (check) {
+        throw secretRefused(path);
+      }
+      b.append("<redacted>"); // toString only
     } else {
       checkBytes((Value.Bytes) v);
       appendBytes(b, (Value.Bytes) v);

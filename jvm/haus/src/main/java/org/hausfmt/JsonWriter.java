@@ -105,6 +105,8 @@ final class JsonWriter {
         }
         b.append('}');
         break;
+      case SECRET: // checked before: never written
+        throw WriteCheck.secretRefused(new Path());
     }
   }
 

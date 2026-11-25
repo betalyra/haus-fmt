@@ -47,7 +47,7 @@ if errors.As(err, &e) {
 }
 ```
 
-`Decode` and `Parse` give a checked `haus.Value`: the value an encoder writes back. To report every problem of a file with its position, as an editor does:
+`Decode` and `Parse` give a checked `haus.Value`: the value an encoder writes back, with each secret hidden. A `Stream` file is checked item by item, and a check reports at most 200 errors (hints don't count). To report every problem of a file with its position, as an editor does:
 
 ```go
 for _, issue := range s.CheckText("Order", text) {
@@ -71,12 +71,12 @@ _, err := root.DecodeWith(v, schema.DecodeOptions{Codecs: codecs})
 // $.total: @haus-fmt/money@1#Money rejects the value: Eur is not a currency: three letters A–Z (ISO 4217) [codec-rejected]
 ```
 
-Codecs are given per call, so ask for the warnings with them: `root.MissingCodecs(codecs)` lists a [`missing-codec`](/docs/errors#missing-codec) warning for each profiled type left without one. `schema.NewCodec(id, decode, encode)` writes your own; `schema.DecodeAs` gives the host value. [What haus checks](/docs/checks)
+Codecs are given per call, so ask for the warnings with them: `root.MissingCodecs(codecs)` lists a [`missing-codec`](/docs/errors#missing-codec) warning for each profiled type left without one, and `s.UnusedCodecs(codecs)` an [`unused-codec`](/docs/errors#unused-codec) warning for each codec whose id no type has. Codecs work for any named type, `prelude#Decimal` and `std/time#Instant` too. `schema.NewCodec(id, decode, encode)` writes your own; `schema.DecodeAs` gives the host value. [What haus checks](/docs/checks)
 
 - **Time.** std/time values stay checked `haus.Value`s; `schema.InstantTime` is an opt-in codec to `time.Time`, which keeps the instant and its offset but not the spelling.
 - **Streams.** `haus.NewStreamReader(r, haus.StreamOptions{Strict: true})` reads one value at a time from an `io.Reader`; `range reader.All()` iterates. `Type.DecodeStream` decodes them. [Logs and streams](/docs/tours/streams)
 - **JSON.** `order.ToJSON(v)` writes schema-based JSON (`{"id":"7",…}`), `order.FromJSON` reads it back with the same checks. `haus.ImportJSON` reads any JSON as haus. [Coming from JSON](/docs/from-json)
-- **Secrets.** `schema.Secret[T]` prints, logs and marshals as `<redacted>` until `Reveal`. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** Decoding gives a `Secret` type's value hidden in a `haus.Secret`, and `schema.Secret[T]` is the host type for your own structs: both print, log and marshal as `<redacted>` until `Reveal`, and `FormatValue`, `Canonical` and `Hash` refuse a `haus.Secret`; encoding with the schema writes it in full. [Config and secrets](/docs/tours/secrets)
 - **Limits.** `haus.ParseAllWith(src, haus.Limits{MaxDepth: 64})`; fields left at zero keep the defaults.
 - **Goroutines.** A loaded `*schema.Schema`, its types and codecs don't change, so goroutines can share them.
 - **Errors.** Every error is a `*haus.Error` with a `Code`; `json.Marshal(e)` gives the JSON form. [Error codes](/docs/errors)

@@ -3,12 +3,15 @@
 //
 // - `Schema { schema, warnings }`: load the schema text (a schema file of
 //   its own, no imports). It loads, and its warnings are exactly `warnings`,
-//   in the order of their places: `Warning(code, line, column)`, where the
+//   as a multiset: `Warning(code, line, column)`, where the
 //   line and column (spec §8) are those of what the warning is about.
 // - `Data { schema, type, data, issues }`: check the data text against the
-//   schema's type `type` (a `Stream` type checks every value). The issues are
-//   exactly `issues`, in the order of their places: `Hint(code, path)` and
-//   `Error(code, path)`, with the path of spec §15.
+//   schema's type `type` (a `Stream` type checks every value, item by item).
+//   The issues are exactly `issues`, compared as a multiset (no order, each as
+//   often as listed): `Hint(code, path)` and `Error(code, path)`, with the
+//   path of spec §15, and `Syntax(code, line, column)` for a syntax or limit
+//   error of the text, at its line and column (spec §8). `first: True`
+//   checks in the mode that stops at the first error (`haus check --first`).
 
 // ── unknown attributes: accepted, with a warning ──
 Schema { schema: "@since(\"1.2\")\ntype A = Int", warnings: [Warning("unknown-attribute", 1, 1)] },
@@ -80,3 +83,122 @@ Data { schema: "type Root = { key: Secret { @deprecated a?: Int } }", type: "Roo
 Data { schema: "type Root = Secret < @deprecated Old | New >", type: "Root", data: "Old", issues: [] },
 Data { schema: "type Root = { @deprecated key?: Secret Int }", type: "Root", data: "{ key: 1 }", issues: [Hint("deprecated", "$.key")] },
 Data { schema: "type Root = { key: Secret closed { a: Int } }", type: "Root", data: "{ key: { a: 1, b: 2 } }", issues: [Error("invalid-secret", "$.key")] },
+
+// ── every error (spec §14, "Every error"), round 3 ──
+// Each error once, also two at one place: a record missing two fields.
+Data { schema: "type Root = { a: Int, b: Int }", type: "Root", data: "{}", issues: [Error("missing-field", "$"), Error("missing-field", "$")] },
+// A positional payload checks every argument.
+Data { schema: "type Root = closed < P Int String >", type: "Root", data: "P(\"1\", 2)", issues: [Error("type-mismatch", "$[0]"), Error("type-mismatch", "$[1]")] },
+// A stream is checked item by item: an item's error, then the syntax error that ends the stream.
+Data { schema: "type Root = Stream String", type: "Root", data: "1,\n\"ok\",\n\"ok\" \"oops\"", issues: [Error("type-mismatch", "$[0]"), Syntax("missing-comma", 3, 6)] },
+Data { schema: "type Root = Stream String", type: "Root", data: "1,\n\"ok\",\n\"ok\" \"oops\"", first: True, issues: [Error("type-mismatch", "$[0]")] },
+// Stopping at the first error: the hints found before it, and the error.
+Data { schema: "type Root = Stream { id: Int }", type: "Root", data: "{ id: 1, x: 2 },\n{ id: \"y\" },\n{ id: \"z\" }", first: True, issues: [Hint("unlisted-field", "$[0].x"), Error("type-mismatch", "$[1].id")] },
+// The cap counts errors only, and is at least 100: 99 errors and 102 hints are all reported.
+Data {
+  schema: "type Root = Array { id: Int }",
+  type: "Root",
+  data: "[{ id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: \"x\", a: 1 }, { id: 1, a: 1, b: 1, c: 1 }]",
+  issues: [
+  Error("type-mismatch", "$[0].id"), Hint("unlisted-field", "$[0].a"),
+  Error("type-mismatch", "$[1].id"), Hint("unlisted-field", "$[1].a"),
+  Error("type-mismatch", "$[2].id"), Hint("unlisted-field", "$[2].a"),
+  Error("type-mismatch", "$[3].id"), Hint("unlisted-field", "$[3].a"),
+  Error("type-mismatch", "$[4].id"), Hint("unlisted-field", "$[4].a"),
+  Error("type-mismatch", "$[5].id"), Hint("unlisted-field", "$[5].a"),
+  Error("type-mismatch", "$[6].id"), Hint("unlisted-field", "$[6].a"),
+  Error("type-mismatch", "$[7].id"), Hint("unlisted-field", "$[7].a"),
+  Error("type-mismatch", "$[8].id"), Hint("unlisted-field", "$[8].a"),
+  Error("type-mismatch", "$[9].id"), Hint("unlisted-field", "$[9].a"),
+  Error("type-mismatch", "$[10].id"), Hint("unlisted-field", "$[10].a"),
+  Error("type-mismatch", "$[11].id"), Hint("unlisted-field", "$[11].a"),
+  Error("type-mismatch", "$[12].id"), Hint("unlisted-field", "$[12].a"),
+  Error("type-mismatch", "$[13].id"), Hint("unlisted-field", "$[13].a"),
+  Error("type-mismatch", "$[14].id"), Hint("unlisted-field", "$[14].a"),
+  Error("type-mismatch", "$[15].id"), Hint("unlisted-field", "$[15].a"),
+  Error("type-mismatch", "$[16].id"), Hint("unlisted-field", "$[16].a"),
+  Error("type-mismatch", "$[17].id"), Hint("unlisted-field", "$[17].a"),
+  Error("type-mismatch", "$[18].id"), Hint("unlisted-field", "$[18].a"),
+  Error("type-mismatch", "$[19].id"), Hint("unlisted-field", "$[19].a"),
+  Error("type-mismatch", "$[20].id"), Hint("unlisted-field", "$[20].a"),
+  Error("type-mismatch", "$[21].id"), Hint("unlisted-field", "$[21].a"),
+  Error("type-mismatch", "$[22].id"), Hint("unlisted-field", "$[22].a"),
+  Error("type-mismatch", "$[23].id"), Hint("unlisted-field", "$[23].a"),
+  Error("type-mismatch", "$[24].id"), Hint("unlisted-field", "$[24].a"),
+  Error("type-mismatch", "$[25].id"), Hint("unlisted-field", "$[25].a"),
+  Error("type-mismatch", "$[26].id"), Hint("unlisted-field", "$[26].a"),
+  Error("type-mismatch", "$[27].id"), Hint("unlisted-field", "$[27].a"),
+  Error("type-mismatch", "$[28].id"), Hint("unlisted-field", "$[28].a"),
+  Error("type-mismatch", "$[29].id"), Hint("unlisted-field", "$[29].a"),
+  Error("type-mismatch", "$[30].id"), Hint("unlisted-field", "$[30].a"),
+  Error("type-mismatch", "$[31].id"), Hint("unlisted-field", "$[31].a"),
+  Error("type-mismatch", "$[32].id"), Hint("unlisted-field", "$[32].a"),
+  Error("type-mismatch", "$[33].id"), Hint("unlisted-field", "$[33].a"),
+  Error("type-mismatch", "$[34].id"), Hint("unlisted-field", "$[34].a"),
+  Error("type-mismatch", "$[35].id"), Hint("unlisted-field", "$[35].a"),
+  Error("type-mismatch", "$[36].id"), Hint("unlisted-field", "$[36].a"),
+  Error("type-mismatch", "$[37].id"), Hint("unlisted-field", "$[37].a"),
+  Error("type-mismatch", "$[38].id"), Hint("unlisted-field", "$[38].a"),
+  Error("type-mismatch", "$[39].id"), Hint("unlisted-field", "$[39].a"),
+  Error("type-mismatch", "$[40].id"), Hint("unlisted-field", "$[40].a"),
+  Error("type-mismatch", "$[41].id"), Hint("unlisted-field", "$[41].a"),
+  Error("type-mismatch", "$[42].id"), Hint("unlisted-field", "$[42].a"),
+  Error("type-mismatch", "$[43].id"), Hint("unlisted-field", "$[43].a"),
+  Error("type-mismatch", "$[44].id"), Hint("unlisted-field", "$[44].a"),
+  Error("type-mismatch", "$[45].id"), Hint("unlisted-field", "$[45].a"),
+  Error("type-mismatch", "$[46].id"), Hint("unlisted-field", "$[46].a"),
+  Error("type-mismatch", "$[47].id"), Hint("unlisted-field", "$[47].a"),
+  Error("type-mismatch", "$[48].id"), Hint("unlisted-field", "$[48].a"),
+  Error("type-mismatch", "$[49].id"), Hint("unlisted-field", "$[49].a"),
+  Error("type-mismatch", "$[50].id"), Hint("unlisted-field", "$[50].a"),
+  Error("type-mismatch", "$[51].id"), Hint("unlisted-field", "$[51].a"),
+  Error("type-mismatch", "$[52].id"), Hint("unlisted-field", "$[52].a"),
+  Error("type-mismatch", "$[53].id"), Hint("unlisted-field", "$[53].a"),
+  Error("type-mismatch", "$[54].id"), Hint("unlisted-field", "$[54].a"),
+  Error("type-mismatch", "$[55].id"), Hint("unlisted-field", "$[55].a"),
+  Error("type-mismatch", "$[56].id"), Hint("unlisted-field", "$[56].a"),
+  Error("type-mismatch", "$[57].id"), Hint("unlisted-field", "$[57].a"),
+  Error("type-mismatch", "$[58].id"), Hint("unlisted-field", "$[58].a"),
+  Error("type-mismatch", "$[59].id"), Hint("unlisted-field", "$[59].a"),
+  Error("type-mismatch", "$[60].id"), Hint("unlisted-field", "$[60].a"),
+  Error("type-mismatch", "$[61].id"), Hint("unlisted-field", "$[61].a"),
+  Error("type-mismatch", "$[62].id"), Hint("unlisted-field", "$[62].a"),
+  Error("type-mismatch", "$[63].id"), Hint("unlisted-field", "$[63].a"),
+  Error("type-mismatch", "$[64].id"), Hint("unlisted-field", "$[64].a"),
+  Error("type-mismatch", "$[65].id"), Hint("unlisted-field", "$[65].a"),
+  Error("type-mismatch", "$[66].id"), Hint("unlisted-field", "$[66].a"),
+  Error("type-mismatch", "$[67].id"), Hint("unlisted-field", "$[67].a"),
+  Error("type-mismatch", "$[68].id"), Hint("unlisted-field", "$[68].a"),
+  Error("type-mismatch", "$[69].id"), Hint("unlisted-field", "$[69].a"),
+  Error("type-mismatch", "$[70].id"), Hint("unlisted-field", "$[70].a"),
+  Error("type-mismatch", "$[71].id"), Hint("unlisted-field", "$[71].a"),
+  Error("type-mismatch", "$[72].id"), Hint("unlisted-field", "$[72].a"),
+  Error("type-mismatch", "$[73].id"), Hint("unlisted-field", "$[73].a"),
+  Error("type-mismatch", "$[74].id"), Hint("unlisted-field", "$[74].a"),
+  Error("type-mismatch", "$[75].id"), Hint("unlisted-field", "$[75].a"),
+  Error("type-mismatch", "$[76].id"), Hint("unlisted-field", "$[76].a"),
+  Error("type-mismatch", "$[77].id"), Hint("unlisted-field", "$[77].a"),
+  Error("type-mismatch", "$[78].id"), Hint("unlisted-field", "$[78].a"),
+  Error("type-mismatch", "$[79].id"), Hint("unlisted-field", "$[79].a"),
+  Error("type-mismatch", "$[80].id"), Hint("unlisted-field", "$[80].a"),
+  Error("type-mismatch", "$[81].id"), Hint("unlisted-field", "$[81].a"),
+  Error("type-mismatch", "$[82].id"), Hint("unlisted-field", "$[82].a"),
+  Error("type-mismatch", "$[83].id"), Hint("unlisted-field", "$[83].a"),
+  Error("type-mismatch", "$[84].id"), Hint("unlisted-field", "$[84].a"),
+  Error("type-mismatch", "$[85].id"), Hint("unlisted-field", "$[85].a"),
+  Error("type-mismatch", "$[86].id"), Hint("unlisted-field", "$[86].a"),
+  Error("type-mismatch", "$[87].id"), Hint("unlisted-field", "$[87].a"),
+  Error("type-mismatch", "$[88].id"), Hint("unlisted-field", "$[88].a"),
+  Error("type-mismatch", "$[89].id"), Hint("unlisted-field", "$[89].a"),
+  Error("type-mismatch", "$[90].id"), Hint("unlisted-field", "$[90].a"),
+  Error("type-mismatch", "$[91].id"), Hint("unlisted-field", "$[91].a"),
+  Error("type-mismatch", "$[92].id"), Hint("unlisted-field", "$[92].a"),
+  Error("type-mismatch", "$[93].id"), Hint("unlisted-field", "$[93].a"),
+  Error("type-mismatch", "$[94].id"), Hint("unlisted-field", "$[94].a"),
+  Error("type-mismatch", "$[95].id"), Hint("unlisted-field", "$[95].a"),
+  Error("type-mismatch", "$[96].id"), Hint("unlisted-field", "$[96].a"),
+  Error("type-mismatch", "$[97].id"), Hint("unlisted-field", "$[97].a"),
+  Error("type-mismatch", "$[98].id"), Hint("unlisted-field", "$[98].a"),
+  Hint("unlisted-field", "$[99].a"), Hint("unlisted-field", "$[99].b"), Hint("unlisted-field", "$[99].c"),
+  ],
+},

@@ -116,7 +116,8 @@ describe("declarations", () => {
   it("declare Secret as Redacted and Any as Value", () => {
     const d = Haus.schemaDeclarations(parseSchemaFile(schema))
     expect(d).toContain('import type { Redacted as Redacted$, Schema as Schema$ } from "effect";')
-    expect(d).toContain("readonly key: Redacted$.Redacted<string>; readonly pin?: Redacted$.Redacted<number>; readonly keys: Redacted$.Redacted<{ readonly [key: string]: bigint }>; readonly extra: Haus$.Value")
+    const p = (name: string, type: string) => `Haus$.Lookup<C$, "prelude#${name}", ${type}>`
+    expect(d).toContain(`readonly key: Redacted$.Redacted<${p("String", "string")}>; readonly pin?: Redacted$.Redacted<${p("Int8", "number")}>; readonly keys: Redacted$.Redacted<{ readonly [key: string]: ${p("Int", "bigint")} }>; readonly extra: ${p("Any", "Haus$.Value")}`)
   })
 
   it("mark deprecated types, fields and tags", () => {
@@ -126,7 +127,7 @@ describe("declarations", () => {
       type Shape = < Circle { r: Float64 } | @deprecated Square { side: Float64 } >
       type Level = < Debug | @deprecated("gone") Trace >`))
     expect(d).toContain(" * @deprecated use Customer\n */\nexport type Client<")
-    expect(d).toContain("/** @deprecated use email */ readonly mail?: string")
+    expect(d).toContain(`/** @deprecated use email */ readonly mail?: Haus$.Lookup<C$, "prelude#String", string>`)
     expect(d).toContain('/** @deprecated */ readonly _tag: "Square"')
     expect(d).toContain('/** @deprecated gone */ "Trace"')
   })

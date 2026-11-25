@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { fileURLToPath } from "node:url"
-import { checkData, compileSchemaFile, parseSchemaFile, parseWithLocations } from "../src/index.js"
+import { checkData, checkText, compileSchemaFile, MAX_ERRORS, parseSchemaFile, parseWithLocations } from "../src/index.js"
 import * as h from "../src/schema.js"
 import { schemaOptions } from "../src/node.js"
 
@@ -51,7 +51,50 @@ describe("checkData", () => {
       `error Shiped: Shiped is not allowed here: expected one of Pending, Shipped. Did you mean Shipped?`,
       `error 1: expected String, found the number 1`,
     ])
-    expect(issues(schema, `{ id: 1 }`)[0]).toBe("error {: missing fields qty, day, status, tags")
+    // One error per missing field, each at the record (spec §14).
+    expect(issues(schema, `{ id: 1 }`)).toEqual(["qty", "day", "status", "tags"].map((f) => `error {: missing field ${f}`))
+  })
+
+  it("places: the path of every issue (spec §15)", () => {
+    const schema = `
+      import std/time (Date)
+      type Root = { m: Map Int, a: Array (Maybe Int), d: Date, p: closed < P Int { x: Int } | C { r: Int } >, extra?: Int, q: Array C }
+      type C = closed < C { r: Int } >`
+    const report = checkText(parseSchemaFile(schema), "Root", `{ m: { "pt-BR": "x" }, a: [None, Some("y")], d: Date("2026-02-30"), p: C { r: "z" }, zz: 1, q: [C { s: 1 }] }`)
+    expect(report.issues.map((i) => `${i.code} ${i.path}`)).toEqual([
+      `type-mismatch $.m["pt-BR"]`, "type-mismatch $.a[1][0]", "invalid-time $.d[0]", "type-mismatch $.p.r", "unlisted-field $.zz", "missing-field $.q[0]", "unlisted-field $.q[0].s",
+    ])
+  })
+})
+
+describe("checkText", () => {
+  const stream = parseSchemaFile("type Root = Stream String\ntype One = String")
+
+  it("reads a stream item by item: the items' errors, then the syntax error that ends the check (spec §14)", () => {
+    const report = checkText(stream, "Root", `1,\n"ok",\n"ok" "oops"`)
+    expect(report.issues.map((i) => [i.code, i.path, i.line, i.column])).toEqual([["type-mismatch", "$[0]", undefined, undefined], ["missing-comma", undefined, 3, 6]])
+    expect(checkText(stream, "Root", `1,\n"ok",\n"ok" "oops"`, { first: true }).issues.map((i) => i.code)).toEqual(["type-mismatch"])
+  })
+
+  it("a document's syntax error is its only issue", () => {
+    expect(checkText(stream, "One", `1 2,`).issues.map((i) => [i.code, i.line, i.column])).toEqual([["missing-comma", 1, 3]])
+  })
+
+  it("an unpaired surrogate is the syntax error, after the items before it", () => {
+    const report = checkText(stream, "Root", `1,\n"\uD800"`)
+    expect(report.issues.map((i) => [i.code, i.path ?? i.line])).toEqual([["type-mismatch", "$[0]"], ["invalid-utf8", 2]])
+  })
+
+  it("stops after MAX_ERRORS errors, counting no hints, and says so", () => {
+    const file = parseSchemaFile("type Root = Stream { id: Int }")
+    const item = `{ a: 1, id: "x" },`
+    const under = checkText(file, "Root", item.repeat(MAX_ERRORS))
+    expect(under.stopped).toBe(false)
+    expect(under.issues.filter((i) => i.severity === "error")).toHaveLength(MAX_ERRORS)
+    expect(under.issues.filter((i) => i.severity === "hint")).toHaveLength(MAX_ERRORS)
+    const over = checkText(file, "Root", item.repeat(MAX_ERRORS + 5))
+    expect(over.stopped).toBe(true)
+    expect(over.issues.filter((i) => i.severity === "error")).toHaveLength(MAX_ERRORS)
   })
 
   it("open types: unknown fields and tags are hints; closed ones are errors", () => {

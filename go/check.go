@@ -210,6 +210,8 @@ func (c *valueChecker) value(v Value, depth int) error {
 		return nil
 	case nil:
 		return c.fail(CodeCannotEncode, "a nil value")
+	case Secret:
+		return c.fail(CodeCannotEncode, "%s", secretRefused)
 	}
 	return c.fail(CodeCannotEncode, "an unknown kind of value")
 }

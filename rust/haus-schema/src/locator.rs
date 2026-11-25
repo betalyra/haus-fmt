@@ -98,16 +98,20 @@ pub struct Or<A, B>(A, B);
 impl<A: Locator, B: Locator> Locator for Or<A, B> {
     fn locate_in(&self, name: &str, from: Option<&Path>, files: &mut FileCache) -> Result<Location> {
         match self.0.locate_in(name, from, files) {
-            Err(first) if first.code() == ErrorCode::ImportNotFound => match self.1.locate_in(name, from, files) {
-                Err(second) if second.code() == ErrorCode::ImportNotFound => {
-                    Err(Error::new(ErrorCode::ImportNotFound, format!("{}; {}", first.reason(), second.reason())))
+            Err(first) if first.code() == Some(ErrorCode::ImportNotFound) => {
+                match self.1.locate_in(name, from, files) {
+                    Err(second) if second.code() == Some(ErrorCode::ImportNotFound) => {
+                        Err(Error::new(ErrorCode::ImportNotFound, format!("{}; {}", first.reason(), second.reason())))
+                    }
+                    second => second,
                 }
-                second => second,
-            },
+            }
             // A package found in a folder: the other locator's comes first, if it has the same files.
             Ok(scanned) if scanned.scanned => match self.1.locate_in(name, from, files) {
                 Ok(found) => Ok(Location { same_as: Some(scanned.dir), ..found }),
-                Err(e) if matches!(e.code(), ErrorCode::ImportNotFound | ErrorCode::UndeclaredPackage) => Ok(scanned),
+                Err(e) if matches!(e.code(), Some(ErrorCode::ImportNotFound | ErrorCode::UndeclaredPackage)) => {
+                    Ok(scanned)
+                }
                 Err(e) => Err(e),
             },
             found => found,

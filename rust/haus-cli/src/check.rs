@@ -13,7 +13,8 @@ use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
 use haus_schema::profiles::unchecked_profiles;
-use haus_schema::{CheckOptions, Explicit, MAX_ISSUES, Manifest, Schema, Segment};
+use haus_schema::{CheckOptions, Explicit, MAX_ERRORS, Manifest, Schema, StreamCheck};
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::io::{self, Read, stdout};
 use std::ops::Range;
@@ -29,7 +30,7 @@ struct Report {
     /// Why the file couldn't be read.
     error: Option<String>,
     diagnostics: Vec<Diagnostic>,
-    /// The check stopped at the cap ([`MAX_ISSUES`]): the file may have more.
+    /// The check stopped at the cap ([`MAX_ERRORS`]): the file may have more.
     stopped: bool,
 }
 
@@ -79,13 +80,13 @@ impl Report {
 /// What checking standard input shows as it goes.
 enum Shown<'a> {
     Diagnostic(&'a Diagnostic),
-    /// The value starting on this line had more issues than the cap.
+    /// The check stopped at the cap, in the value starting on this line.
     Stopped(usize),
 }
 
 /// The note that a check stopped at the cap (spec §14, "Every error").
 fn stopped_note(name: &str) -> String {
-    format!("note: {name}: stopped after {MAX_ISSUES} problems; there may be more\n\n")
+    format!("note: {name}: stopped after {MAX_ERRORS} errors; there may be more\n\n")
 }
 
 /// Where a data file's schema is.
@@ -113,6 +114,14 @@ type Loaded = Result<Rc<Schema>, Rc<haus_schema::Error>>;
 struct Checking {
     schema: Rc<Schema>,
     type_name: String,
+}
+
+impl Checking {
+    /// Whether the type is a `Stream` (without parameters): checked item by item.
+    fn stream(&self) -> bool {
+        (self.schema.definition(&self.type_name))
+            .is_some_and(|d| d.params.is_empty() && self.schema.instance(d.template).stream)
+    }
 }
 
 pub fn run(args: &CheckArgs, color: Color) -> Status {
@@ -170,7 +179,7 @@ fn fail(json: bool, failure: Failure) -> Status {
 /// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`.
 pub(crate) fn explicit(args: &PackageArgs) -> Result<Explicit, Failure> {
     let given = |flag: &str, arg: &str, e: haus_schema::Error| Failure {
-        code: e.code(),
+        code: diagnostic::schema_code(&e),
         message: format!("{flag} {arg}: {e}"),
         hint: e.hint().to_owned(),
     };
@@ -346,21 +355,29 @@ impl Checker {
     }
 
     /// A data file: syntax errors, then what its schema finds, and whether
-    /// that stopped at the cap.
+    /// that stopped at the cap. A `Stream` is checked item by item: a syntax
+    /// error ends its check, after the issues of the items before it.
     fn check_data(&mut self, adjacent: Option<PathBuf>, bytes: &[u8]) -> (Option<String>, Vec<Diagnostic>, bool) {
         let text = match diagnostic::utf8(bytes) {
             Ok(text) => text,
             Err(d) => return (None, vec![*d], false),
         };
-        if let Err(e) = haus::parse_with(text, &self.limits) {
-            return (None, vec![Diagnostic::syntax(&e, Some(text))], false);
-        }
-        match self.checking(adjacent) {
-            None => (None, vec![], false),
-            Some((label, Err(diagnostics))) => (Some(label), diagnostics, false),
-            Some((label, Ok(c))) => {
+        let syntax = haus::parse_with(text, &self.limits).err();
+        match (syntax, self.checking(adjacent)) {
+            (Some(e), checking) if !matches!(&checking, Some((_, Ok(c))) if c.stream()) => {
+                (None, vec![Diagnostic::syntax(&e, Some(text))], false)
+            }
+            (_, None) => (None, vec![], false),
+            (_, Some((label, Err(diagnostics)))) => (Some(label), diagnostics, false),
+            (_, Some((label, Ok(c)))) => {
                 let report = c.schema.check_text_report(&c.type_name, text, &self.options());
-                (Some(label), report.issues.iter().map(|i| Diagnostic::issue(i, text)).collect(), report.stopped)
+                let diagnostics = (report.issues.iter())
+                    .map(|i| match i.syntax() {
+                        Some(e) => Diagnostic::syntax(e, Some(text)),
+                        None => Diagnostic::issue(i, text),
+                    })
+                    .collect();
+                (Some(label), diagnostics, report.stopped)
             }
         }
     }
@@ -383,7 +400,7 @@ impl Checker {
                     false => format!("the schema {} does not exist", output::shown(&r.file)),
                     true => format!("cannot load the schema {}: {}", output::shown(&r.file), e.reason()),
                 };
-                Err(vec![Diagnostic::new(Severity::Error, e.code(), message)])
+                Err(vec![Diagnostic::new(Severity::Error, diagnostic::schema_code(&e), message)])
             }
             Ok(schema) if schema.definition(&r.type_name).is_none() => {
                 let message = format!("the schema {} has no type {}", output::shown(&r.file), r.type_name);
@@ -397,11 +414,12 @@ impl Checker {
     /// Standard input, value by value: `show` gets each diagnostic as soon
     /// as its value is complete, with its place in the whole stream. Its
     /// schema is the one given with --schema, loaded once the first value
-    /// is complete. A type that isn't a
-    /// `Stream` gets the first value, and an error at the second. `stopped`
-    /// is told when a value's check stopped at the cap (the line it starts
-    /// on). Returns why the input couldn't be read, if it couldn't; fails if
-    /// `show` does.
+    /// is complete. A `Stream` type checks each value as it arrives, with one
+    /// cap on errors for the whole stream (spec §14, "Every error"); a type
+    /// that isn't one gets the first value, and an error at the second.
+    /// `stopped` is told when the check stopped at the cap (at the line of
+    /// the value it stopped in). Returns why the input couldn't be read, if
+    /// it couldn't; fails if `show` does.
     fn check_stream(
         &mut self,
         input: impl Read,
@@ -409,8 +427,12 @@ impl Checker {
     ) -> io::Result<Option<String>> {
         let options = haus::stream::Options { limits: self.limits, ..Default::default() };
         let mut pieces = Pieces::new(input, options);
-        // Found at the first value; then None if there is none, or after an error that ends the checks.
-        let mut checking: Option<Option<Checking>> = None;
+        // Found at the first value: what the stream is checked against, if anything.
+        let found: OnceCell<Option<Checking>> = OnceCell::new();
+        // For a Stream type: its values' check, one for the whole stream.
+        let mut stream: Option<StreamCheck> = None;
+        // Whether values are still checked (not after an error that ends the checks).
+        let mut checking = true;
         let mut seen = 0;
         while let Some(piece) = pieces.next() {
             let piece = match piece {
@@ -421,44 +443,64 @@ impl Checker {
                 }
                 Err(e) => return Ok(Some(e.to_string())),
             };
-            if checking.is_none() {
-                let (found, diagnostics) = match self.checking(None) {
+            if found.get().is_none() {
+                let (c, diagnostics) = match self.checking(None) {
                     Some((_, Ok(c))) => (Some(c), vec![]),
                     Some((_, Err(diagnostics))) => (None, diagnostics),
                     None => (None, vec![]),
                 };
                 diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
-                checking = Some(found);
+                let c = found.get_or_init(|| c).as_ref();
+                checking = c.is_some();
+                stream =
+                    c.filter(|c| c.stream()).and_then(|c| c.schema.check_stream(&c.type_name, &self.options()).ok());
             }
-            if let Some(Some(c)) = &checking {
-                let (diagnostics, more, stopped) = self.check_piece(c, &piece, seen);
-                diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
-                if stopped {
-                    show(Shown::Stopped(piece.line))?;
+            match (found.get(), stream.as_mut()) {
+                (_, _) if !checking => {}
+                (_, Some(s)) => {
+                    let diagnostics: Vec<Diagnostic> = (piece.values.iter())
+                        .flat_map(|v| s.check_text(v, &piece.text))
+                        .map(|i| {
+                            let span = i.span.clone().unwrap_or(0..0);
+                            piece.place(Diagnostic::issue(&i, &piece.text), span)
+                        })
+                        .collect();
+                    diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
+                    if s.done() {
+                        if s.stopped() {
+                            show(Shown::Stopped(piece.line))?;
+                        }
+                        checking = false;
+                    }
                 }
-                // --first: the stream's first error ends its checks.
-                let failed = diagnostics.iter().any(|d| d.severity == Severity::Error);
-                if !more || (self.first && failed) {
-                    checking = Some(None);
+                (Some(Some(c)), None) => {
+                    let (diagnostics, more, stopped) = self.check_piece(c, &piece, seen);
+                    diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
+                    if stopped {
+                        show(Shown::Stopped(piece.line))?;
+                    }
+                    // --first: the first error ends the checks.
+                    let failed = diagnostics.iter().any(|d| d.severity == Severity::Error);
+                    checking = more && !(self.first && failed);
                 }
+                _ => {}
             }
             seen += piece.values.len();
         }
         Ok(None)
     }
 
-    /// What the schema finds in a value of the stream, after `seen` others;
-    /// whether the values after it are still to be checked; and whether its
-    /// check stopped at the cap.
+    /// What the schema finds in a value of a stream whose type isn't a
+    /// `Stream` (or has parameters), after `seen` others; whether the values
+    /// after it are still to be checked; and whether its check stopped at the cap.
     fn check_piece(&self, c: &Checking, piece: &Piece, seen: usize) -> (Vec<Diagnostic>, bool, bool) {
         let Some(def) = c.schema.definition(&c.type_name) else { return (vec![], false, false) };
-        let stream = c.schema.instance(def.template).stream;
         // A type with parameters can't describe a whole file: said once, at the first value.
-        let more = def.params.is_empty() && (stream || seen == 0);
+        let more = def.params.is_empty() && seen == 0;
         if piece.values.is_empty() && seen > 0 {
             return (vec![], more, false);
         }
-        if !stream && seen > 0 {
+        if seen > 0 {
             let message = format!("expected one value ({} is not a Stream), found more than one", c.type_name);
             let mut d = Diagnostic::new(Severity::Error, ErrorCode::NotOneValue, message);
             d.path = Some("$".to_owned());
@@ -468,10 +510,7 @@ impl Checker {
         let diagnostics = report
             .issues
             .into_iter()
-            .map(|mut i| {
-                if let (true, Some(Segment::Index(j))) = (stream, i.path.first_mut()) {
-                    *j += seen;
-                }
+            .map(|i| {
                 let span = i.span.clone().unwrap_or(0..0);
                 piece.place(Diagnostic::issue(&i, &piece.text), span)
             })

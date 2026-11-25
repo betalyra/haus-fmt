@@ -10,6 +10,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.hausfmt.Codec;
@@ -44,7 +46,8 @@ final class Vectors {
    *   <li>{@code Accept}: {@code value} (haus text of {@code type}) is accepted, and encoding what
    *       the codec decoded writes exactly {@code output}, or {@code value} when there is none;
    *   <li>{@code Reject}: {@code value} is valid for the schema of {@code type}, and the codec
-   *       rejects it with {@code codec-rejected}, at the value.
+   *       rejects it with {@code codec-rejected}, at the value; with {@code looser: ["T", …]},
+   *       also with a codec for each type {@code T} that accepts every value of its schema.
    * </ul>
    */
   static Stream<DynamicTest> run(String extension, String profile, Map<String, Codec<?>> codecs) {
@@ -82,6 +85,19 @@ final class Vectors {
             assertTrue(e.path() == null || e.path().equals("$"), e.getMessage());
             e = assertThrows(HausException.class, () -> ty.decode(parsed, DecodeOptions.DEFAULT.withCodecs(all)));
             assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
+            // With looser codecs of the application's for the types named, the type's codec still
+            // rejects it: a profile's rule is checked on the values the schema decoded (spec §13.4).
+            if (r.containsKey("looser")) {
+              List<Codec<?>> loose = new ArrayList<>(List.of(codec));
+              for (Value n : ((Value.Array) r.get("looser")).items()) {
+                String id = schema.type(((Value.Text) n).value()).id();
+                loose.add(Codec.of(id, Value.class, part -> part, part -> part));
+              }
+              DecodeOptions looser = DecodeOptions.DEFAULT.withCodecs(Codecs.of(loose));
+              e = assertThrows(HausException.class, () -> ty.decode(parsed, looser));
+              assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
+              assertTrue(e.path() == null || e.path().equals("$"), e.getMessage());
+            }
             break;
           default:
             throw new AssertionError("unknown vector " + x.tag());

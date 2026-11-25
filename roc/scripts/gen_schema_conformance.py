@@ -149,8 +149,16 @@ modules.append("StreamTyped")
 (OUT / "StreamTyped.roc").write_text(haus_gen("roc", str(typed_schema), "--module", "StreamTyped"), encoding="utf-8")
 typed_text = typed_schema.read_text(encoding="utf-8")
 typed_streams = dict(re.findall(r"^type\s+([A-Z][A-Za-z0-9_]*)\s*=\s*Stream\s+([A-Z][A-Za-z0-9_]*)\s*$", typed_text, re.M))
+# Items of a prelude type decode with the package's own decoders.
+PRELUDE_CODERS = {"String": ("Decode.str", "Encode.str")}
+
+
+def item_coders(item: str) -> tuple[str, str]:
+    return PRELUDE_CODERS.get(item, (f"StreamTyped.decode_{snake(item)}", f"StreamTyped.encode_{snake(item)}"))
+
+
 typed_arms = "".join(
-    f"\t{roc_str(t)} => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_{snake(item)}), StreamTyped.encode_{snake(item)}))\n"
+    "\t{} => Decoded(encoded_items(Decode.all(text, {}), {}))\n".format(roc_str(t), *item_coders(item))
     if (item := typed_streams.get(t))
     else f"\t{roc_str(t)} => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_{snake(t)}), StreamTyped.encode_{snake(t)}))\n"
     for t in re.findall(r"^type\s+([A-Z][A-Za-z0-9_]*)\s*=", typed_text, re.M)

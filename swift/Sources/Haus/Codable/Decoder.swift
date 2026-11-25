@@ -48,7 +48,10 @@ func decodeMaybe<T: Decodable>(_ type: T.Type, _ d: SchemaDecoder, _ element: Sc
 @inline(never)
 func decodeSecret<T: Decodable>(_ type: T.Type, _ d: SchemaDecoder, _ item: SchemaNode) throws -> T {
     guard T.self is any SecretCoding.Type else { throw d.fail(.typeMismatch, secretNeeded) }
-    let inside = SchemaDecoder(d.value, item, d.state, at: d, nil, nil)
+    // The schema decoded it hidden (spec §15); the Swift `Secret` hides it from here on.
+    var value = d.value
+    if case .secret(let hidden) = value { value = hidden.reveal() }
+    let inside = SchemaDecoder(value, item, d.state, at: d, nil, nil)
     inside.secret = true
     do {
         return try T(from: inside)

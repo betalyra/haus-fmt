@@ -109,6 +109,8 @@ struct Walk<S: Spelling> {
             } else {
                 try push(.payload(tag: tag), values: args, &out)
             }
+        case .secret:
+            throw fail(.cannotEncode, secretRefused)
         default:
             if level == .writer { try checkLeaf(v) }
             spelling.leaf(v, to: &out)
@@ -249,7 +251,7 @@ struct HausSpelling: Spelling {
             appendHex(bytes, to: &out)
             out.append(ASCII.quote)
         case .variant(let tag, _): out += tag.name.utf8
-        case .array, .record: break
+        case .array, .record, .secret: break
         }
     }
 
@@ -313,7 +315,7 @@ struct SelfDescribingSpelling: Spelling {
         case .variant(let tag, _):
             tagMember(tag, &out)
             out.append(ASCII.closeBrace)
-        case .array, .record:
+        case .array, .record, .secret:
             break
         }
     }

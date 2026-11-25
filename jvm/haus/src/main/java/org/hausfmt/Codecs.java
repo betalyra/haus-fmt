@@ -2,6 +2,7 @@ package org.hausfmt;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,7 +48,11 @@ public final class Codecs {
     return byId.isEmpty();
   }
 
-  /** The codec for a named type without arguments, or a std/time type; null if none. */
+  /**
+   * The codec for a named type without arguments: a type of the schema's files or packages, of
+   * std/time, or of the prelude (a codec for {@code prelude#Decimal} applies to every {@code
+   * Decimal}, spec §13.4); null if none.
+   */
   Codec<?> forType(SchemaTypes.Typ t) {
     if (byId.isEmpty()) {
       return null;
@@ -58,7 +63,26 @@ public final class Codecs {
     if (t.kind == SchemaTypes.Kind.TIME) {
       return byId.get("std/time#" + t.name);
     }
-    return null;
+    String prelude = PRELUDE_IDS.get(t.kind);
+    return prelude == null ? null : byId.get(prelude);
+  }
+
+  /** The ids of the prelude's types without parameters, by kind: {@code prelude#Decimal}. */
+  private static final Map<SchemaTypes.Kind, String> PRELUDE_IDS = preludeIds();
+
+  private static Map<SchemaTypes.Kind, String> preludeIds() {
+    Map<SchemaTypes.Kind, String> ids = new EnumMap<>(SchemaTypes.Kind.class);
+    for (SchemaTypes.Kind k : SchemaTypes.Kind.values()) {
+      if (k.builtin != null) {
+        ids.put(k, "prelude#" + k.builtin);
+      }
+    }
+    return Collections.unmodifiableMap(ids);
+  }
+
+  /** The type ids of the codecs, in the order they were given. */
+  Collection<String> ids() {
+    return byId.keySet();
   }
 
   @Override

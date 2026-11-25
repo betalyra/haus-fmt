@@ -816,6 +816,7 @@ func describeJSON(_ j: HausValue) -> String {
     case .variant("True", _): "true"
     case .variant("False", _): "false"
     case .variant, .bytes: "null"
+    case .secret: "a Secret"
     }
 }
 

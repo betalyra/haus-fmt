@@ -85,9 +85,10 @@ func FuzzSchemaParse(f *testing.F) {
 				if err != nil {
 					continue
 				}
-				// Decoding what decoding gave gives it again.
+				// Encoding what decoding gave gives it again, its secrets
+				// written in full.
 				again, err := ty.Encode(out)
-				if err != nil || !haus.Equals(again, out) {
+				if err != nil || !haus.Equals(again, revealed(out)) {
 					t.Fatalf("%s: %v decodes to %v, which encodes to %v (%v)", d.Name, v, out, again, err)
 				}
 			}
@@ -134,7 +135,7 @@ func FuzzDecode(f *testing.F) {
 						continue
 					}
 					again, err := ty.Decode(out)
-					if err != nil || !haus.Equals(again, out) {
+					if err != nil || !haus.Equals(revealed(again), revealed(out)) {
 						t.Fatalf("%s: %v decodes to %v, which decodes to %v (%v)", d.Name, v, out, again, err)
 					}
 				}
@@ -204,7 +205,7 @@ func FuzzSchemaJSON(f *testing.F) {
 		if err != nil {
 			t.Fatalf("%s: read back %s: %v", ty.Name(), out, err)
 		}
-		if !haus.Equals(back, v) {
+		if !haus.Equals(revealed(back), revealed(v)) {
 			t.Fatalf("%s: %s reads back to another value", ty.Name(), out)
 		}
 	})

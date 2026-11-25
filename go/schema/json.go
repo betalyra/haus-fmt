@@ -934,6 +934,9 @@ func (jw *jsonWriter) value(v haus.Value, t *typ) error {
 	case kMaybe:
 		return jw.maybe(v, rt)
 	case kSecret:
+		if s, ok := v.(haus.Secret); ok {
+			v = s.Reveal()
+		}
 		return jw.value(v, rt.elem)
 	case kRecord:
 		if r, ok := v.(haus.Record); ok {

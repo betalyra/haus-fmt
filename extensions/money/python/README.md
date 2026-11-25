@@ -28,3 +28,12 @@ s["Order"].parse("{ total: Money(19.90, Eur) }")  # HausDecodeError: Eur is not 
 so a `Money` is accepted exactly when its currency is. The codec keeps the value: the amount is
 its exact `Decimal` text (`"19.90"`), and a currency is its tag (`"EUR"`) instead of the
 `Unknown` the schema alone gives. The rule: [`profiles/iso.md`](https://github.com/betalyra/haus-fmt/tree/main/extensions/money/profiles/iso.md).
+
+The group has a codec for each type (`IsoCurrency`, `IsoMoney`). `IsoMoney` keeps the `Money` as it
+is, and checks the rule on the `Money` the schema decoded (its `check`), so an application that sets
+a codec of its own for `Currency` keeps the rule for `Money`: `Money(19.90, Bitcoin)` is rejected
+whatever that codec accepts.
+
+```python
+codecs = {haus_money.CURRENCY: MyCurrency(), haus_money.MONEY: haus_money.IsoMoney()}
+```

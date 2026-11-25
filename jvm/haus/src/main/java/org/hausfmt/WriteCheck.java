@@ -112,6 +112,15 @@ abstract class WriteCheck {
     }
   }
 
+  /**
+   * The error of a writer that doesn't apply a secret's schema, given a {@link Value.Secret} at
+   * {@code at} (spec §15, "Hiding"): {@code cannot-encode}, without the value.
+   */
+  static HausException secretRefused(Path at) {
+    return at.error(ErrorCode.CANNOT_ENCODE,
+        "a Secret, which is written only with its schema (SchemaType.encode): its value is not shown");
+  }
+
   /** The error for a string or key with an unpaired surrogate, here. */
   final HausException notEncodable(String what) {
     return path.error(ErrorCode.CANNOT_ENCODE, "a " + what + " with an unpaired surrogate, which has no UTF-8 form");

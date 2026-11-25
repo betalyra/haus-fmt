@@ -325,8 +325,8 @@ def test_the_suite_runs_core_cases() -> None:
         f" ({len(npm)} npm, {len(SKIPPED) - len(npm)} for the OS or the user);"
         f" {len(TREES) - len(TREE_SKIPPED)} run again with file trees"
     )
-    assert len(ALL) == 133, "test-suite/packages/cases.haus has 133 cases"
-    assert len([c for c in ALL if c.ecosystem == "core"]) == 87
+    assert len(ALL) == 136, "test-suite/packages/cases.haus has 136 cases"
+    assert len([c for c in ALL if c.ecosystem == "core"]) == 90
     assert len(npm) == 46
     assert len({c.name for c in ALL}) == len(ALL), "case names are unique"
     assert all(isinstance(c.mode, Explicit) for c in RUN)

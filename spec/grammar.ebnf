@@ -134,8 +134,9 @@ module_char ::= [^ \t#x0A#x0D(]
                    errors). A module that starts with "./" or "../" and isn't
                    a path (./a/../b, ./a/, ./a//b, ./.x, ./) is a syntax error;
                    one that starts with "." but not with "./" or "../"
-                   (.../a) is unknown-module; any other word where a module
-                   belongs (foo/bar) is a syntax error. *)
+                   (.../a, .., .x) is unknown-module; "." alone, and any
+                   other word where a module belongs (foo/bar, Lib/a-b), is a
+                   syntax error. *)
 package_module ::= "@" segment "/" segment [ "@" major ]
 segment     ::= [a-z0-9] [a-z0-9._-]*                    (* npm's rules for scoped names, lowercase; not node_modules *)
 major       ::= "0" | [1-9] [0-9]*                        (* a major version only: not @1.1, not @01 *)

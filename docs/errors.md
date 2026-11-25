@@ -38,7 +38,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **JSON:** [json-syntax](#json-syntax), [unpaired-surrogate](#unpaired-surrogate), [haus-json-form](#haus-json-form), [haus-json-version](#haus-json-version), [haus-json-number](#haus-json-number), [haus-json-bytes](#haus-json-bytes), [invalid-tag](#invalid-tag), [invalid-base64](#invalid-base64), [missing-member](#missing-member), [unexpected-member](#unexpected-member), [no-json-form](#no-json-form)
 
-**Hints and warnings:** [unknown-attribute](#unknown-attribute), [deprecated](#deprecated), [unlisted-field](#unlisted-field), [unlisted-tag](#unlisted-tag), [missing-codec](#missing-codec)
+**Hints and warnings:** [unknown-attribute](#unknown-attribute), [deprecated](#deprecated), [unlisted-field](#unlisted-field), [unlisted-tag](#unlisted-tag), [missing-codec](#missing-codec), [unused-codec](#unused-codec)
 
 ## invalid-utf8
 
@@ -812,7 +812,7 @@ type A = { @deprecated ...B }
 
 ## unknown-module
 
-*Imports.* An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).
+*Imports.* An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf).
 
 **Reported at:** The import, at its `import`. *(Informative, §8.)*
 
@@ -1194,7 +1194,7 @@ type Root = { key: Secret String }
 
 *Decoding and encoding.* A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
 
-**Reported at:** The place of the codec's type: of the innermost codec that rejects (§13.4).
+**Reported at:** The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
 
 For example: Money(1, US) decoded with the codec of the profile @haus-fmt/money/iso: US is no ISO 4217 currency.
 
@@ -1202,9 +1202,9 @@ For example: Money(1, US) decoded with the codec of the profile @haus-fmt/money/
 
 ## cannot-encode
 
-*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
+*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
 
-**Reported at:** The place of the value in the type being encoded. Building a value in code: informative (§11).
+**Reported at:** The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
 
 For example: encode(h.Int, 5): Int is a bigint, 5 is a number.
 
@@ -1326,7 +1326,7 @@ Read as self-describing JSON:
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11).
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.
 
 **Reported at:** The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
 
@@ -1466,3 +1466,13 @@ Gren
 For example: a schema with `import @haus-fmt/money (Money)`, compiled without the iso codec: `@haus-fmt/money@1#Currency` has profiles (iso), but no codec is set for it.
 
 **Fix:** Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.
+
+## unused-codec
+
+*Hints and warnings.* A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
+
+**Reported at:** Nowhere: it is about the codecs the application set, reported once per id.
+
+For example: a codec set for `@haus-fmt/money@2#Money`, with a schema that imports `@haus-fmt/money@1`.
+
+**Fix:** Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them.

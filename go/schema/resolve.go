@@ -84,6 +84,9 @@ type Schema struct {
 	byName      map[string]int
 	warnings    []*haus.Error
 	packages    []Package
+	// ids are the ids of the types of every file the schema loaded, its
+	// own and those of the files and packages it imports (UnusedCodecs).
+	ids map[string]bool
 }
 
 // Parse reads a schema from text. Its relative imports fail with the code
@@ -331,6 +334,12 @@ func (l *loader) schema(root int) *Schema {
 	}
 	for i, d := range s.definitions {
 		s.byName[d.Name] = i
+	}
+	s.ids = map[string]bool{}
+	for ui, unit := range l.units {
+		for d := range unit.file.types {
+			s.ids[l.defID(ui, d)] = true
+		}
 	}
 	for _, w := range u.file.warnings {
 		line, col := lineCol(u.text, w.pos)

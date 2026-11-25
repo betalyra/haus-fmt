@@ -1,15 +1,17 @@
 //! The checker suite (test-suite/check/cases.haus, test-suite/README.md
 //! "Checker suite", spec §14, §15, §16): the warnings of a schema file, and
-//! the hints and errors of data checked against a type, in the order of
-//! their places.
+//! the hints and errors of data checked against a type, compared as
+//! multisets of (code, place): no order, each as often as listed.
 //!
 //! - `Schema { schema, warnings }`: the schema loads, with exactly the
 //!   warnings `Warning(code, line, column)`.
-//! - `Data { schema, type, data, issues }`: `check_text` gives exactly the
-//!   issues `Hint(code, path)` / `Error(code, path)`.
+//! - `Data { schema, type, data, issues, first? }`: checking the text
+//!   (`check_text_report`, stopping at the first error with `first: True`)
+//!   gives exactly the issues `Hint(code, path)` / `Error(code, path)`, and
+//!   `Syntax(code, line, column)` for a syntax or limit error of the text.
 
 use haus::{Value, canonical};
-use haus_schema::{Schema, Severity};
+use haus_schema::{CheckOptions, Schema, Severity};
 use std::path::Path;
 
 /// A string field of a case.
@@ -31,41 +33,50 @@ fn show(v: &Value) -> String {
     std::iter::once(tag.to_string()).chain(args).collect::<Vec<_>>().join(" ")
 }
 
-/// The entries of the array field `key`, shown.
+/// The entries of the array field `key`, shown, as a multiset (sorted).
 fn entries(fields: &Value, key: &str) -> Vec<String> {
     match fields.get(key) {
-        Some(Value::Array(items)) => items.iter().map(show).collect(),
+        Some(Value::Array(items)) => sorted(items.iter().map(show).collect()),
         _ => panic!("not a case: {}", canonical(fields)),
     }
 }
 
-/// The schema's warnings, in the order of their places.
-fn warnings(schema: &Schema) -> Vec<String> {
-    let mut warnings: Vec<_> = schema.warnings().iter().collect();
-    warnings.sort_by_key(|w| w.position());
-    warnings
-        .iter()
-        .map(|w| match w.position() {
-            Some((line, column)) => format!("Warning {} {line} {column}", w.code()),
-            None => format!("Warning {} (no position: {})", w.code(), w.reason()),
-        })
-        .collect()
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
 }
 
-/// The issues of checking `data` as `ty`, in the order of their places.
-fn issues(schema: &Schema, ty: &str, data: &str) -> Vec<String> {
-    let mut issues = schema.check_text(ty, data);
-    issues.sort_by_key(|i| i.position.map(|p| (p.line, p.column)));
-    issues
-        .iter()
-        .map(|i| {
-            let severity = match i.severity {
-                Severity::Hint => "Hint",
-                Severity::Error => "Error",
-            };
-            format!("{severity} {} {}", i.code, i.path_string())
-        })
-        .collect()
+/// The schema's warnings, as a multiset.
+fn warnings(schema: &Schema) -> Vec<String> {
+    sorted(
+        schema
+            .warnings()
+            .iter()
+            .map(|w| {
+                let code = w.code().expect("a warning has a code");
+                match w.position() {
+                    Some((line, column)) => format!("Warning {code} {line} {column}"),
+                    None => format!("Warning {code} (no position: {})", w.reason()),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The issues of checking `data` as `ty`, as a multiset.
+fn issues(schema: &Schema, ty: &str, data: &str, first: bool) -> Vec<String> {
+    let report = schema.check_text_report(ty, data, &CheckOptions { first, ..CheckOptions::default() });
+    sorted(
+        report
+            .issues
+            .iter()
+            .map(|i| match (i.syntax(), i.severity) {
+                (Some(e), _) => format!("Syntax {} {} {}", e.code, e.line, e.column),
+                (None, Severity::Hint) => format!("Hint {} {}", i.code, i.path_string()),
+                (None, Severity::Error) => format!("Error {} {}", i.code, i.path_string()),
+            })
+            .collect(),
+    )
 }
 
 #[test]
@@ -81,11 +92,14 @@ fn checker_suite() {
             let source = text(fields, "schema");
             let schema = match Schema::parse(source) {
                 Ok(schema) => schema,
-                Err(e) => return Some(format!("{tag} {source:?}: the schema doesn't load: {} ({e})", e.code())),
+                Err(e) => return Some(format!("{tag} {source:?}: the schema doesn't load: {:?} ({e})", e.code())),
             };
+            let first = matches!(fields.get("first"), Some(Value::Variant { tag, .. }) if tag == "True");
             let (got, want) = match tag.as_str() {
                 "Schema" => (warnings(&schema), entries(fields, "warnings")),
-                "Data" => (issues(&schema, text(fields, "type"), text(fields, "data")), entries(fields, "issues")),
+                "Data" => {
+                    (issues(&schema, text(fields, "type"), text(fields, "data"), first), entries(fields, "issues"))
+                }
                 _ => panic!("not a case: {}", canonical(c)),
             };
             (got != want).then(|| {

@@ -71,7 +71,7 @@ impl App {
     fn rejected(&self, code: ErrorCode) -> String {
         let e = self.load().expect_err("rejected");
         let message = e.to_string();
-        assert_eq!(e.code(), code, "{message}");
+        assert_eq!(e.code().unwrap(), code, "{message}");
         assert!(!message.contains("API_TOKEN") && !message.contains("hunter2"), "{message}");
         message
     }
@@ -163,7 +163,7 @@ fn build_scripts_check_the_package_too() {
     let app = App::importing(&[("package.haus", MANIFEST)]);
     symlink(app.path("secret/creds.schema.haus"), app.path(PKG).join("schema.haus")).unwrap();
     let e = Packages::none().with(&app.path(PKG), "acme_evil").err().expect("rejected");
-    assert_eq!(e.code(), ErrorCode::PackagePath);
+    assert_eq!(e.code().unwrap(), ErrorCode::PackagePath);
     assert!(!e.to_string().contains("API_TOKEN"), "{e}");
 }
 
@@ -171,7 +171,7 @@ fn build_scripts_check_the_package_too() {
 fn imports_name_only_major_versions() {
     for v in ["1.1", "1.1.0", "01", "x", ""] {
         let e = Schema::parse(&format!("import @haus-fmt/money@{v} (Money)\ntype A = Money")).expect_err(v);
-        assert_eq!(e.code(), ErrorCode::ImportVersion, "@{v}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "@{v}: {e}");
     }
     let e = Schema::parse("import @haus-fmt/money@1.1 (Money)\ntype A = Money").unwrap_err();
     assert_eq!(e.to_string(), "1:1: @haus-fmt/money@1.1: an import names only the major version (@haus-fmt/money@1)");
@@ -179,7 +179,7 @@ fn imports_name_only_major_versions() {
     // `@0` and `@10` are major versions: the import is checked against the package (none here).
     for v in ["0", "10"] {
         let e = Schema::parse(&format!("import @haus-fmt/money@{v} (Money)\ntype A = Money")).unwrap_err();
-        assert_eq!(e.code(), ErrorCode::ImportUnavailable, "@{v}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::ImportUnavailable, "@{v}: {e}");
     }
 }
 
@@ -188,12 +188,12 @@ fn a_file_path_has_no_tilde() {
     // Grammar `path`: `./a~b` ends before the `~`, where `(` is expected.
     for module in ["./a~b", "../x~y"] {
         let e = Schema::parse(&format!("import {module} (A)\ntype T = A")).expect_err(module);
-        assert_eq!(e.code(), ErrorCode::SchemaSyntax, "{module}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::SchemaSyntax, "{module}: {e}");
         assert!(e.to_string().starts_with(&format!("1:{}:", module.find('~').unwrap() + 8)), "{module}: {e}");
     }
     // A package's version is read to its end: `1~x` is not a major version.
     let e = Schema::parse("import @a/b@1~x (A)\ntype T = A").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "{e}");
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn relative_imports_stay_inside_the_root() {
     app.load().unwrap();
     // By default the root is app: ../shared goes above it, and nothing is looked at.
     let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportOutsideRoot, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportOutsideRoot, "{e}");
     assert!(e.to_string().contains("go above the build's root"), "{e}");
     // A link out of the root is not followed, nor looked behind: not found,
     // without saying where it points.
@@ -257,7 +257,7 @@ fn relative_imports_stay_inside_the_root() {
     symlink(app.path("secret/creds.schema.haus"), app.path("app/sub/creds.schema.haus")).unwrap();
     write(&app.path("app/main.schema.haus"), "import ./sub/creds (X)\ntype R = X");
     let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportNotFound, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportNotFound, "{e}");
     assert!(e.to_string().contains("creds.schema.haus is a symbolic link"), "{e}");
     assert!(!e.to_string().contains("API_TOKEN") && !e.to_string().contains("secret"), "{e}");
     // Messages show paths relative to the root, never the directories above it.
@@ -277,7 +277,7 @@ fn relative_imports_stay_inside_the_root() {
     let elsewhere = app.path("secret");
     let options = Options { root: Some(&elsewhere), ..Options::default() };
     let e = Schema::load_with(app.path("app/main.schema.haus"), &options).unwrap_err();
-    assert_eq!((e.code(), e.path(), e.position()), (ErrorCode::ImportOutsideRoot, None, None), "{e}");
+    assert_eq!((e.code(), e.path(), e.position()), (Some(ErrorCode::ImportOutsideRoot), None, None), "{e}");
 }
 
 /// A directory that can't be listed can't show how a name in it is spelled:
@@ -296,7 +296,7 @@ fn an_unlistable_directory_lists_nothing() {
     let result = app.load();
     fs::set_permissions(app.path("app/sub"), fs::Permissions::from_mode(0o755)).unwrap();
     let e = result.unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ImportNotFound, "{e}");
+    assert_eq!(e.code().unwrap(), ErrorCode::ImportNotFound, "{e}");
     assert!(e.to_string().contains("can't be listed"), "{e}");
 }
 

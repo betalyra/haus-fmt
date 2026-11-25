@@ -283,7 +283,43 @@ fn check_says_when_it_stopped_at_the_cap() {
         .args(["check", "x.haus"])
         .assert()
         .code(1)
-        .stdout(predicate::str::contains("note: x.haus: stopped after 200 problems; there may be more"));
+        .stdout(predicate::str::contains("note: x.haus: stopped after 200 errors; there may be more"));
+    // On standard input, the cap is one for the whole stream, not one per value.
+    fs::write(dir.path().join("e.schema.haus"), "type Events = Stream { n: Int, m: Int }\n").unwrap();
+    let out = haus()
+        .current_dir(dir.path())
+        .args(["check", "--schema", "e.schema.haus#Events", "-"])
+        .write_stdin("{ n: \"a\", m: \"b\" },\n".repeat(150))
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("note: <stdin>:100: stopped after 200 errors; there may be more"), "{out}");
+    assert!(out.ends_with("Checked 1 file: 200 errors.\n"), "{out}");
+}
+
+#[test]
+fn check_reads_a_stream_item_by_item_up_to_its_syntax_error() {
+    // Spec §14: the items' errors before a syntax error are reported, then the syntax error.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("x.schema.haus"), "type Root = Stream String\n").unwrap();
+    fs::write(dir.path().join("x.haus"), "1,\n\"ok\",\n\"ok\" \"oops\"\n").unwrap();
+    let (code, json) = check_json(dir.path(), &["x.haus"]);
+    assert_eq!(code, 1);
+    let mut all = found(&json);
+    all.sort();
+    let codes: Vec<&str> = all.iter().map(|(_, c, _)| c.as_str()).collect();
+    assert_eq!(codes, ["missing-comma", "type-mismatch"], "{all:?}");
+    let (_, first) = check_json(dir.path(), &["--first", "x.haus"]);
+    let first = found(&first);
+    assert_eq!(first.iter().map(|(_, c, _)| c.as_str()).collect::<Vec<_>>(), ["type-mismatch"], "{first:?}");
+    // A document with a syntax error has that one error.
+    fs::write(dir.path().join("x.schema.haus"), "type Root = Array String\n").unwrap();
+    fs::write(dir.path().join("x.haus"), "[1, \"ok\" \"oops\"]\n").unwrap();
+    let (_, json) = check_json(dir.path(), &["x.haus"]);
+    assert_eq!(found(&json).iter().map(|(_, c, _)| c.as_str()).collect::<Vec<_>>(), ["missing-comma"]);
 }
 
 #[test]

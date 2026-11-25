@@ -617,6 +617,36 @@ pub export fn haus_new_variant(doc: ?*haus_doc, tag: ?[*]const u8, tag_len: usiz
 
 // ── writing and comparing values ─────────────────────────────
 
+/// Every writer refuses a decoded `Secret` (spec §15, "Hiding"):
+/// `cannot-encode`, without the value. HAUS_OK when `vs` hold none. The
+/// walk keeps its own stack (a value may be as deep as it likes here) and
+/// looks at each shared part once (builders share their arguments).
+fn refuseSecrets(vs: []const Value, err: ?*haus_error) c_int {
+    var stack: std.ArrayList(*const Value) = .empty;
+    defer stack.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged(*const Value, void) = .empty;
+    defer seen.deinit(allocator);
+    for (vs) |*x| stack.append(allocator, x) catch return HAUS_OUT_OF_MEMORY;
+    while (stack.pop()) |x| {
+        const gop = seen.getOrPut(allocator, x) catch return HAUS_OUT_OF_MEMORY;
+        if (gop.found_existing) continue;
+        if (isSecret(x)) return failWith(err, .@"cannot-encode", "a Secret is not written without its schema (haus_encode writes it, haus_secret_reveal gives its value)", .{});
+        switch (x.*) {
+            .array => |items| for (items) |*y| stack.append(allocator, y) catch return HAUS_OUT_OF_MEMORY,
+            .record => |fields| for (fields) |*f| stack.append(allocator, &f.value) catch return HAUS_OUT_OF_MEMORY,
+            .variant => |t| for (t.args) |*y| stack.append(allocator, y) catch return HAUS_OUT_OF_MEMORY,
+            else => {},
+        }
+    }
+    return HAUS_OK;
+}
+
+/// `refuseSecrets`' status when it isn't HAUS_OK.
+fn noSecrets(vs: []const Value, err: ?*haus_error) ?c_int {
+    const status = refuseSecrets(vs, err);
+    return if (status == HAUS_OK) null else status;
+}
+
 /// One value in a layout (spec §11), without a line break after it. The
 /// writer checks the limits of spec §7 (`nesting-too-deep`, …).
 pub export fn haus_stringify(value: ?*const haus_value, layout: c_int, indent: c_int, width: c_int, out: ?*?[*]u8, out_len: ?*usize, err: ?*haus_error) c_int {
@@ -624,6 +654,7 @@ pub export fn haus_stringify(value: ?*const haus_value, layout: c_int, indent: c
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
     var options = layoutOf(layout, indent, width) orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(v[0..1], err)) |status| return status;
     var d: Diagnostic = .{};
     options.write = .{ .diagnostic = &d };
     const text = haus.stringify(allocator, v.*, options) catch |e| return report(err, e, &d);
@@ -636,6 +667,7 @@ pub export fn haus_stringify_doc(doc: ?*const haus_doc, layout: c_int, indent: c
     const dc: *const Doc = @ptrCast(@alignCast(doc orelse return HAUS_INVALID_ARGUMENT));
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
     var options = layoutOf(layout, indent, width) orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(dc.values, err)) |status| return status;
     var d: Diagnostic = .{};
     options.write = .{ .diagnostic = &d };
     const text = haus.stringifyAll(allocator, dc.values, options) catch |e| return report(err, e, &d);
@@ -647,6 +679,7 @@ pub export fn haus_value_canonical(value: ?*const haus_value, out: ?*?[*]u8, out
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(v[0..1], err)) |status| return status;
     var d: Diagnostic = .{};
     const text = haus.canonical(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     return give(text, out, out_len);
@@ -657,6 +690,7 @@ pub export fn haus_value_hash(value: ?*const haus_value, out: ?*[65]u8, err: ?*h
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(v[0..1], err)) |status| return status;
     var d: Diagnostic = .{};
     const h = haus.hash(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     @memcpy(o[0..64], &h);
@@ -670,6 +704,7 @@ pub export fn haus_value_equals(a: ?*const haus_value, b: ?*const haus_value, ou
     const x = valueOf(a) orelse return HAUS_INVALID_ARGUMENT;
     const y = valueOf(b) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(&.{ x.*, y.* }, err)) |status| return status;
     var d: Diagnostic = .{};
     o.* = @intFromBool(haus.equals(allocator, x.*, y.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d));
     return HAUS_OK;
@@ -682,6 +717,7 @@ pub export fn haus_value_compare(a: ?*const haus_value, b: ?*const haus_value, o
     const x = valueOf(a) orelse return HAUS_INVALID_ARGUMENT;
     const y = valueOf(b) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(&.{ x.*, y.* }, err)) |status| return status;
     var d: Diagnostic = .{};
     o.* = switch (haus.compare(allocator, x.*, y.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d)) {
         .lt => -1,
@@ -737,6 +773,7 @@ pub export fn haus_to_haus_json(value: ?*const haus_value, out: ?*?[*]u8, out_le
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(v[0..1], err)) |status| return status;
     var d: Diagnostic = .{};
     const text = haus.json.toHausJson(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     return give(text, out, out_len);
@@ -897,9 +934,9 @@ pub export fn haus_type_is_stream(t: ?*const haus_type) c_int {
 }
 
 /// The value a decoded result is, in a new doc.
-/// The tag that marks a decoded `Secret` (spec §15, "Secrets"): not a tag
-/// (`invalid-tag` for every writer, so it is never written by mistake),
-/// told apart by its address. `haus_secret_reveal` gives out the value.
+/// The tag that marks a decoded `Secret` (spec §15, "Secrets"): not a tag,
+/// told apart by its address. Every writer refuses it (`refuseSecrets`,
+/// `cannot-encode`); `haus_secret_reveal` gives out the value.
 const secret_tag: []const u8 = "<redacted>";
 
 fn isSecret(v: *const Value) bool {
@@ -909,7 +946,7 @@ fn isSecret(v: *const Value) bool {
 /// A decoded result as values, each `Secret` as a secret handle.
 fn cValue(arena: std.mem.Allocator, d: Decoded) haus.Error!Value {
     return switch (d) {
-        .secret => |s| .{ .variant = .{ .tag = secret_tag, .args = try arena.dupe(Value, &.{try cValue(arena, s.*)}) } },
+        .secret => |s| .{ .variant = .{ .tag = secret_tag, .args = try arena.dupe(Value, &.{try cValue(arena, s.reveal())}) } },
         .array => |xs| blk: {
             const out = try arena.alloc(Value, xs.len);
             for (xs, out) |x, *slot| slot.* = try cValue(arena, x);
@@ -925,7 +962,10 @@ fn cValue(arena: std.mem.Allocator, d: Decoded) haus.Error!Value {
             for (t.args, out) |x, *slot| slot.* = try cValue(arena, x);
             break :blk .{ .variant = .{ .tag = t.tag, .args = out } };
         },
-        else => haus.decoding.toValue(arena, d),
+        // A codec's host value: what its codec encodes it to, any secret
+        // in it as a secret handle.
+        .host => cValue(arena, try haus.decoding.lower(arena, d, null)),
+        else => haus.decoding.toValue(arena, d, null),
     };
 }
 
@@ -1031,7 +1071,7 @@ const Issues = struct {
 /// Checks a text against a type as a tool does (spec §14): the hints
 /// (`unlisted-field`, `unlisted-tag`, `deprecated`) and every error
 /// (spec §14, "Every error"), in `*out`, in the order of their places in
-/// the text. At most `HAUS_CHECK_MAX_ERRORS` errors per value
+/// the text. At most `HAUS_CHECK_MAX_ERRORS` errors in the whole check
 /// (`haus_issues_stopped`). HAUS_OK when the check ran, whatever it found.
 pub export fn haus_check_text(t: ?*const haus_type, text: ?[*]const u8, len: usize, out: ?*?*haus_issues, err: ?*haus_error) c_int {
     return checkText(t, text, len, out, err, false);
@@ -1066,8 +1106,7 @@ pub export fn haus_issues_count(issues: ?*const haus_issues) usize {
     return h.list.len;
 }
 
-/// 1 when the check stopped at `HAUS_CHECK_MAX_ERRORS` errors in one
-/// value: the rest of the text was not checked. 0 otherwise.
+/// 1 when the check stopped at `HAUS_CHECK_MAX_ERRORS` errors: the rest of the text was not checked. 0 otherwise.
 pub export fn haus_issues_stopped(issues: ?*const haus_issues) c_int {
     const h: *const Issues = @ptrCast(@alignCast(issues orelse return 0));
     return @intFromBool(h.stopped);

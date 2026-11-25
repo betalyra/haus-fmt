@@ -18,7 +18,8 @@ import (
 //   - Accept: value (haus text of type) is accepted, and encoding what the
 //     codec decoded writes exactly output, or value when there is none.
 //   - Reject: value is valid for the schema of type, and the codec rejects
-//     it with codec-rejected, at the value.
+//     it with codec-rejected, at the value; with looser: ["T", …], also
+//     with a codec for each type T that accepts every value of its schema.
 //
 // It returns the number of Accept and Reject vectors.
 func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accepted, rejected int) {
@@ -105,6 +106,28 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 			}
 			if _, err := ty.DecodeWith(value, schema.DecodeOptions{Codecs: set}); !isRejected(err, "") {
 				t.Errorf("%s: got %v, want codec-rejected", text, err)
+			}
+			// With looser codecs of the application's for the types named,
+			// the type's codec still rejects it: a profile's rule is checked
+			// on the values the schema decoded (spec §13.4).
+			if l, ok := r.Get("looser"); ok {
+				loose := []schema.Codec{codec}
+				for _, n := range l.(haus.Array) {
+					part, err := s.Type(string(n.(haus.String)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					loose = append(loose, schema.NewCodec(part.ID(),
+						func(v haus.Value) (haus.Value, error) { return v, nil },
+						func(v haus.Value) (haus.Value, error) { return v, nil }))
+				}
+				looser, err := schema.NewCodecs(loose...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := ty.DecodeWith(value, schema.DecodeOptions{Codecs: looser}); !isRejected(err, "$") {
+					t.Errorf("%s: with looser codecs, got %v, want codec-rejected at $", text, err)
+				}
 			}
 		default:
 			t.Fatalf("unknown vector %s", x.Tag.String())

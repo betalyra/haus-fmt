@@ -766,4 +766,4 @@ export { HausKey, key, ValueEquivalence, ValueOrder } from "./equal.js"
 
 // ── schema files ─────────────────────────────────────────────
 
-export { compileSchemaFile, definitionDoc, fromSchemaFile, schemaDeclarations, withCodecs, type CompiledSchemaFile, type DeclarationOptions, type FromSchemaFileOptions } from "./schema-file.js"
+export { compileSchemaFile, definitionDoc, fromSchemaFile, prelude, schemaDeclarations, withCodecs, type CompiledSchemaFile, type DeclarationOptions, type FromSchemaFileOptions } from "./schema-file.js"

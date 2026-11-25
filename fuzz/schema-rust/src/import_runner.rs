@@ -30,7 +30,7 @@ fn line(l: &str) -> String {
     let options = Options { root: root.as_deref(), ..Options::default() };
     match Schema::load_with(path(entry), &options) {
         Ok(s) => format!("ok {} {}", names(s.definitions()), names(s.imported())),
-        Err(e) => format!("err {}", e.code()),
+        Err(e) => format!("err {}", e.code().map_or("-".to_owned(), |c| c.to_string())),
     }
 }
 

@@ -131,6 +131,8 @@ pub const Code = enum {
     deprecated,
     @"unlisted-field",
     @"unlisted-tag",
+    /// A warning about the application's codecs (§13.4): `decoding.unusedCodecs`.
+    @"unused-codec",
 
     pub fn name(code: Code) []const u8 {
         return @tagName(code);

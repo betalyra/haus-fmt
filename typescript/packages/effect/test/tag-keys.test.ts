@@ -124,6 +124,6 @@ describe("a payload field named _tag", () => {
 
   it("is declared nested", () => {
     expect(Haus.schemaDeclarations(Haus.compileSchemaFile(namesText).file))
-      .toContain(`{ readonly _tag: "Odd"; readonly value: { readonly _tag: number; readonly x?: string } } | { readonly _tag: "Even" } | Haus$.Unknown`)
+      .toContain(`{ readonly _tag: "Odd"; readonly value: { readonly _tag: Haus$.Lookup<C$, "prelude#Int32", number>; readonly x?: Haus$.Lookup<C$, "prelude#String", string> } } | { readonly _tag: "Even" } | Haus$.Unknown`)
   })
 })

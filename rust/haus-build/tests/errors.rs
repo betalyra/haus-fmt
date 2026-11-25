@@ -82,7 +82,51 @@ fn codecs() {
         &Packages::none(),
     )
     .unwrap_err();
-    assert_eq!(e.to_string(), "a codec for test/schema#B, but the schema has no such type (it has test/schema#A)");
+    assert_eq!(
+        e.to_string(),
+        "a codec for test/schema#B, but the schema has no such type (it has test/schema#A, and the prelude's)"
+    );
+    // A codec for a prelude type without parameters is one for a type the schema has (spec §13.4).
+    let decimal = [Codec { id: "prelude#Decimal".into(), path: "crate::Big".into() }];
+    let code = generate("type A = { n: Decimal, ns: Array Decimal }", "test/schema", &decimal, &Packages::none());
+    let code = code.unwrap();
+    assert!(code.contains("pub n: <crate::Big as ::haus::Codec>::Target,"), "{code}");
+    assert!(code.contains("pub ns: ::std::vec::Vec<<crate::Big as ::haus::Codec>::Target>,"), "{code}");
+    for id in ["prelude#Array", "prelude#Nope"] {
+        let codec = [Codec { id: id.into(), path: "crate::Big".into() }];
+        assert!(generate("type A = Int", "test/schema", &codec, &Packages::none()).is_err(), "{id}");
+    }
+    // One codec per id.
+    let twice = [
+        Codec { id: "test/schema#A".into(), path: "crate::A".into() },
+        Codec { id: "test/schema#A".into(), path: "crate::B".into() },
+    ];
+    let e = generate("type A = String", "test/schema", &twice, &Packages::none()).unwrap_err();
+    assert_eq!(e.to_string(), "two codecs for test/schema#A: an id has one codec");
+    // A mistake of the configuration, not of a schema or data: no code (spec §13.4).
+    assert_eq!((e.code(), e.to_json()), (None, None));
+}
+
+#[test]
+fn a_type_with_a_codec_is_named_after_its_host_type() {
+    // Spec §13.4: decoding as the type runs its codec, so its name is the codec's
+    // host type, and the type without the codec (the codec's Base) is `<Name>Base`.
+    let cents = [Codec { id: "test/schema#Money".into(), path: "crate::Cents".into() }];
+    let schema = "type Money = { amount: Decimal }\ntype Order = { total: Money }";
+    let code = generate(schema, "test/schema", &cents, &Packages::none()).unwrap();
+    assert!(code.contains("pub type Money = ::haus::Coded<crate::Cents>;"), "{code}");
+    assert!(code.contains("pub struct MoneyBase {"), "{code}");
+    assert!(code.contains("pub total: <crate::Cents as ::haus::Codec>::Target,"), "{code}");
+    assert!(code.contains("impl MoneyBase {") && code.contains(r#"= "test/schema#Money";"#), "{code}");
+    // Without a codec, the type has its own name.
+    let code = generate(schema, "test/schema", &[], &Packages::none()).unwrap();
+    assert!(code.contains("pub struct Money {") && !code.contains("MoneyBase"), "{code}");
+    // A name the base would take is reported.
+    let taken = generate(&format!("{schema}\ntype MoneyBase = String"), "test/schema", &cents, &Packages::none());
+    assert_eq!(
+        taken.unwrap_err().to_string(),
+        "1:6: Money has a codec, so the type without it would be called MoneyBase, which is taken"
+    );
 }
 
 #[test]

@@ -65,6 +65,12 @@ const Payment = Schema.Struct({ amount: Haus.DecimalAsBigDecimal, at: Haus.Insta
 const order = yield* Haus.decode(schemas.Order, Haus.decimalAsBigDecimal)(text)   // Decimals as BigDecimals
 ```
 
+Every type of the prelude takes a codec too, by its id: `Haus.prelude("Int")`
+is the target (`prelude#Int`), and the codec applies to every `Int` of the
+schema, in packages' types too; the declarations type each through
+`Haus.Lookup`. An outer codec (one for `Money`) receives the host values
+of parts that have codecs of their own, as built inside out (spec §13.4).
+
 A DateTime that std/time can't write (a year beyond 9999) is an encoding
 error: the writer never emits an invalid value. `Schema.BigDecimal`,
 `Schema.DateTimeUtc` and `Schema.DateTimeZoned` work directly too, with the

@@ -17,7 +17,7 @@ const text = readFileSync(schemaPath, "utf8")
 
 const Vector = h.Variant({
   Accept: h.Record({ type: h.String, value: h.String, output: h.Optional(h.String), note: h.Optional(h.String) }),
-  Reject: h.Record({ type: h.String, value: h.String, note: h.Optional(h.String) }),
+  Reject: h.Record({ type: h.String, value: h.String, looser: h.Optional(h.Array(h.String)), note: h.Optional(h.String) }),
 })
 const vectors = parseAll(readFileSync(join(root, "profiles/iso.vectors.haus"), "utf8")).map((v) => h.decode(Vector, v))
 const name = (v: h.Infer<typeof Vector>) => `${v._tag} ${v.type} ${v.value}${v.note ? ` (${v.note})` : ""}`
@@ -49,6 +49,21 @@ describe("the iso vectors", () => {
         // The codec changes no value: it writes what the schema alone decodes; decode, encode, decode is decode.
         expect(encoded).toBe(normal(v.type, v.value))
         expect(h.parse(schema, encoded)).toEqual(decoded)
+      })
+    }
+
+    // `looser`: the application's own codecs for these types, accepting every value of their schema, in place of
+    // the profile's. A codec of the profile that remains still rejects the value (spec §13.4).
+    for (const v of vectors) {
+      if (v._tag !== "Reject" || v.looser === undefined) continue
+      const looserIds = new Set(v.looser.map((t) => `@haus-fmt/money@1#${t}`))
+      const kept = iso.filter((c) => !looserIds.has(c.id))
+      const loose = [...looserIds].map((id) => ({ id, apply: (base: h.AnySchema) => h.refine(base, () => undefined) }))
+      // TypeScript's iso is one codec, for Currency: Money's rule is its currency's. Replacing it replaces the rule
+      // (an application codec for a type with a profile may reject more than the profile, never less, iso.md).
+      it.skipIf(kept.length === 0)(`${name(v)}, with looser codecs for ${v.looser.join(", ")}`, () => {
+        const schema = compileSchemaFile(text, { ...schemaOptions(schemaPath), codecs: [...kept, ...loose] }).schemas[v.type]!
+        expect(() => h.parse(schema, v.value)).toThrow(expect.objectContaining({ code: "codec-rejected" }))
       })
     }
   })

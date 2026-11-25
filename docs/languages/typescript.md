@@ -81,7 +81,9 @@ const { schemas } = compileSchemaFile(schemaText, { ...options, codecs: [...iso,
 h.parse(schemas.Root!, data)   // Money(44.40, Eur): HausDecodeError, codec-rejected at $.total[1]
 ```
 
-Without them, `warnings` lists [`missing-codec`](/docs/errors#missing-codec) for each profiled type the schema reaches. Write your own with `h.refine` (one more rule) or `h.transform` (another host type). [What haus checks](/docs/checks)
+Without them, `warnings` lists [`missing-codec`](/docs/errors#missing-codec) for each profiled type the schema reaches, and [`unused-codec`](/docs/errors#unused-codec) for a codec whose id no type has (a typo, or `@haus-fmt/money@2#Money` with major 1 imported). Write your own with `h.refine` (one more rule) or `h.transform` (another host type), for any named type: yours, a package's, `std/time#Instant` or `prelude#Decimal`. [What haus checks](/docs/checks)
+
+- **Checking data.** `checkText(file, "Root", text)` reports every error and hint with its place (`$.items[2].price`), as editors show them; `{ first: true }` stops at the first error. A `Stream` is checked item by item, so a syntax error comes after the errors of the items before it. The check stops after `MAX_ERRORS` (200) errors, hints not counted, and says so (`stopped`).
 
 - **Streams.** `for await (const o of h.decodeStream(Order, response.body!))` decodes each value as it arrives; `parseStream` reads values without a schema. [Logs and streams](/docs/tours/streams)
 - **JSON.** `h.toJson(Order, order)` gives `{"id":"7","total":"44.40",…}`, the JSON a JSON consumer expects; `h.fromJson` reads it back with the same checks. `importJson` reads any JSON as haus. [Coming from JSON](/docs/from-json)

@@ -158,6 +158,33 @@ describe("codecs", () => {
       expect([...items].map((o) => o.total.minor)).toEqual([1990n, 1990n])
     }).pipe(Effect.runPromise))
 
+  it("every type of the prelude takes a codec, in a package's types too (spec §13.4)", () => {
+    expect(Haus.idOf(Haus.prelude("Int"))).toBe("prelude#Int")
+    expect(Haus.prelude("Decimal")).toBe(Haus.Decimal)
+    const small = Haus.codec(Haus.prelude("Int"), (base) => base.pipe(Schema.check(Schema.makeFilter((n) => (n as bigint) <= 10n || "at most 10"))))
+    type Counts = { readonly n: bigint; readonly all: ReadonlyArray<bigint> }
+    const counts = Haus.compileSchemaFile(`type Counts = { n: Int, all: Array Int }`, { id: "app/counts" }).schemas.Counts as unknown as Haus.Named<
+      Schema.Codec<Counts>,
+      "app/counts#Counts",
+      never,
+      "app/counts#Counts" | "prelude#Int"
+    >
+    expect(Exit.isSuccess(Effect.runSyncExit(Haus.decode(counts, small)(`{ n: 1, all: [2, 3] }`)))).toBe(true)
+    const rejected = Effect.runSync(Effect.flip(Haus.decode(counts, small)(`{ n: 1, all: [2, 30] }`)))
+    expect(rejected).toMatchObject({ path: ["all", 1] })
+    // Decimal inside the package's Money: a string of digits, here at most 2 decimals.
+    const twoDecimals = Haus.codec(Haus.prelude("Decimal"), (base) => base.pipe(Schema.check(Schema.makeFilter((d) => !/\.\d{3,}$/.test(String(d)) || "at most 2 decimals"))))
+    expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, twoDecimals)(text.replace("19.90", "19.999"))))).toBe(true)
+  })
+
+  it("a codec rejecting while encoding is cannot-encode at its type's place, with or without CODEC_REJECTED (spec §13.4)", () => {
+    const plain = Effect.runSync(Haus.decode(Order)(text))
+    const bad = { ...plain, total: { _tag: "Money" as const, values: ["1", "eur"] as const } }
+    const error = Effect.runSync(Effect.flip(Haus.encode(Order, iso)(bad)))
+    // At the currency (encoding names the place in the host value: the payload's `values`).
+    expect(error).toMatchObject({ code: "cannot-encode", path: ["total", "values", 1] })
+  })
+
   it("ids: named types know theirs", () => {
     expect(Haus.idOf(MoneySchema)).toBe("@haus-fmt/money@1#Money")
     expect(Haus.idOf(Haus.Date)).toBe("std/time#Date")

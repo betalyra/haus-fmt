@@ -78,9 +78,9 @@ const normalized = (text: string): string | undefined => {
 
 /**
  * What the generator knows about a tree: the codes of its mistakes (spec
- * §11), places that may or may not be one (a mutated literal, a tag with an
- * unpaired surrogate, which is both an invalid tag and text with no UTF-8
- * form), and the writer's limits (§7) it breaks.
+ * §11; a tag with an unpaired surrogate is `invalid-tag`), places that may or
+ * may not be one (a depth at the limit), and the writer's limits (§7) it
+ * breaks.
  */
 export interface Facts {
   readonly mistakes: string[]
@@ -116,8 +116,8 @@ export function facts(t: Tree): Facts {
         return
       }
       case "v": {
-        if (isLoneSurrogate(t.tag)) f.unsure++
-        else if (!TAG_RE.test(t.tag)) f.mistakes.push("invalid-tag")
+        // A tag with an unpaired surrogate is no tag: invalid-tag, checked before it is encoded (§11).
+        if (!TAG_RE.test(t.tag)) f.mistakes.push("invalid-tag")
         return t.args.forEach(go)
       }
     }
@@ -486,7 +486,7 @@ function pattern(names: readonly string[], outs: readonly string[], f: Facts): s
   const issues = f.mistakes.length + f.unsure
   for (let op = 0; op < 3; op++) {
     // Codes are compared where there is at most one mistake (and, for the writer, limit), and nothing
-    // with two codes: a tag with an unpaired surrogate is both invalid-tag and cannot-encode (§11).
+    // unsure (a depth at the limit).
     const compareCodes = f.unsure === 0 && issues + (op === 2 ? f.limits.length : 0) <= 1
     const token = (x: string) => (x.startsWith("!") ? (compareCodes ? x : "!err") : "ok")
     const kinds = new Map<string, string[]>()

@@ -7,7 +7,7 @@
 
 use crate::check::{self, Failure, value_span};
 use crate::cli::{Color, PackageCheckArgs};
-use crate::diagnostic::{Diagnostic, Severity};
+use crate::diagnostic::{self, Diagnostic, Severity};
 use crate::json::{self, Members, b, n, s};
 use crate::output::{self, Status, count};
 use crate::pieces::Pieces;
@@ -339,7 +339,8 @@ impl Package<'_> {
                                 e.reason()
                             );
                             let at = dep.span.clone().map(|span| (d.text.as_str(), span));
-                            self.report(Diagnostic::new(Severity::Error, e.code(), message), file, at);
+                            let code = diagnostic::schema_code(&e);
+                            self.report(Diagnostic::new(Severity::Error, code, message), file, at);
                         }
                     },
                     _ => {}
@@ -910,16 +911,18 @@ impl Package<'_> {
 }
 
 /// What a vector is (spec §13.3): `Accept { type, value, output?, note? }`
-/// or `Reject { type, value, note? }`, the strings `value` and `output`
-/// each one haus value. With the package's `schema` (None if it doesn't
-/// load), `type` names one of its types without parameters, and an
-/// accepted `value` and its `output` are valid for it, since codecs run
-/// after the schema. The error, at the vector.
+/// or `Reject { type, value, looser?, note? }`, the strings `value` and
+/// `output` each one haus value, `looser` an array of type names. With the
+/// package's `schema` (None if it doesn't load), `type` and each of
+/// `looser` name one of its types without parameters, and an accepted
+/// `value` and its `output` are valid for it, since codecs run after the
+/// schema. The error, at the vector.
 fn vector(value: &Value, schema: Option<&Schema>) -> Result<(), Box<Diagnostic>> {
     let plain = |message: String| {
         Box::new(Diagnostic::new(Severity::Error, ErrorCode::ProfileVectors, message).with_hint(
             "A vector is Accept { type: \"T\", value: \"…\", output: \"…\", note: \"…\" } or Reject { type: \"T\", \
-             value: \"…\", note: \"…\" }: values as haus text for the package's type T; output and note optional.",
+             value: \"…\", looser: [\"U\"], note: \"…\" }: values as haus text for the package's type T; output, \
+             looser and note optional.",
         ))
     };
     let (tag, fields) = match value {
@@ -931,20 +934,33 @@ fn vector(value: &Value, schema: Option<&Schema>) -> Result<(), Box<Diagnostic>>
     };
     let allowed: &[&str] = match tag {
         "Accept" => &["type", "value", "output", "note"],
-        _ => &["type", "value", "note"],
+        _ => &["type", "value", "looser", "note"],
     };
     if let Some((key, _)) = fields.iter().find(|(key, _)| !allowed.contains(&key.as_str())) {
         return Err(plain(match key.as_str() {
             "output" => "only an Accept has an output: a rejected value encodes to nothing".to_owned(),
+            "looser" => "only a Reject has looser: the types whose codecs are made looser".to_owned(),
             key => format!("{tag} has an unknown field {key}: its fields are {}", allowed.join(", ")),
         }));
     }
-    let string = |key: &str| match fields.iter().find(|(k, _)| k == key).map(|(_, v)| v) {
+    let field = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+    let string = |key: &str| match field(key) {
         Some(Value::String(s)) => Ok(Some(s.as_str())),
         Some(_) => Err(plain(format!("the {key} of {tag} is not a string"))),
         None => Ok(None),
     };
     string("note")?;
+    let looser: Vec<&str> = match field("looser") {
+        None => vec![],
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|t| match t {
+                Value::String(s) => Ok(s.as_str()),
+                _ => Err(plain(format!("the looser of {tag} is not an array of type names"))),
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err(plain(format!("the looser of {tag} is not an array of type names"))),
+    };
     let Some(type_name) = string("type")? else {
         return Err(plain(format!("{tag} has no type: the package's type its value is for")));
     };
@@ -972,12 +988,13 @@ fn vector(value: &Value, schema: Option<&Schema>) -> Result<(), Box<Diagnostic>>
     let Some(schema) = schema else { return Ok(()) };
     let types: Vec<&str> =
         schema.definitions().iter().filter(|d| d.params.is_empty()).map(|d| d.name.as_str()).collect();
-    if !types.contains(&type_name) {
-        let why = match schema.definitions().iter().any(|d| d.name == type_name) {
+    let mut named = [("type", type_name)].into_iter().chain(looser.iter().map(|t| ("looser", *t)));
+    if let Some((key, name)) = named.find(|(_, name)| !types.contains(name)) {
+        let why = match schema.definitions().iter().any(|d| d.name == name) {
             true => "a type with parameters",
             false => "not a type of the package",
         };
-        return Err(plain(format!("the type of {tag}, {type_name}, is {why}: one of {}", types.join(", "))));
+        return Err(plain(format!("the {key} of {tag}, {name}, is {why}: one of {}", types.join(", "))));
     }
     if tag == "Accept" {
         for (key, text) in texts.iter().flatten() {

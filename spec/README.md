@@ -549,11 +549,11 @@ Person{name:"Jane Smith",age:28,type:Designer},
 <!-- rule: format.values.place-informative -->
 Bindings SHOULD check when the value is built, so that the mistake is reported where it is made: their constructors then build only haus values. Where these errors are reported, by the constructor or by the writer, and the place they name, is informative. Checking that a value is valid is never checking a limit: limits belong to the writer, and two writers may be configured with different ones.
 
-- a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`;
+- a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`. A tag with an unpaired surrogate (`\uD800` in a JavaScript string) is one of them: it is `invalid-tag`, not `cannot-encode`, as a tag is checked before it is encoded;
 - a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number longer than the number limit is still a number: the writer rejects it (above);
 - a record with a key twice: `duplicate-key`;
   <!-- rule: format.values.bytes-strings-utf8 -->
-- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
+- a string or key with an unpaired surrogate, which has no UTF-8 form (§4), or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
 
 Values checked when they are built can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons.
 
@@ -885,9 +885,9 @@ What this means for users:
 <!-- rule: packages.identity.ids -->
 <!-- rule: packages.identity.real-path -->
 <!-- rule: packages.identity.major-as-text -->
-**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path); two imports reach the same such file when its real path is the same, whatever its id.
+**Identity.** Every named type has an id: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path); two imports reach the same such file when its real path is the same, whatever its id.
 <!-- rule: packages.identity.files-not-packages -->
-A file's id MUST NOT have the form of a package's id, `@org/name@N` (§13.3, grammar `package_module`), whatever the file and its project are called, so that a codec selected for a package's type never applies to a file's: a binding that builds ids from a project's name and a path prefixes them so that they can't (a path has no `@`, grammar `path`, but a project's name and an entry file's name may). Major versions are compared as text (`@18446744073709551616` is a valid major that no package has). Codecs (§13.4) and tools refer to types by their id.
+A file's id MUST NOT have the form of a package's id, `@org/name@N` (§13.3, grammar `package_module`), whatever the file and its project are called, so that a codec selected for a package's type never applies to a file's: a binding that builds ids from a project's name and a path prefixes them so that they can't (a path has no `@`, grammar `path`, but a project's name and an entry file's name may). Major versions are compared as text (`@18446744073709551616` is a valid major that no package has). Codecs (§13.4) and tools refer to types by their id. Only the ids of packages, the prelude and the standard modules are the same in every binding; the id of a type in a file outside a package is the binding's own, and may differ from another binding's for the same file.
 
 <!-- rule: packages.imports.no-reexport -->
 **Imports.** `import M (A, B)` makes the types `A` and `B` defined in `M` available under their names; a file can't re-export types it imports. Implementations MUST reject:
@@ -952,11 +952,20 @@ Where a type's values have several spellings that mean the same (the host of a U
 ### 13.4 Codecs
 
 <!-- rule: codecs.api.optional -->
-A schema binding MAY let applications choose the host type of a named type without arguments: a **codec**, selected by the type's id. A codec:
+A schema binding MAY let applications choose the host type of a named type without arguments: a **codec**, selected by the type's id.
+<!-- rule: codecs.api.any-named-type -->
+Every such type can have one: a type of the prelude (`prelude#Decimal`), of a standard module (`std/time#Instant`), of a package, or of the application's own files. A codec for `prelude#Decimal` applies to every `Decimal`, in the types of every package too.
+<!-- rule: codecs.api.one-per-id -->
+An application sets at most one codec per id: a binding given two for one id rejects them, as a mistake of its configuration (not of the data, so with no code of §17).
+
+A codec:
 
 <!-- rule: codecs.rules.after-schema -->
 <!-- rule: codecs.rules.rejected-code -->
-- runs after the type's schema: it can reject more values, never fewer. A value the schema accepts and the codec rejects is the error `codec-rejected`, at the place of the codec's type (§15), and so is a value a profile's rule rejects;
+<!-- rule: codecs.rules.inside-secret -->
+- runs after the type's schema: it can reject more values, never fewer. A value the schema accepts and the codec rejects is the error `codec-rejected`, at the place of the codec's type (§15), and so is a value a profile's rule rejects. Inside a `Secret` it is `invalid-secret` at the secret, as every error inside one (§15);
+  <!-- rule: codecs.rules.encode-rejected -->
+- rejects, when encoding, a host value it can't write or that its rules reject, with `cannot-encode` at the place of the codec's type;
   <!-- rule: codecs.rules.round-trip -->
 - encodes back to the type's values, so that decoding what it encoded gives the same result: decode, encode, decode is the same as decode;
   <!-- rule: codecs.rules.meaning-kept -->
@@ -968,10 +977,13 @@ Host types differ in what they can hold, as `Decimal` does: Python's `datetime` 
 
 <!-- rule: codecs.apply.everywhere -->
 <!-- rule: codecs.apply.unreachable -->
-A codec applies wherever its type occurs, inside the types of imported packages too. Where a package's types are generated once, in its own library (a crate, a Roc package), the application's generated code generates again those of the package's types that contain the codec's type, directly or not, and uses the package's own types for the rest; it needs the schema files of the packages its packages import, transitively. A binding that can't apply a codec somewhere, such as a host value that has no place of its own for a record case's payload, MUST report an error (`codec-unreachable`) instead of decoding there with the default host type.
+A codec applies wherever its type occurs: inside the types of imported packages too, and as the type a value is decoded with (decoding `CHF` as a `Currency` runs the codec for `Currency`). Where a package's types are generated once, in its own library (a crate, a Roc package), the application's generated code generates again those of the package's types that contain the codec's type, directly or not, and uses the package's own types for the rest; it needs the schema files of the packages its packages import, transitively. A binding that can't apply a codec somewhere, such as a host value that has no place of its own for a record case's payload, MUST report an error (`codec-unreachable`) instead of decoding there with the default host type.
 
 <!-- rule: codecs.apply.inside-out -->
 When codecs apply at several places in one value (a codec for `Currency` inside one for `Money`), decoding runs them from the inside out: a part's codec runs before the codec of the value that holds it, and the first that rejects gives the error, at its own place (`$[1]` for the currency).
+<!-- rule: codecs.apply.outer-input -->
+<!-- rule: codecs.apply.rules-on-schema-values -->
+What an outer codec receives for a part that has a codec of its own (the part's host value, or the value the schema decoded) is the binding's choice, which it documents. A profile's rule is checked on the values the schema decoded (§13.3, "Profiles"), never on what an inner codec made of them, so no codec can make a value pass the rule of another codec. With `iso`'s codec for `Money`, `Money(19.90, Bitcoin)` is `codec-rejected`, whatever codec the application sets for `Currency`.
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
 
@@ -986,6 +998,9 @@ Codecs are part of the application, not of the schema. Two applications reading 
 | `@haus-fmt/uuid@1#Uuid` | `rfc9562` |
 
 (`iso`'s rule for `Money` is its currency's, so `Currency` stands for it.) Only the types the decoded type reaches count (a binding that builds every type of a schema file at once: the types the file's own definitions reach), and a type reached only inside a type that has a codec doesn't: that codec decides which values it holds (a codec for `Money` covers its `Currency`). The warning is reported where the binding learns which codecs are set (when a set of codecs is built, a schema is compiled with them, or decoding starts), once per type id, at no place, through the channel of the binding's other schema warnings (`unknown-attribute`, `deprecated`, `no-json-form`). Its message names the type's id and its profiles: `@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only`. It is a warning, never an error: decoding is unchanged. Tools that have no codecs (`haus check`, editors) report instead, with the same code as a note of the lowest severity (a hint), once per import of a package that has such a type, at the import: `the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec`.
+
+<!-- rule: codecs.unused.warning -->
+**A codec that matches no type.** A codec set for an id that no type has never runs, and the values it was meant to check pass: a typo, or `@haus-fmt/money@2#Money` when the schema imports major 1. So a schema binding SHOULD report the warning `unused-codec` for a codec whose id is no type of the prelude or a standard module, nor of the schema's files and the packages they import. It is reported as `missing-codec` is: where the binding learns which codecs are set, once per id, at no place, through the channel of its other schema warnings; its message names the id. A binding MAY reject such a codec instead, as a mistake of its configuration, and MAY leave out codecs that a library ships as a set (the codecs of a profile) when the application passes the whole set.
 
 ## 14. Schema files
 
@@ -1013,17 +1028,20 @@ Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-ta
 **Every error.** Tools that check data against a schema (`haus check`, editors) SHOULD report every error of the data, not only the first, and MAY offer to stop at the first (`haus check --first`). A decoder (§15) MAY offer the same mode, beside its first error; one that does reports the same errors. Which errors are reported is fixed, so that every tool reports the same ones:
 
 <!-- rule: schema.check.all-errors-parse-first -->
-- Only after a successful parse: text with a syntax or limit error has that one error, as when stopping at the first.
+- Only after a successful parse: a document (a type that isn't a `Stream`) with a syntax or limit error has that one error, as when stopping at the first.
+  <!-- rule: schema.check.all-errors-stream-items -->
+  A `Stream` type (§15, "Streams") is checked item by item, as a stream decoder reads it: each item is parsed, then checked, before the next is read. A syntax or limit error ends the check, after the errors of the items before it. With `type Root = Stream String`, the text `1,⏎"ok",⏎"ok" "oops"` has two errors in this mode, `type-mismatch` at `$[0]` and `missing-comma` at line 3, column 6, and only the first when stopping at the first.
   <!-- rule: schema.check.all-errors-once -->
-- Each failing place once, at its place of §15 (`$.items[2].price`).
+- Each error once, at its place of §15 (`$.items[2].price`). Several errors can share a place: a record missing two fields has two `missing-field` errors, both at the record.
   <!-- rule: schema.check.all-errors-nothing-below -->
-- Nothing below a value that failed at its own level: a value of another kind (an array where a record is expected), an unknown tag of a closed variant, a tag with another payload than its case takes, or a value its type rejects (a number out of range, a `Date` that doesn't exist) is one error, and what it holds is not looked at. A record checks every field: each missing one is `missing-field` at the record, each one a closed record doesn't list `unknown-field` at the field, and the others are checked. An array, a map and a stream check every element. A `Secret` with any error inside is one `invalid-secret` at the secret (§15).
+- Nothing below a value that failed at its own level: a value of another kind (an array where a record is expected), an unknown tag of a closed variant, a tag with another payload than its case takes, or a value its type rejects (a number out of range, a `Date` that doesn't exist) is one error, and what it holds is not looked at. A record checks every field: each missing one is `missing-field` at the record, each one a closed record doesn't list `unknown-field` at the field, and the others are checked. An array, a map and a stream check every element, and a positional payload every argument (`P("1", 2)` for `P Int String` has two errors, at `$[0]` and `$[1]`). A `Secret` with any error inside is one `invalid-secret` at the secret (§15).
   <!-- rule: schema.check.all-errors-no-order -->
 - No order: which errors are reported is specified, their order is not, and a tool may sort them by place for display. The error of a check that stops at the first is one of them.
   <!-- rule: schema.check.all-errors-cap -->
-- A tool MAY stop after a number of errors it documents, at least 100 per value, so that hostile input costs bounded work (§9), and SHOULD then say that it stopped.
+- A tool MAY stop after a number of errors it documents, at least 100, so that hostile input costs bounded work (§9), and SHOULD then say that it stopped. The cap is one for the whole check, a stream's every item together, and counts errors only, not hints.
 
-Hints (`unlisted-field`, `unlisted-tag`, `deprecated`) are reported the same in both modes, never inside a `Secret`.
+<!-- rule: schema.check.hints-both-modes -->
+Hints (`unlisted-field`, `unlisted-tag`, `deprecated`) are never reported inside a `Secret`. Each mode reports the hints of the data it looked at: all of them when it reports every error, and those found before the error when it stops at the first.
 
 <!-- rule: schema.spread.copies -->
 **Spreads.** `...Name` copies the tags of the named variant into a variant, or the fields of the named record into a record, at the place where it is written. Whether the result is open or closed is decided by its own `closed` alone, never by the type it copies from:
@@ -1227,8 +1245,13 @@ How it is represented is up to the binding. For example, a binding MAY represent
 
 <!-- rule: decode.secret.hidden -->
 - decode it to a type that hides the value when printed, logged, inspected or converted to JSON (showing something like `<redacted>`), and gives it out only through an explicit call;
+  <!-- rule: decode.secret.generic-decoders -->
+- do so in every decoder that applies a schema, the generic ones too: a decoder that gives the binding's value tree or another untyped value, without a host type of the application's, gives a secret there in such a type, never the plain value;
   <!-- rule: decode.secret.no-value-in-errors -->
 - leave the value out of error messages, when decoding and when encoding: an error inside a `Secret` is reported at the secret itself (`$.apiKey`), with its type, never with the value found or any part of it. A path into the secret could itself reveal it, through the keys of a `Map` or an `Any`.
+
+<!-- rule: decode.secret.hiding -->
+**Hiding** means that the value never shows outside that explicit call. Printing, logging, inspecting it and converting it to JSON with the language's own tools (`JSON.stringify`, Foundation's `JSONEncoder`, serde) show a marker such as `<redacted>`, or fail. A writer of the binding's that doesn't apply the secret's schema (haus or JSON written from the binding's values, the canonical form, the hash) refuses a secret, with an error that doesn't show it: it never writes the value, nor a marker that a reader would take for data. Encoding with the schema writes the value in full (above), so decoding and encoding again keeps it. A binding whose values have no printing hooks, such as a C ABI's tree of handles, hides a secret as a value of its own kind: its accessors see nothing in it, every writer refuses it, and an explicit call gives the value.
 
 <!-- rule: decode.secret.tools-mask -->
 Tools that show data, such as editors and `haus check`, SHOULD mask values of a `Secret` type.
@@ -1242,7 +1265,7 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 **Named, generic and recursive types.** A named type decodes as its definition. A generic type decodes as its definition with the parameters replaced by the arguments: `Maybe Int`, `Envelope Event`. A recursive type decodes one level of the input at a time (§9.9).
 
 <!-- rule: decode.types.stream -->
-**Streams.** `Stream a` describes a file: each top-level value decodes as an `a`, on its own, as it is read. An error names the value's index in the stream.
+**Streams.** `Stream a` describes a file: each top-level value decodes as an `a`, on its own, as it is read. An error names the value's index in the stream. An item's error comes before a syntax error in a later item: `1,⏎"ok",⏎"ok" "oops"` decoded as `Stream String` fails with `type-mismatch` at `$[0]`.
 <!-- rule: decode.types.single-document -->
 Any other type describes a single document (§6): a text with no value, or with two or more, is `not-one-value`, at `$`.
 

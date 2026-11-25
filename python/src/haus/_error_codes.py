@@ -133,6 +133,7 @@ ErrorCode: TypeAlias = Literal[
     "unlisted-field",
     "unlisted-tag",
     "missing-codec",
+    "unused-codec",
 ]
 """An error code (spec §17): stable, the same in every binding."""
 
@@ -379,6 +380,10 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         "missing-codec": ErrorInfo(
             "hints",
             "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.",
+        ),
+        "unused-codec": ErrorInfo(
+            "hints",
+            "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them.",
         ),
     }
 )

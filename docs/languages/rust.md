@@ -91,7 +91,7 @@ Without them, the build prints a [`missing-codec`](/docs/errors#missing-codec) C
 - **Streams.** `haus::stream::decode::<T, _>(reader)` iterates over any `std::io::Read`; `haus::stream::Reader` takes byte chunks and does no I/O, for async code. [Logs and streams](/docs/tours/streams)
 - **JSON.** `haus::json::to_string(&order)` writes schema-based JSON (`{"id":"7",…}`), `haus::json::from_str` reads it. [Coming from JSON](/docs/from-json)
 - **Integers.** `Int` is `haus::Int`, any size, kept as its digits; `to_i64()` and `to_i128()` convert it. Use `Int64` in the schema for a native integer.
-- **Secrets.** `Secret a` is `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`, `expose()` gives the value. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** `Secret a` is `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`, `expose()` gives the value. Decoded at runtime with `haus_schema`, a value is a `Decoded` that hides its secrets the same way; `reveal()` makes it a `haus::Value`. [Config and secrets](/docs/tours/secrets)
 - **Limits.** `haus::Limits` holds the spec's limits; the `_with` functions take other ones. The depth is at most 256.
 - **Errors.** Each has a `haus::ErrorCode` with `hint()` and `docs()`, and `to_json()` gives the JSON form. [Error codes](/docs/errors)
 

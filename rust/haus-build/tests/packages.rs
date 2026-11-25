@@ -30,7 +30,7 @@ fn a_package_schema_outside_the_package_is_not_read() {
             .map(|_| ())
             .unwrap_err(),
     ] {
-        assert_eq!(e.code(), ErrorCode::PackagePath, "{e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::PackagePath, "{e}");
         assert!(!e.to_string().contains("API_TOKEN"), "{e}");
     }
 }
@@ -60,7 +60,7 @@ fn a_package_schema_imports_no_files() {
             .map(|_| ())
             .unwrap_err(),
     ] {
-        assert_eq!(e.code(), ErrorCode::PackagePath, "{e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::PackagePath, "{e}");
         assert!(e.to_string().contains("the schema of @acme/evil can't import files"), "{e}");
     }
 }
@@ -70,8 +70,8 @@ fn imports_name_only_major_versions() {
     for v in ["1.1", "01", "x"] {
         let text = format!("import @haus-fmt/money@{v} (Money)\ntype A = {{ m: Money }}");
         let e = haus_build::generate(&text, "app", &[], &haus_build::Packages::none()).unwrap_err();
-        assert_eq!(e.code(), ErrorCode::ImportVersion, "@{v}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "@{v}: {e}");
         let e = haus_build::roc::generate(&text, "App", "app", &[], &haus_build::Packages::none()).unwrap_err();
-        assert_eq!(e.code(), ErrorCode::ImportVersion, "@{v}: {e}");
+        assert_eq!(e.code().unwrap(), ErrorCode::ImportVersion, "@{v}: {e}");
     }
 }

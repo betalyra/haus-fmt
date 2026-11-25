@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import pickle
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from typing import cast
 
@@ -616,6 +616,113 @@ def test_codecs_in_one_value_run_inside_out() -> None:
             order.from_json(json)
         assert e.value.to_json()["path"] == path, json
         assert e.value.code == "codec-rejected"
+
+
+class _ThreeLetters:
+    """A codec for `type Currency = < >`: the tag, of three letters."""
+
+    def decode(self, value: object, /) -> str:
+        assert isinstance(value, Unknown)
+        if len(value.value.tag) != 3:
+            raise ValueError("not three letters")
+        return value.value.tag
+
+    def encode(self, value: object, /) -> object:
+        if not isinstance(value, str) or len(value) != 3:
+            raise ValueError("not three letters")
+        return Unknown(Variant(value))
+
+
+_MONEY = "type Money = closed < Money Decimal Currency >\ntype Currency = < >"
+
+
+def test_the_codec_of_the_type_decoded_with_runs() -> None:
+    """Spec §13.4: decoding `CHF` as a `Currency` runs the codec for `Currency`, as JSON does."""
+    currency = compile_schema(_MONEY, codecs={"Currency": _ThreeLetters()})["Currency"]
+    assert currency.parse("CHF") == "CHF"
+    assert currency.canonical("CHF") == "CHF"
+    runs: tuple[Callable[[], object], ...] = (
+        lambda: currency.parse("EURO"),
+        lambda: currency.from_json('{"_tag":"EURO"}'),
+    )
+    for run in runs:
+        with pytest.raises(HausDecodeError) as e:
+            run()
+        assert (e.value.code, e.value.path) == ("codec-rejected", ())
+
+
+def test_a_check_sees_the_value_the_schema_decoded() -> None:
+    """Spec §13.4: a rule checked on the schema's value can't be passed through a looser codec of a part."""
+
+    class Loose:
+        def decode(self, value: object, /) -> object:
+            return "any"
+
+        def encode(self, value: object, /) -> object:
+            return Unknown(Variant("Xyz"))
+
+    class Rule:
+        def check(self, value: object, /) -> None:
+            assert isinstance(value, Tagged) and isinstance(value.payload, tuple)
+            currency = value.payload[1]
+            assert isinstance(currency, Unknown)
+            if len(currency.value.tag) != 3:
+                raise ValueError("not three letters")
+
+        def decode(self, value: object, /) -> object:
+            return value
+
+        def encode(self, value: object, /) -> object:
+            return value
+
+    money = compile_schema(_MONEY, codecs={"Currency": Loose(), "Money": Rule()})["Money"]
+    assert money.parse("Money(1, EUR)") == Tagged("Money", ("1", "any"))  # decode gets the part's host value
+    bitcoin = '{"_tag":"Money","values":["1",{"_tag":"Bitcoin"}]}'
+    runs: tuple[Callable[[], object], ...] = (
+        lambda: money.parse("Money(1, Bitcoin)"),
+        lambda: money.from_json(bitcoin),
+    )
+    for run in runs:
+        with pytest.raises(HausDecodeError) as e:
+            run()
+        assert (e.value.code, e.value.path) == ("codec-rejected", ())
+
+
+def test_codecs_for_the_prelude_and_std_apply_inside_every_type() -> None:
+    """Spec §13.4: a codec for `prelude#Decimal` applies to every `Decimal`, a package's included."""
+    s = compile_schema(
+        _MONEY + "\nimport std/time (Instant)\ntype Paid = { at: Instant, total: Money }",
+        codecs={"prelude#Decimal": DecimalCodec(), "std/time#Instant": InstantCodec()},
+    )
+    paid = s["Paid"].parse('{ at: Instant("2026-11-13T10:00:00Z"), total: Money(19.90, EUR) }')
+    assert paid["at"] == dt.datetime(2026, 11, 13, 10, tzinfo=dt.UTC)
+    assert paid["total"] == Tagged("Money", (Decimal("19.90"), Unknown(Variant("EUR"))))
+
+
+def test_a_codec_rejecting_inside_a_secret_is_invalid_secret() -> None:
+    """Spec §13.4, §15: every error inside a `Secret` is `invalid-secret` at the secret."""
+    s = compile_schema(_MONEY + "\ntype T = { key: Secret Currency }", codecs={"Currency": _ThreeLetters()})
+    with pytest.raises(HausDecodeError) as e:
+        s["T"].parse("{ key: EURO }")
+    assert (e.value.code, e.value.path) == ("invalid-secret", ("key",))
+    assert "EURO" not in str(e.value)
+
+
+def test_a_codec_that_cant_encode_is_cannot_encode_at_its_type() -> None:
+    """Spec §13.4: a host value a codec rejects when encoding is `cannot-encode` at the codec's type's place."""
+    s = compile_schema(_MONEY, codecs={"Currency": _ThreeLetters()})
+    with pytest.raises(HausEncodeError) as e:
+        s["Money"].encode(Tagged("Money", ("1", "EURO")))
+    assert (e.value.code, e.value.path) == ("cannot-encode", (1,))
+
+
+def test_two_codecs_for_one_id_and_a_codec_for_no_type_are_rejected() -> None:
+    """Spec §13.4: one codec per id (a mapping can't hold two; groups refuse to merge them), and this binding
+    rejects a codec whose id is no type (`unused-codec` is allowed to be an error instead)."""
+    with pytest.raises(ValueError, match="two codecs for Currency"):
+        _ = CodecGroup({"Currency": _ThreeLetters()}) | {"Currency": _ThreeLetters()}
+    with pytest.raises(ValueError, match="no such type"):
+        compile_schema(_MONEY, codecs={"@haus-fmt/money@2#Money": _ThreeLetters()})
 
 
 def test_values_built_in_code_count_empty_containers_as_levels() -> None:

@@ -268,6 +268,8 @@ export interface SchemaFile {
   readonly imported: ReadonlyMap<string, Definition>
   /** The file's identity (ParseSchemaOptions.id), if it has one. */
   readonly id: string | undefined
+  /** The ids of the types of this file and of every file and package it imports (spec §13.3), for codecs (§13.4). */
+  readonly typeIds: ReadonlySet<string>
   /** The definition named `name`, if any. */
   definition(name: string): Definition | undefined
   /**
@@ -964,6 +966,8 @@ export interface ParseSchemaOptions {
 // ── resolution ───────────────────────────────────────────────
 
 const PRELUDE_GENERIC: Record<string, number> = { Array: 1, Map: 1, Maybe: 1, Result: 2, Secret: 1, Stream: 1 }
+/** The prelude's generic types, by name, with how many arguments they take. */
+export const PRELUDE_ARITY: Readonly<Record<string, number>> = PRELUDE_GENERIC
 const MAX_INSTANCES = 10_000
 const MAX_FILES = 256
 
@@ -1642,7 +1646,8 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
       const at = locate(text, pos, START)
       return { kind, code: kind, message, offset: at.offset, end, line: at.line, column: at.column }
     })
-  return { definitions, imports: root.std, imported, id: options.id, definition: (name) => byName.get(name) ?? imported.get(name), warnings }
+  const typeIds = new Set(allDefs.map((d) => d.definition!.id))
+  return { definitions, imports: root.std, imported, id: options.id, typeIds, definition: (name) => byName.get(name) ?? imported.get(name), warnings }
 }
 
 /**

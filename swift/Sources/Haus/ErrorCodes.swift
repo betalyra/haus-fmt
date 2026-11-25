@@ -266,7 +266,7 @@ extension HausError {
         ///
         /// Reported at (informative): The attribute's `@`.
         case attributeOnSpread = "attribute-on-spread"
-        /// `unknown-module`: An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).
+        /// `unknown-module`: An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf).
         ///
         /// Reported at (informative): The import, at its `import`.
         case unknownModule = "unknown-module"
@@ -392,11 +392,11 @@ extension HausError {
         case invalidSecret = "invalid-secret"
         /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
         ///
-        /// Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4).
+        /// Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
         case codecRejected = "codec-rejected"
-        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
+        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
         ///
-        /// Reported at: The place of the value in the type being encoded. Building a value in code: informative (§11).
+        /// Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
         case cannotEncode = "cannot-encode"
         /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
         ///
@@ -434,7 +434,7 @@ extension HausError {
         ///
         /// Reported at: The member: `$._value._bytes`.
         case hausJsonBytes = "haus-json-bytes"
-        /// `invalid-tag`: A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11).
+        /// `invalid-tag`: A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.
         ///
         /// Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
         case invalidTag = "invalid-tag"
@@ -474,6 +474,10 @@ extension HausError {
         ///
         /// Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
         case missingCodec = "missing-codec"
+        /// `unused-codec`: A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
+        ///
+        /// Reported at: Nowhere: it is about the codecs the application set, reported once per id.
+        case unusedCodec = "unused-codec"
     }
 
     /// The part of the catalogue a code belongs to (spec §17).
@@ -500,7 +504,7 @@ extension HausError.Code {
         case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importOutsideRoot, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
         case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
         case .jsonSyntax, .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes, .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm: .json
-        case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag, .missingCodec: .hints
+        case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag, .missingCodec, .unusedCodec: .hints
         }
     }
 
@@ -624,6 +628,7 @@ extension HausError.Code {
         case .unlistedField: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
         case .unlistedTag: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
         case .missingCodec: "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."
+        case .unusedCodec: "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them."
         }
     }
 }

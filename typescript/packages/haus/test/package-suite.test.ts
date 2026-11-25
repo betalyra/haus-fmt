@@ -49,8 +49,8 @@ interface Case {
 }
 
 /** The number of cases in cases.haus, and of each ecosystem: a reader that drops some fails. */
-const TOTAL = 133
-const ECOSYSTEMS: Readonly<Record<Ecosystem, number>> = { core: 87, npm: 46, cargo: 0 }
+const TOTAL = 136
+const ECOSYSTEMS: Readonly<Record<Ecosystem, number>> = { core: 90, npm: 46, cargo: 0 }
 
 /**
  * Cases that are wrong in the suite, and why: they are expected to fail here

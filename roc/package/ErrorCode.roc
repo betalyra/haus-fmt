@@ -277,7 +277,7 @@ ErrorCode := [].{
 	attribute_on_spread : Str
 	attribute_on_spread = "attribute-on-spread"
 
-	## `unknown-module` (imports): An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf). Reported at (informative): The import, at its `import`.
+	## `unknown-module` (imports): An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`, `..`, `.x`). Any other word where a module belongs (`foo/bar`, `Lib/a-b`), and `.` alone, is `schema-syntax` (grammar.ebnf). Reported at (informative): The import, at its `import`.
 	unknown_module : Str
 	unknown_module = "unknown-module"
 
@@ -401,11 +401,11 @@ ErrorCode := [].{
 	invalid_secret : Str
 	invalid_secret = "invalid-secret"
 
-	## `codec-rejected` (decoding): A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4).
+	## `codec-rejected` (decoding): A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
 	codec_rejected : Str
 	codec_rejected = "codec-rejected"
 
-	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded. Building a value in code: informative (§11).
+	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
 	cannot_encode : Str
 	cannot_encode = "cannot-encode"
 
@@ -445,7 +445,7 @@ ErrorCode := [].{
 	haus_json_bytes : Str
 	haus_json_bytes = "haus-json-bytes"
 
-	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
+	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included. Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
 	invalid_tag : Str
 	invalid_tag = "invalid-tag"
 
@@ -485,9 +485,13 @@ ErrorCode := [].{
 	missing_codec : Str
 	missing_codec = "missing-codec"
 
+	## `unused-codec` (hints): A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. Reported at: Nowhere: it is about the codecs the application set, reported once per id.
+	unused_codec : Str
+	unused_codec = "unused-codec"
+
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag", "missing-codec"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag", "missing-codec", "unused-codec"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -611,6 +615,7 @@ ErrorCode := [].{
 		"unlisted-field" => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
 		"unlisted-tag" => "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
 		"missing-codec" => "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."
+		"unused-codec" => "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them."
 		_ => ""
 	}
 
@@ -736,6 +741,7 @@ ErrorCode := [].{
 		"unlisted-field" => "hints"
 		"unlisted-tag" => "hints"
 		"missing-codec" => "hints"
+		"unused-codec" => "hints"
 		_ => ""
 	}
 

@@ -13,8 +13,8 @@ starts at the top level. It is not a schema checker: the type language
 (§14) is outside this model.
 
 The checks of §13.3 "Imports" that need no other file are made here: a
-module that is neither `std/…`, `@org/name[@N]` nor `./…`/`../…`
-(`unknown-module`), an import naming something other than a major version
+module that starts with `.` but is neither `./…` nor `../…` (`unknown-module`;
+any other word, and `.` alone, is `schema-syntax`), an import naming something other than a major version
 (`import-version`), a name imported twice (`duplicate-import`), a type
 defined twice or also imported (`duplicate-type`).
 -/
@@ -155,7 +155,10 @@ def module (m : String) : R Module :=
                  else .error ⟨.importVersion, s!"{quote m}: an import names a major version only (@1), without leading zeros"⟩
         | _ => .error ⟨.importVersion, s!"{quote m}: an import names a major version only (@1)"⟩
     | [] => .error ⟨.unknownModule, s!"{quote m} is not a module"⟩
-  else .error ⟨.unknownModule, s!"{quote m} is neither std/…, a package @org/name nor a file ./name"⟩
+  -- `.x`, `..`, `.../a`: a module that starts with `.` but isn't a path (grammar.ebnf). Any other
+  -- word (`Lib/a-b`), and `.` alone, is no module at all: a syntax error, as the schema-file reader says.
+  else if m.startsWith "." && m != "." then .error ⟨.unknownModule, s!"{quote m} is neither std/…, a package @org/name nor a file ./name"⟩
+  else syntaxErr s!"{quote m} is not a module: std/…, a package @org/name or a file ./name"
 
 /-- An import, after `import`. -/
 def importDecl (t : Text) : R (Import × Text) := do
@@ -249,5 +252,9 @@ private def scanCode (s : String) : Option Code :=
 #guard scanCode "import @acme/a (A)\ntype A = Int" == some .duplicateType
 #guard scanCode "API_TOKEN=do-not-print" == some .schemaSyntax
 #guard scanCode "import ./a~b (A)" == some .schemaSyntax
+#guard scanCode "import Lib/a-b (T)" == some .schemaSyntax
+#guard scanCode "import . (T)" == some .schemaSyntax
+#guard scanCode "import .. (T)" == some .unknownModule
+#guard scanCode "import .x (T)" == some .unknownModule
 
 end Haus.Packages

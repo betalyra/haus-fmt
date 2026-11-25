@@ -202,7 +202,7 @@ fn failure(case: &Value) -> Option<String> {
             let want = strings(field(want, "packages"));
             (reached != want).then(|| format!("reached {reached:?}, expected {want:?}"))
         }
-        (("Ok", _), Err(e)) => Some(format!("failed with {}: {e}", e.code())),
+        (("Ok", _), Err(e)) => Some(format!("failed with {:?}: {e}", e.code())),
         (("Err", [want]), Ok(reached)) => {
             Some(format!("loaded (reaching {reached:?}), expected {}", string(field(want, "code").unwrap())))
         }
@@ -215,9 +215,9 @@ fn failure(case: &Value) -> Option<String> {
                 .collect();
             let shown: Vec<String> =
                 strings(field(want, "hides")).into_iter().filter(|h| message.contains(h)).collect();
-            match (e.code().as_str() == code, missing.is_empty(), shown.is_empty()) {
+            match (e.code().map(|c| c.as_str()) == Some(code), missing.is_empty(), shown.is_empty()) {
                 (true, true, true) => None,
-                (false, _, _) => Some(format!("failed with {}, expected {code}: {message}", e.code())),
+                (false, _, _) => Some(format!("failed with {:?}, expected {code}: {message}", e.code())),
                 (_, false, _) => Some(format!("the message doesn't mention {missing:?}: {message}")),
                 (_, _, false) => Some(format!("the message shows {shown:?}: {message}")),
             }
@@ -290,7 +290,7 @@ fn package_suite() {
         skipped.len(),
         if unix { "Mode cases as root" } else { "os: unix" }
     );
-    assert_eq!((cases.len(), core.len(), npm), (133, 87, 46), "the suite's cases: all, core, npm");
+    assert_eq!((cases.len(), core.len(), npm), (136, 90, 46), "the suite's cases: all, core, npm");
     assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), run.len(), failures.join("\n"));
 }
 
@@ -335,7 +335,7 @@ fn copies_are_checked_in_either_order() {
         }
         write(&dir.path().join("app/app.schema.haus"), root);
         let e = Schema::load(dir.path().join("app/app.schema.haus"), &Nearest).expect_err(root);
-        assert_eq!(e.code().as_str(), "duplicate-package", "{e}");
+        assert_eq!(e.code().map(|c| c.as_str()), Some("duplicate-package"), "{e}");
         assert!(e.to_string().contains("1.2.0") && e.to_string().contains("1.4.0"), "{e}");
     }
 }

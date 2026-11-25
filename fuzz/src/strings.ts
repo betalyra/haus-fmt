@@ -181,7 +181,7 @@ async function runner(name: string): Promise<LineRunner> {
 
 // ── comparing ────────────────────────────────────────────────
 
-/** What the spec says a case gives, where it says: invalid-utf8 when read, cannot-encode when written. */
+/** What the spec says a case gives, where it says: invalid-utf8 when read, cannot-encode when written (a tag: invalid-tag, see meets). */
 function expected(c: StringCase): string | undefined {
   if (!lone(c.text)) return undefined
   if (c.kind === "W") return "cannot-encode"
@@ -195,11 +195,10 @@ function meets(c: StringCase, o: string): boolean {
   if (want === undefined) return true
   if (c.kind === "W") {
     // Each part: the constructor rejects it (!cannot-encode), or every writer does (cannot-encode/cannot-encode/cannot-encode).
-    // A tag with a lone surrogate isn't a tag either: invalid-tag is the other code it may have.
+    // A tag with a lone surrogate is no tag: invalid-tag, as the tag is checked before it is encoded (spec §11).
     const parts = o.split(" ").slice(1)
-    const ok = (p: string, codes: readonly string[]) => codes.some((x) => p === `!${x}` || p === `${x}/${x}/${x}`)
-    const stringy = (s: string) => ok(s, ["cannot-encode"])
-    return parts.length === 3 && stringy(parts[0]!) && stringy(parts[1]!) && ok(parts[2]!, ["cannot-encode", "invalid-tag"])
+    const ok = (p: string, code: string) => p === `!${code}` || p === `${code}/${code}/${code}`
+    return parts.length === 3 && ok(parts[0]!, "cannot-encode") && ok(parts[1]!, "cannot-encode") && ok(parts[2]!, "invalid-tag")
   }
   return o.startsWith("err ") && o.endsWith(` ${want}`)
 }
@@ -207,10 +206,9 @@ function meets(c: StringCase, o: string): boolean {
 /**
  * What of an outcome is compared. An error's place only for `invalid-utf8`,
  * whose place §4 fixes (one column at the surrogate); other places are
- * informative (errors.md). A tag with an unpaired surrogate is no tag and
- * has no UTF-8 form: §11 gives it both `invalid-tag` and `cannot-encode`,
- * and doesn't say which comes first (finding F1 of fuzz round C), so either
- * is the same here.
+ * informative (errors.md). A tag with an unpaired surrogate is `invalid-tag`
+ * (§11, finding F1 of fuzz round C, decided in spec round 3), so its code is
+ * compared as it is.
  */
 function comparable(c: StringCase, o: string): string {
   // Text without one: whether it is read, and what it holds. Which mistake a text with several
@@ -218,7 +216,6 @@ function comparable(c: StringCase, o: string): string {
   if (!lone(c.text) && c.kind !== "W") return o.startsWith("err ") ? "err" : o
   const m = /^err \d+ \d+ (\S+)$/.exec(o)
   if (m && m[1] !== "invalid-utf8") return `err ${m[1]}`
-  if (c.kind === "W" && lone(c.text)) return o.replace(/ !invalid-tag$/, " !cannot-encode").replace(/ invalid-tag\/invalid-tag\/invalid-tag$/, " cannot-encode/cannot-encode/cannot-encode")
   return o
 }
 

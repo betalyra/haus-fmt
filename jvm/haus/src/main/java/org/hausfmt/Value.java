@@ -13,7 +13,8 @@ import java.util.Objects;
 
 /**
  * A haus value (spec §1): a {@link Number}, {@link Text}, {@link Bytes}, {@link Array}, {@link
- * Record} or {@link Variant}. The set is closed, and every value is immutable.
+ * Record} or {@link Variant}. The set is closed, and every value is immutable. A {@link Secret} is
+ * the one more kind a decoder applying a schema gives: the hidden value of a {@code Secret} type.
  *
  * <p>{@code equals} is haus equality (spec §2): numbers by their normalized literals, strings by
  * code points, records by their sets of keys whatever the order, {@code Tag { … }} and {@code
@@ -27,19 +28,24 @@ import java.util.Objects;
  * Limits#MAX_SUPPORTED_DEPTH} as {@code …}, and the writers, checks and codecs, which recurse once
  * per level, reject one deeper than their depth limit with {@code nesting-too-deep}.
  */
-public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Value.Array, Value.Record, Value.Variant {
+public sealed interface Value
+    permits Value.Number, Value.Text, Value.Bytes, Value.Array, Value.Record, Value.Variant, Value.Secret {
 
-  /** The six kinds of value. */
+  /**
+   * The six kinds of value, and {@link #SECRET}: no kind of the format, but the hidden value of a
+   * {@code Secret} type that a decoder applying a schema gives ({@link Secret}).
+   */
   enum Kind {
     NUMBER,
     STRING,
     BYTES,
     ARRAY,
     RECORD,
-    VARIANT
+    VARIANT,
+    SECRET
   }
 
-  /** Which of the six kinds this value is. */
+  /** Which kind this value is. */
   Kind kind();
 
   /**
@@ -855,6 +861,44 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     @Override
     public String toString() {
       return LineWriter.toText(this);
+    }
+  }
+
+  /**
+   * The value of a {@code Secret} type, hidden (spec §15): what {@link SchemaType#decode} gives
+   * for a secret, never the parser. {@code toString} is {@code <redacted>}, also inside the
+   * {@code toString} of the values that hold it, and {@link #reveal} gives the value out. The
+   * writers that don't apply its schema ({@link Haus#write}, {@link Haus#canonical}, {@link
+   * Haus#hash}, self-describing JSON) refuse it with {@code cannot-encode}, without showing it,
+   * and it is equal to no value but itself. {@link SchemaType#encode} writes it in full, so that
+   * decoding and encoding again keeps it.
+   */
+  final class Secret implements Value {
+    private final Value value;
+
+    /** A secret hiding {@code value}. */
+    Secret(Value value) {
+      this.value = value;
+    }
+
+    /** The hidden value. */
+    public Value reveal() {
+      return value;
+    }
+
+    @Override
+    public Kind kind() {
+      return Kind.SECRET;
+    }
+
+    @Override
+    public int depth() {
+      return value.depth();
+    }
+
+    @Override
+    public String toString() {
+      return "<redacted>";
     }
   }
 

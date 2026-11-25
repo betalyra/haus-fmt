@@ -99,7 +99,7 @@ class HausCodecTest {
     assertEquals(Haus.parse("[1, Tag(2)]"), o.extra());
     // Encoding gives the decoded value back: the unlisted field is gone, 0.10 is 0.1.
     Value back = codec.toValue(o);
-    assertEquals(SCHEMA.type("Order").decode(Haus.parse(ORDER)), back);
+    assertEquals(Suite.revealed(SCHEMA.type("Order").decode(Haus.parse(ORDER))), back);
     assertEquals(o, codec.decode(codec.encode(o, FormatOptions.COMPACT)));
     assertEquals(o, codec.fromJson(codec.toJson(o)));
   }

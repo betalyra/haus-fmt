@@ -23,8 +23,8 @@ fn codes(example: &Value) -> Option<Vec<String>> {
         "Schema" => {
             let Value::String(s) = arg else { panic!("a Schema example is a string") };
             match Schema::parse(s) {
-                Err(e) => vec![e.code().to_string()],
-                Ok(schema) => schema.warnings().iter().map(|w| w.code().to_string()).collect(),
+                Err(e) => vec![e.code().expect("a code").to_string()],
+                Ok(schema) => schema.warnings().iter().map(|w| w.code().expect("a code").to_string()).collect(),
             }
         }
         "Decode" => match schema(text(arg, "schema")).decode("Root", &value(text(arg, "data"))) {
@@ -58,15 +58,15 @@ fn examples_have_their_codes() {
 #[test]
 fn errors_have_hints_and_a_json_form() {
     let e = Schema::parse("type A = { at: Date }").unwrap_err();
-    assert_eq!(e.code(), haus::ErrorCode::UnknownType);
+    assert_eq!(e.code(), Some(haus::ErrorCode::UnknownType));
     assert_eq!(e.hint(), "Import it with: import std/time (Date).");
     assert_eq!(
-        e.to_json(),
-        concat!(
+        e.to_json().as_deref(),
+        Some(concat!(
             r#"{"code":"unknown-type","message":"unknown type Date (import it with: import std/time (Date))","#,
             r#""line":1,"column":16,"hint":"Import it with: import std/time (Date).","#,
             r#""docs":"https://haus-fmt.org/docs/errors#unknown-type"}"#
-        )
+        ))
     );
     let schema = Schema::parse("type Root = { qty: Int }").unwrap();
     let issue = &schema.check_text("Root", "{ qty: 1.5 }")[0];

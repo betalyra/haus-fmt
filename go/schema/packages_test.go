@@ -322,8 +322,8 @@ func TestPackageSuite(t *testing.T) {
 			}
 		})
 	}
-	if len(cases) != 133 || skips["npm"] != 46 {
-		t.Errorf("%d cases, %d npm, expected 133 and 46", len(cases), skips["npm"])
+	if len(cases) != 136 || skips["npm"] != 46 {
+		t.Errorf("%d cases, %d npm, expected 136 and 46", len(cases), skips["npm"])
 	}
 	t.Logf("package suite: %d cases run (%d of them the SHOULD version check), skipped: %v", ran, should, skips)
 }

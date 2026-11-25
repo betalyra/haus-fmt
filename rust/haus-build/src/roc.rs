@@ -330,6 +330,12 @@ fn generate_units(
         _ => e,
     };
     graph::check_codecs(units, codecs.iter().map(|(id, _)| id.as_str())).map_err(in_root)?;
+    // Roc's generated code has no place for a prelude type's codec yet: rejected, never ignored
+    // (spec §13.4: a codec this binding can't apply is `codec-unreachable`).
+    if let Some((id, _)) = codecs.iter().find(|(id, _)| id.starts_with("prelude#")) {
+        let reason = format!("a codec for {id}: haus-gen roc has no codecs for prelude types");
+        return Err(Error::new(Code::CodecUnreachable, reason));
+    }
     let names: Vec<String> = std::iter::once(module.to_owned())
         .chain(graph::module_names(&units[1..], &[module], "", |segments| {
             format!("{module}{}", segments.iter().map(|s| pascal(s)).collect::<String>())

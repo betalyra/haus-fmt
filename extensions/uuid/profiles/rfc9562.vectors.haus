@@ -3,8 +3,8 @@
 //
 // Accept: `value` (haus text for `type`) is accepted, and encoding what the
 // codec decoded writes exactly the text `output`, or `value` when there is no
-// `output`. Reject: `value` is valid for the schema of `type` (the shape), and
-// the codec rejects it (the rule).
+// `output`, in the compact layout (spec §11). Reject: `value` is valid for the
+// schema of `type` (the shape), and the codec rejects it (the rule).
 
 Accept { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "version 7" },
 Accept { type: "Uuid", value: "Uuid(\"f47ac10b-58cc-4372-a567-0e02b2c3d479\")", note: "version 4" },

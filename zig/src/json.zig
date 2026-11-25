@@ -864,7 +864,7 @@ const Writer = struct {
             },
             .Decimal => try appendString(w.gpa, w.out, d.decimal),
             .Any => try appendHausValue(w.gpa, w.out, d.any),
-            .Secret => try w.write(.{ .e = args[0], .env = env }, d.secret.*, path),
+            .Secret => try w.write(.{ .e = args[0], .env = env }, d.secret.reveal(), path),
             .Array => {
                 try w.put("[");
                 for (d.array, 0..) |x, i| {
@@ -1110,7 +1110,7 @@ const JsonReader = struct {
                 };
                 const box = try r.arena.create(Decoded);
                 box.* = inner;
-                return .{ .secret = box };
+                return .{ .secret = .of(box) };
             },
             .Array => {
                 if (j != .array) return r.mismatch(path, "an array", j);
@@ -1304,7 +1304,7 @@ pub fn fromJson(arena: Allocator, gpa: Allocator, def: *const Def, text: []const
     var r: JsonReader = .{ .arena = arena, .diag = options.diagnostic, .options = options };
     const d = try r.read(.{ .e = def.body, .env = null }, j, &Path.root);
     // The limits apply to the value the result encodes to (§16 "Limits").
-    try checkDepth(try decode_mod.toValue(arena, d), options.limits, options.diagnostic);
+    try checkDepth(try decode_mod.toValueRevealed(arena, d, options.diagnostic), options.limits, options.diagnostic);
     return d;
 }
 

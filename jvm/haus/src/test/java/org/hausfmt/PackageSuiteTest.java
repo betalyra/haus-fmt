@@ -43,7 +43,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class PackageSuiteTest {
   /** The cases in the suite, and how many of them are of the npm ecosystem. */
-  private static final int CASES = 133;
+  private static final int CASES = 136;
   private static final int NPM_CASES = 46;
   /** How long a case may take: a resolver that opens a FIFO blocking would hang. */
   private static final Duration TIMEOUT = Duration.ofSeconds(10);

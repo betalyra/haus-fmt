@@ -25,5 +25,8 @@ public struct Secret<Wrapped>: CustomStringConvertible, CustomDebugStringConvert
 }
 
 extension Secret: Sendable where Wrapped: Sendable {}
+
+/// What the writers that don't apply a secret's schema say when they refuse it.
+let secretRefused = "a Secret, which is written only with its schema (SchemaType.encode): its value is not shown"
 extension Secret: Equatable where Wrapped: Equatable {}
 extension Secret: Hashable where Wrapped: Hashable {}

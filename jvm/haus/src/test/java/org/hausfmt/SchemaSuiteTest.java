@@ -46,16 +46,17 @@ class SchemaSuiteTest {
           if (c.tag().equals("Ok")) {
             Value want = field(c, "output") != null ? field(c, "output") : input;
             try {
-              Value out = t.decode(input);
+              // Secrets come back hidden (spec §15): revealed to compare, written in full by encode.
+              Value out = Suite.revealed(t.decode(input));
               if (!Haus.canonical(out).equals(Haus.canonical(want))) {
                 failures.add(label + ": decoded as " + Haus.canonical(out));
                 continue;
               }
-              Value enc = t.encode(out);
+              Value enc = t.encode(t.decode(input));
               if (!Haus.canonical(enc).equals(Haus.canonical(out))) {
                 failures.add(label + ": encoded as " + Haus.canonical(enc));
               }
-              Haus.write(out);
+              Haus.write(enc);
             } catch (HausException e) {
               failures.add(label + ": " + e.getMessage());
             }

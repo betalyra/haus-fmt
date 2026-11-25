@@ -9,7 +9,7 @@
 //! // Decoding gives the value a writer writes back (spec §15): `0x10` is `16`,
 //! // and the open record drops the field it doesn't list.
 //! let decoded = schema.decode("Root", &value).unwrap();
-//! assert_eq!(haus::canonical(&decoded), r#"{id:16,tags:["a"]}"#);
+//! assert_eq!(haus::canonical(&decoded.reveal()), r#"{id:16,tags:["a"]}"#);
 //!
 //! // Checking reports every problem, with its place in the text, and hints.
 //! let issues = schema.check_text("Root", "{\n  id: \"7\",\n  tgs: [],\n}");
@@ -33,13 +33,20 @@
 //! - [`Schema::decode`] and [`Schema::decode_stream`]: decode a [`haus::Value`]
 //!   with a type exactly as §15 says, giving the value an encoder writes back
 //!   (floats in their one spelling, `-0` as an integer `0`, fields an open
-//!   record ignores left out), or the first error, with its path.
+//!   record ignores left out), or the first error, with its path. The
+//!   result is a [`Decoded`]: its secrets print as `<redacted>`, and only
+//!   [`Decoded::reveal`] makes it a [`haus::Value`] again, which the
+//!   canonical form, the hash and the writers take (spec §15, "Secrets").
+//!   [`Schema::encode`] encodes it with the schema, the secrets in full.
 //! - [`Schema::check_text`] and [`Schema::check`]: every problem in a data file
-//!   (up to 200), with positions, and hints for fields and tags an open type
-//!   doesn't list and for deprecated ones: what `haus check` and editors show.
-//!   Every error, as a set (spec §14, "Every error"); [`Schema::check_text_report`]
-//!   and [`Schema::check_report`] also stop at the first one if asked
-//!   ([`CheckOptions::first`]) and say whether they stopped at the cap.
+//!   (up to 200 errors; hints don't count), with positions, and hints for
+//!   fields and tags an open type doesn't list and for deprecated ones: what
+//!   `haus check` and editors show. Every error, as a set (spec §14, "Every
+//!   error"); [`Schema::check_text_report`] and [`Schema::check_report`] also
+//!   stop at the first one if asked ([`CheckOptions::first`]) and say whether
+//!   they stopped at the cap. A `Stream` is checked item by item: a syntax
+//!   error ends the check after the items before it. [`Schema::check_stream`]
+//!   checks a stream's values as they arrive, with one cap for all of them.
 //! - [`Schema::missing_codecs`]: the `missing-codec` warnings for code
 //!   generated with a set of codecs, and [`profiles::unchecked_profiles`]
 //!   the notes of tools without codecs (spec §13.4).
@@ -55,6 +62,7 @@
 //!   from these.
 
 mod check;
+mod decoded;
 mod files;
 mod locate;
 mod locator;
@@ -64,7 +72,8 @@ mod resolve;
 pub mod syntax;
 mod types;
 
-pub use check::{CheckOptions, CheckReport, Issue, MAX_ISSUES, Position, Segment, Severity};
+pub use check::{CheckOptions, CheckReport, Issue, MAX_ERRORS, Position, Segment, Severity, StreamCheck};
+pub use decoded::Decoded;
 pub use files::FileCache;
 pub use locator::{Explicit, Location, Locator, NoImports, Or};
 pub use packages::{Manifest, Packages};
@@ -86,6 +95,7 @@ const _: () = {
     shared::<Variant>();
     shared::<Issue>();
     shared::<CheckReport>();
+    shared::<Decoded>();
     shared::<Error>();
     shared::<Manifest>();
     shared::<Packages>();
@@ -99,21 +109,28 @@ use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 
 /// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`,
-/// with its code (spec §17).
+/// with its code (spec §17), or a mistake in the configuration of a build,
+/// which has none ([`Error::config`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     path: Option<PathBuf>,
     /// Line and column, 1-based.
     position: Option<(usize, usize)>,
     reason: String,
-    code: ErrorCode,
+    code: Option<ErrorCode>,
     hint: Option<String>,
 }
 
 impl Error {
     /// An error without a place.
     pub fn new(code: ErrorCode, reason: impl Display) -> Error {
-        Error { path: None, position: None, reason: reason.to_string(), code, hint: None }
+        Error { path: None, position: None, reason: reason.to_string(), code: Some(code), hint: None }
+    }
+
+    /// A mistake in how a build is configured, not in a schema or data,
+    /// so without a code of §17: two codecs for one id (spec §13.4).
+    pub fn config(reason: impl Display) -> Error {
+        Error { path: None, position: None, reason: reason.to_string(), code: None, hint: None }
     }
 
     /// An error about the file at `path`.
@@ -147,33 +164,35 @@ impl Error {
     }
 
     /// Which mistake it is (spec §17): `unknown-type`, or for a warning
-    /// `unknown-attribute` or `deprecated`.
-    pub fn code(&self) -> ErrorCode {
+    /// `unknown-attribute` or `deprecated`. None for a mistake in the
+    /// configuration of a build ([`Error::config`]).
+    pub fn code(&self) -> Option<ErrorCode> {
         self.code
     }
 
     /// A concrete fix: the one for this case, or the catalogue's for the code.
     pub fn hint(&self) -> &str {
-        self.hint.as_deref().unwrap_or(self.code.hint())
+        self.hint.as_deref().or(self.code.map(|c| c.hint())).unwrap_or_default()
     }
 
     /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
-    pub fn docs(&self) -> String {
-        self.code.docs()
+    pub fn docs(&self) -> Option<String> {
+        self.code.map(|c| c.docs())
     }
 
-    /// The JSON form of spec §17: `{ code, message, line?, column?, hint, docs }`.
-    pub fn to_json(&self) -> String {
-        haus::ErrorJson {
-            code: self.code,
+    /// The JSON form of spec §17: `{ code, message, line?, column?, hint, docs }`;
+    /// None for a mistake in the configuration of a build, which has no code.
+    pub fn to_json(&self) -> Option<String> {
+        let json = haus::ErrorJson {
+            code: self.code?,
             message: &self.reason,
             position: self.position,
             path: None,
             expected: None,
             found: None,
             hint: self.hint(),
-        }
-        .write()
+        };
+        Some(json.write())
     }
 }
 

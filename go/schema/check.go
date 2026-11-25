@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -18,7 +19,9 @@ import (
 // The rules are those of decoding (§15), with the same codes and messages
 // for the same mistakes; the work is bounded as decoding's is.
 
-// MaxIssues is the most issues a check reports for one file.
+// MaxIssues is the most errors a check reports, for the whole file (a
+// stream's every item together); hints don't count (spec §14, "Every
+// error"). A check that finds more stops, and says so ([CheckResult]).
 const MaxIssues = 200
 
 // Severity says how bad an [Issue] is.
@@ -97,7 +100,7 @@ func (s *Schema) CheckTextWith(name string, text []byte, limits haus.Limits) []I
 type CheckOptions struct {
 	// First stops at the first error (haus check --first), with the hints
 	// found before it. By default every error is reported (spec §14,
-	// "Every error"), up to [MaxIssues] issues.
+	// "Every error"), up to [MaxIssues] errors.
 	First bool
 	// Limits are the parser's limits, also the depth limit and the limits
 	// raw values are checked against. Zero fields take their defaults.
@@ -106,10 +109,10 @@ type CheckOptions struct {
 
 // CheckResult is what a check found: the issues, a set (which issues is
 // specified, their order is not, spec §14), and whether it stopped at
-// [MaxIssues] with more to report.
+// [MaxIssues] errors with more to report.
 type CheckResult struct {
 	Issues []Issue
-	// Stopped is set when the check stopped at [MaxIssues] issues: there
+	// Stopped is set when the check stopped at [MaxIssues] errors: there
 	// are more.
 	Stopped bool
 }
@@ -134,32 +137,74 @@ func (s *Schema) CheckValues(name string, values []haus.Value, opts CheckOptions
 // CheckTextResult is [Schema.CheckText] with options: every error (spec
 // §14, "Every error") or only the first, and whether it stopped at
 // [MaxIssues]. A syntax or limit error of the text is its only issue.
+//
+// A Stream type is checked item by item, as [Type.DecodeStream] reads it
+// (spec §14, "Every error"): each item is parsed, then checked, before the
+// next is read, so a syntax or limit error ends the check after the errors
+// of the items before it.
 func (s *Schema) CheckTextResult(name string, text []byte, opts CheckOptions) CheckResult {
 	src := string(text)
 	ls := newLines(src)
-	values, err := haus.ParseAllWith(text, opts.Limits)
-	if err != nil {
-		e, ok := err.(*haus.Error)
-		if !ok {
-			return CheckResult{Issues: []Issue{{Code: haus.CodeInvalidUTF8, Message: err.Error()}}}
+	var r CheckResult
+	if t, err := s.Type(name); err == nil && t.stream {
+		r = s.checkStreamText(name, text, ls, opts)
+	} else {
+		values, err := haus.ParseAllWith(text, opts.Limits)
+		if err != nil {
+			return CheckResult{Issues: []Issue{syntaxIssue(err, src, ls)}}
 		}
-		at := ls.offset(e.Line, e.Column)
-		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message, Line: e.Line, Column: e.Column,
-			Offset: at, End: at + charLen(src, at), Fix: e.Hint}}}
+		locs := locate(src)
+		if len(locs) != len(values) {
+			locs = nil
+		}
+		r = s.check(name, values, locs, opts)
 	}
-	locs := locate(src)
-	if len(locs) != len(values) {
-		locs = nil
-	}
-	r := s.check(name, values, locs, opts)
 	for i := range r.Issues {
 		is := &r.Issues[i]
+		if is.Line != 0 { // a syntax error, at its place
+			continue
+		}
 		if is.End == 0 { // no span: the start of the file
 			is.Offset, is.End = 0, charLen(src, 0)
 		}
 		is.Line, is.Column = ls.position(is.Offset)
 	}
 	return r
+}
+
+// checkStreamText checks text item by item with the Stream type name.
+func (s *Schema) checkStreamText(name string, text []byte, ls *lines, opts CheckOptions) CheckResult {
+	c, t, failed := s.start(name, true, opts)
+	if failed != nil {
+		return *failed
+	}
+	src := string(text)
+	sc := newScan(src)
+	reader := haus.NewStreamReader(bytes.NewReader(text), haus.StreamOptions{Limits: opts.Limits})
+	i := 0
+	for v, err := range reader.All() {
+		if err != nil {
+			c.issues = append(c.issues, syntaxIssue(err, src, ls))
+			break
+		}
+		c.item(i, v, t, sc.next())
+		if c.stopped() {
+			break
+		}
+		i++
+	}
+	return c.result()
+}
+
+// syntaxIssue is the issue of a syntax or limit error of the text.
+func syntaxIssue(err error, src string, ls *lines) Issue {
+	e, ok := err.(*haus.Error)
+	if !ok {
+		return Issue{Code: haus.CodeInvalidUTF8, Message: err.Error()}
+	}
+	at := ls.offset(e.Line, e.Column)
+	return Issue{Code: e.Code, Message: e.Message, Line: e.Line, Column: e.Column,
+		Offset: at, End: at + charLen(src, at), Fix: e.Hint}
 }
 
 // charLen is the length of the character at s[i], at least 1 within s.
@@ -191,25 +236,14 @@ func (s *Schema) check(name string, values []haus.Value, locs []*loc, opts Check
 		}
 		return nil
 	}
-	t, err := s.Type(name)
-	if err != nil {
-		e := err.(*haus.Error)
-		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message}}}
+	c, t, failed := s.start(name, locs != nil, opts)
+	if failed != nil {
+		return *failed
 	}
-	lim, err := resolveLimits(opts.Limits)
-	if err != nil {
-		e := err.(*haus.Error)
-		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message}}}
-	}
-	c := checker{located: locs != nil, first: opts.First}
-	c.w = walker{lim: lim, budget: budgetStart, path: make([]step, 0, 16)}
 	switch {
 	case t.stream:
 		for i, v := range values {
-			c.w.root = v
-			c.w.path = append(c.w.path[:0], step{index: i})
-			c.w.prefix = 1
-			c.value(v, t.t, at(i))
+			c.item(i, v, t, at(i))
 			if c.stopped() {
 				break
 			}
@@ -222,7 +256,23 @@ func (s *Schema) check(name string, values []haus.Value, locs []*loc, opts Check
 		c.w.root = values[0]
 		c.value(values[0], t.t, at(0))
 	}
-	return CheckResult{Issues: c.issues, Stopped: c.capped}
+	return c.result()
+}
+
+// start returns a checker for the type name, or the result of a check that
+// can't start: an unknown type, or limits out of range.
+func (s *Schema) start(name string, located bool, opts CheckOptions) (*checker, Type, *CheckResult) {
+	t, err := s.Type(name)
+	if err == nil {
+		var lim haus.Limits
+		if lim, err = resolveLimits(opts.Limits); err == nil {
+			c := &checker{located: located, first: opts.First}
+			c.w = walker{lim: lim, budget: budgetStart, path: make([]step, 0, 16)}
+			return c, t, nil
+		}
+	}
+	e := err.(*haus.Error)
+	return nil, t, &CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message}}}
 }
 
 // span is a part of the text; zero when there is none.
@@ -247,14 +297,25 @@ type checker struct {
 
 func (c *checker) stopped() bool { return c.fatal || c.capped || (c.first && c.errors > 0) }
 
-// add adds an issue, unless there are MaxIssues already: then the check
-// stops, and says so (spec §14, "Every error").
+// item checks the value of a stream at index i with the Stream type t.
+func (c *checker) item(i int, v haus.Value, t Type, l *loc) {
+	c.w.root = v
+	c.w.path = append(c.w.path[:0], step{index: i})
+	c.w.prefix = 1
+	c.value(v, t.t, l)
+}
+
+func (c *checker) result() CheckResult { return CheckResult{Issues: c.issues, Stopped: c.capped} }
+
+// add adds an issue, unless it is an error past the first MaxIssues: then
+// the check stops, and says so (spec §14, "Every error"). Hints don't
+// count.
 func (c *checker) add(is Issue) {
-	if len(c.issues) >= MaxIssues {
-		c.capped = true
-		return
-	}
 	if is.Severity == SeverityError {
+		if c.errors >= MaxIssues {
+			c.capped = true
+			return
+		}
 		c.errors++
 	}
 	c.issues = append(c.issues, is)
@@ -410,21 +471,17 @@ func (c *checker) secret(v haus.Value, item *typ, l *loc) {
 }
 
 func (c *checker) record(r haus.Record, rt *recordType, l *loc) {
-	var missing []string
+	// Each missing field is an error of its own, at the record (spec §14).
 	for i := range rt.fields {
 		f := &rt.fields[i]
 		if _, ok := r.Get(f.key); !ok && !f.optional {
-			missing = append(missing, quoteKey(f.key))
+			sp := spanOf(l)
+			sp.end = sp.start + 1
+			c.report(SeverityError, haus.CodeMissingField, "missing field "+quoteKey(f.key), "", sp)
+			if c.stopped() {
+				return
+			}
 		}
-	}
-	if len(missing) > 0 {
-		s := ""
-		if len(missing) > 1 {
-			s = "s"
-		}
-		sp := spanOf(l)
-		sp.end = sp.start + 1
-		c.report(SeverityError, haus.CodeMissingField, fmt.Sprintf("missing field%s %s", s, strings.Join(missing, ", ")), "", sp)
 	}
 	i := -1
 	for k, x := range r.All() {

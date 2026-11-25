@@ -118,7 +118,7 @@ final class SchemaJsonWriter {
         maybe(v, rt);
         return;
       case SECRET:
-        value(v, rt.elem);
+        value(v instanceof Value.Secret s ? s.reveal() : v, rt.elem);
         return;
       case RECORD:
         if (v instanceof Value.Record) {

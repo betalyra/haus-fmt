@@ -231,7 +231,8 @@ def _pair(pair: object) -> tuple[object, object]:
 class Variant:
     """A tag with zero or more arguments, from any iterable of values. `Tag { … }` has one `Record` argument.
 
-    A tag that isn't `[A-Z][A-Za-z0-9_]*` is `invalid-tag`.
+    A tag that isn't `[A-Z][A-Za-z0-9_]*` is `invalid-tag`, one with a lone surrogate included: the tag
+    is checked before it is encoded (spec §11).
     """
 
     tag: str
@@ -239,9 +240,9 @@ class Variant:
 
     def __init__(self, tag: str, args: Iterable[Value] = ()) -> None:
         if type(tag) is not str or TAG.fullmatch(tag) is None:
-            tag = _str(tag, "a tag")
-            if TAG.fullmatch(tag) is None:
+            if isinstance(cast("object", tag), str) and TAG.fullmatch(tag) is None:
                 _fail("invalid-tag", f'the tag "{quote_for_message(tag)}" isn\'t [A-Z][A-Za-z0-9_]*')
+            tag = _str(tag, "a tag")
         _set_tag(self, tag)
         _set_args(self, _values(args, "arguments"))
 

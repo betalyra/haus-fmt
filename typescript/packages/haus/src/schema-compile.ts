@@ -32,7 +32,7 @@
  *   compileSchemaFile(text, { ...options, codecs: iso })   // iso from @haus-fmt/money
  */
 import { groupSchemas } from "./codegen.js"
-import { missingCodecs, type CodecWarning } from "./profiles.js"
+import { missingCodecs, unusedCodecs, type CodecWarning } from "./profiles.js"
 import * as h from "./schema.js"
 import {
   deprecation, HausSchemaFileError, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type,
@@ -48,8 +48,10 @@ export interface CompiledSchemaFile {
    * Warnings about the codecs given (spec §13.4): `missing-codec` for each
    * type of an official profile that the file's types reach without its codec
    * (`@haus-fmt/money@1#Currency` without `iso`), whose values are then checked
-   * for their shape only. Decoding is the same with or without them. The
-   * warnings of the schema text itself are `file.warnings`.
+   * for their shape only; `unused-codec` for each codec whose id no type has
+   * (`@haus-fmt/money@2#Money` when the schema imports major 1), which never
+   * runs. Decoding is the same with or without them. The warnings of the
+   * schema text itself are `file.warnings`.
    */
   readonly warnings: readonly CodecWarning[]
 }
@@ -67,9 +69,14 @@ export interface Codec {
 
 export interface FromSchemaFileOptions {
   /**
-   * Codecs, applied wherever their type occurs, inside imported packages too.
-   * Codecs for types the schema doesn't contain are ignored (a profile's
-   * codecs are given together); two for one type are an error.
+   * Codecs, applied wherever their type occurs, inside imported packages too,
+   * and to the prelude's and std/time's types (`prelude#Decimal`,
+   * `std/time#Instant`). A codec for an id no type has never runs: the
+   * warning `unused-codec`; two for one type are an error.
+   *
+   * An outer codec (for `Money`) is given the host value of a part that has a
+   * codec of its own (your `Currency` host type), as built inside out
+   * (spec §13.4).
    */
   readonly codecs?: readonly Codec[] | undefined
 }
@@ -118,6 +125,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   const byId = codecsById(options.codecs ?? [])
   const built = new Map<Instance, h.AnySchema>()
   const building = new Set<Instance>()
+  /** The schema with the codec for `id` applied, if one is set. */
+  const withCodec = (id: string, schema: h.AnySchema): h.AnySchema => byId.get(id)?.apply(schema) ?? schema
 
   const ref = (inst: Instance): h.AnySchema => {
     const done = built.get(inst)
@@ -126,10 +135,9 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     // limited only by the call's nesting depth (spec §9.9).
     if (building.has(inst)) return h.Recursive(inst.key, () => built.get(inst)!)
     building.add(inst)
-    let schema = build(inst.body)
     // Codecs target named types without arguments, by id.
-    const codec = inst.args.length === 0 ? byId.get(inst.definition.id) : undefined
-    if (codec) schema = codec.apply(schema)
+    const body = build(inst.body)
+    const schema = inst.args.length === 0 ? withCodec(inst.definition.id, body) : body
     building.delete(inst)
     built.set(inst, schema)
     return schema
@@ -165,10 +173,11 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   }
   const buildNew = (t: Exclude<Type, { kind: "ref" }>): h.AnySchema => {
     switch (t.kind) {
+      // The prelude's and std/time's types take codecs too (spec §13.4): a codec for `prelude#Decimal` applies to every Decimal.
       case "builtin":
-        return builtin(t.name)
+        return withCodec(`prelude#${t.name}`, builtin(t.name))
       case "std":
-        return t.name === "Date" ? h.Date : h.StdTime(t.name)
+        return withCodec(`std/time#${t.name}`, t.name === "Date" ? h.Date : h.StdTime(t.name))
       case "array":
         return h.Array(build(t.item))
       case "map":
@@ -216,7 +225,7 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   }
   // Generated together when one of them is first used (codegen.ts).
   groupSchemas(schemas)
-  return { file, schemas, streams, warnings: missingCodecs(file, (id) => byId.has(id)) }
+  return { file, schemas, streams, warnings: [...missingCodecs(file, (id) => byId.has(id)), ...unusedCodecs(file, byId.keys())] }
 }
 
 // ── TypeScript declarations ──────────────────────────────────

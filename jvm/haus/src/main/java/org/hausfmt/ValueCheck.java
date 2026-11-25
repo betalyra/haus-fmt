@@ -55,6 +55,8 @@ final class ValueCheck extends WriteCheck {
           items(variant.unsafeArgs(), depth);
         }
         break;
+      case SECRET:
+        throw secretRefused(path);
     }
   }
 

@@ -16,7 +16,7 @@ fn ids(warnings: &[haus_build::Warning]) -> Vec<String> {
     warnings
         .iter()
         .map(|w| {
-            assert_eq!(w.code(), ErrorCode::MissingCodec, "{w}");
+            assert_eq!(w.code(), Some(ErrorCode::MissingCodec), "{w}");
             w.reason().split(' ').next().unwrap().to_owned()
         })
         .collect()

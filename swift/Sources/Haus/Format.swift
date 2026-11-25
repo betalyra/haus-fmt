@@ -440,6 +440,8 @@ struct Printer {
             }
         case .number, .bytes:
             return codePoints(in: node.text![...])
+        case .secret:
+            return nil  // never written: the writers refuse it
         }
     }
 

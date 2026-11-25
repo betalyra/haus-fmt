@@ -113,7 +113,7 @@ impl Diagnostic {
             position: e.position(),
             hint: e.hint().to_owned(),
             excerpt,
-            ..Diagnostic::new(severity, e.code(), e.reason())
+            ..Diagnostic::new(severity, schema_code(e), e.reason())
         }
     }
 
@@ -261,6 +261,13 @@ fn floor(text: &str, mut i: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+/// The code of an error loading a schema or a package. Each has one: only a
+/// build's configuration (its codecs) makes errors without, and the command
+/// sets no codecs.
+pub fn schema_code(e: &haus_schema::Error) -> ErrorCode {
+    e.code().unwrap_or(ErrorCode::SchemaSyntax)
 }
 
 /// The byte offset of 1-based `line` and `column` (in code points).

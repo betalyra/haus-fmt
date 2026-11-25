@@ -3,8 +3,8 @@
 //
 // Accept: `value` (haus text for `type`) is accepted, and encoding what the
 // codec decoded writes exactly the text `output`, or `value` when there is no
-// `output`. Reject: `value` is valid for the schema of `type` (the shape), and
-// the codec rejects it (the rule).
+// `output`, in the compact layout (spec §11). Reject: `value` is valid for the
+// schema of `type` (the shape), and the codec rejects it (the rule).
 
 // ── LatLng ──
 Accept { type: "LatLng", value: "LatLng(38.7223, -9.1393)" },
