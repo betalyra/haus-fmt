@@ -101,6 +101,8 @@ The comma tells the reader an entry is complete, so it hands each one over **rig
 
 A dropped connection could leave `100` where `1000` was meant. **Strict mode** requires the last comma, and reports a truncated stream instead.
 
+It catches a cut inside an entry. A cut right after a comma leaves a valid stream with fewer entries: if every entry must arrive, the sender says how many it sent, or ends with an entry of its own.
+
 </Step>
 
 <Step lang="ts" label="watch.ts" code={steps[5]}>

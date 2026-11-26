@@ -5,7 +5,9 @@
 //     aren't valid identifiers ("content-type", "2fa", ...).
 //   - Trailing commas are allowed everywhere.
 //   - Comments: `// line` and `/* block */` (block comments nest).
-//   - There is no `null`. Absence is expressed with variants (None / Some).
+//   - There is no `null`. A field the schema marks optional (`owner?: String`)
+//     is left out; a value that may be absent is a Maybe, always written:
+//     None or Some(…). The two are different things.
 //   - A capitalised identifier is always a variant tag (constructor).
 //     Lowercase identifiers are only ever keys. No keywords: booleans are
 //     the prelude variants True / False.
@@ -26,7 +28,7 @@
   big: 1_000_000, // digit separators
   mask: 0xFF_FF,
   enabled: True,
-  // ── Prelude types: a tag wrapping an ISO string ────────────
+  // ── std/time values, and Money from @haus-fmt/money ────────
   released: Date("2026-11-07"),
   opensAt: Time("09:00:00"),
   updated: Instant("2026-11-07T10:00:00Z"),

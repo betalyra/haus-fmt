@@ -25,6 +25,11 @@ pub const FormatOptions = struct {
     /// Keep the comments of a formatted document (pretty). False drops
     /// them, which the user has to ask for (spec §11, "Comments and layouts").
     comments: bool = true,
+    /// The file is a stream (spec §11, "Streams"): every top-level item is
+    /// followed by a comma, a single one too, in every layout. A file of no
+    /// items is written as without it. Used by `format` and `stringifyAll`;
+    /// `stringify` writes one value, never a file, and ignores it.
+    stream: bool = false,
     /// Limits and the diagnostic, for values built in code.
     write: WriteOptions = .{},
 };
@@ -473,8 +478,9 @@ pub const Writer = struct {
     }
 
     /// A whole file (spec §6, §11): its items, and the comments at its end.
-    pub fn file(w: *Writer, top: Container, layout: Layout) Allocator.Error!void {
-        const many = top.entries.len > 1;
+    /// With `stream`, a comma after every item, a single one too.
+    pub fn file(w: *Writer, top: Container, layout: Layout, stream: bool) Allocator.Error!void {
+        const many = top.entries.len > 1 or stream;
         switch (layout) {
             .compact, .minimised => for (top.entries) |e| {
                 try w.flat(e.value, layout == .minimised);
@@ -518,18 +524,19 @@ pub fn stringify(gpa: Allocator, val: Value, options: FormatOptions) Error![]u8 
 }
 
 /// Values as a file (spec §6, §11): one value alone, more each followed by
-/// a comma; a line break at the end unless there are none.
+/// a comma (with `options.stream`, a single one too); a line break at the
+/// end unless there are none.
 pub fn stringifyAll(gpa: Allocator, values: []const Value, options: FormatOptions) Error![]u8 {
     if (options.layout != .pretty) {
         // As `Writer.file`: each value on its line, a comma after each when
-        // there are several.
+        // there are several or the file is a stream.
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(gpa);
         for (values, 0..) |val, i| {
             // The limits apply to each value on its own (spec §7).
             var f = Flat{ .gpa = gpa, .out = &out, .checker = .{ .options = options.write, .writer = true, .index = i }, .minimised = options.layout == .minimised };
             try f.value(val, 0);
-            if (values.len > 1) try out.append(gpa, ',');
+            if (values.len > 1 or options.stream) try out.append(gpa, ',');
             try out.append(gpa, '\n');
         }
         return out.toOwnedSlice(gpa);
@@ -546,8 +553,24 @@ pub fn stringifyAll(gpa: Allocator, values: []const Value, options: FormatOption
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var w = Writer{ .gpa = gpa, .out = &out, .indent = options.indent, .width = options.width };
-    try w.file(.{ .entries = entries }, options.layout);
+    try w.file(.{ .entries = entries }, options.layout, options.stream);
     return out.toOwnedSlice(gpa);
+}
+
+test "the stream option: a comma after a single value too" {
+    const gpa = std.testing.allocator;
+    const one = [_]Value{Value.tag("A")};
+    for ([_]Layout{ .pretty, .compact, .minimised }) |layout| {
+        const plain = try stringifyAll(gpa, &one, .{ .layout = layout });
+        defer gpa.free(plain);
+        try std.testing.expectEqualStrings("A\n", plain);
+        const s = try stringifyAll(gpa, &one, .{ .layout = layout, .stream = true });
+        defer gpa.free(s);
+        try std.testing.expectEqualStrings("A,\n", s);
+        const none = try stringifyAll(gpa, &.{}, .{ .layout = layout, .stream = true });
+        defer gpa.free(none);
+        try std.testing.expectEqualStrings("", none);
+    }
 }
 
 test "writers check every limit" {

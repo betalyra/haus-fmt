@@ -26,29 +26,39 @@ public struct FormatOptions: Sendable, Hashable {
     /// The line width in code points, which only decides whether a
     /// positional payload fits on one line in the pretty layout. Default 80.
     public private(set) var width: Int
+    /// Whether the file is a stream (spec §11), in every layout: then every
+    /// top-level item is followed by a comma, a single one too, so a log with
+    /// one entry so far keeps the comma the next one is appended after (in
+    /// pretty, the comma counts toward the width). Without it a single item
+    /// has no comma; a file of several items, or of none, is written the same
+    /// either way. Read by ``format(_:_:)`` and ``stringifyAll(_:_:)``;
+    /// ``stringify(_:_:)`` writes one value and ignores it. Default `false`.
+    public var stream: Bool
     /// The limits of the text read (``format(_:_:)``), or of the reader the
     /// text is written for (``stringify(_:_:)``, ``stringifyAll(_:_:)``).
     public var limits: Limits
 
     /// Options with the default indent (2) and width (80).
-    public init(layout: Layout = .pretty, limits: Limits = Limits()) {
+    public init(layout: Layout = .pretty, stream: Bool = false, limits: Limits = Limits()) {
         self.layout = layout
         self.indent = 2
         self.width = 80
+        self.stream = stream
         self.limits = limits
     }
 
     /// Options with an indent and a width: whole numbers of zero or more. A
     /// negative one is a misuse of the API and throws ``FormatOptionsError``
     /// (it has no error code of spec §17).
-    public init(layout: Layout = .pretty, indent: Int = 2, width: Int = 80, limits: Limits = Limits())
-        throws(FormatOptionsError)
-    {
+    public init(
+        layout: Layout = .pretty, indent: Int = 2, width: Int = 80, stream: Bool = false, limits: Limits = Limits()
+    ) throws(FormatOptionsError) {
         guard indent >= 0 else { throw FormatOptionsError("indent must be 0 or more, not \(indent)") }
         guard width >= 0 else { throw FormatOptionsError("width must be 0 or more, not \(width)") }
         self.layout = layout
         self.indent = indent
         self.width = width
+        self.stream = stream
         self.limits = limits
     }
 }
@@ -101,13 +111,20 @@ public func hasComments(_ text: String, limits: Limits = Limits()) throws(HausEr
 /// ``Limits/maxNodes`` (`too-many-nodes`, at `$`, for a value whose arrays
 /// share each other).
 public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {
-    try write([value], options, indexed: false)
+    var one = options
+    one.stream = false
+    return try write([value], one, indexed: false)
 }
 
 /// Writes values as a file (spec §6): one value alone, two or more as a
-/// stream with a comma after each. See ``stringify(_:_:)``. Each value has
+/// stream with a comma after each; with ``FormatOptions/stream``, a single
+/// value has a comma after it too. See ``stringify(_:_:)``. Each value has
 /// its own node count, and an error in the i-th value is at its index
 /// (`$[3]`), also when there is one value (`$[0]`, spec §11).
+///
+/// ```swift
+/// try stringifyAll([.variant("Ping", [])], FormatOptions(layout: .compact, stream: true)) // "Ping,\n"
+/// ```
 public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = FormatOptions()) throws(HausError) -> String
 {
     try write(values, options, indexed: true)
@@ -117,7 +134,9 @@ public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = Forma
 /// index of its value.
 private func write(_ values: [HausValue], _ options: FormatOptions, indexed: Bool) throws(HausError) -> String {
     let limits = try options.limits.checked()
-    guard options.layout == .pretty else { return try writeLines(values, options.layout, limits, indexed: indexed) }
+    guard options.layout == .pretty else {
+        return try writeLines(values, options.layout, limits, stream: options.stream, indexed: indexed)
+    }
     var file = FileNode()
     for (i, value) in values.enumerated() {
         var walk = Walk(TreeSpelling(), checks: .writer(limits), prefix: indexed ? [.index(i)] : [])
@@ -129,12 +148,12 @@ private func write(_ values: [HausValue], _ options: FormatOptions, indexed: Boo
 }
 
 /// Writes values in the compact or minimised layout, directly: one line per
-/// value, with a comma after each in a stream.
+/// value, with a comma after each in a stream (more than one value, or told so).
 private func writeLines(
-    _ values: [HausValue], _ layout: Layout, _ limits: Limits, indexed: Bool
+    _ values: [HausValue], _ layout: Layout, _ limits: Limits, stream told: Bool, indexed: Bool
 ) throws(HausError) -> String {
     let spelling = layout == .compact ? HausSpelling.compact : .minimised
-    let stream = values.count > 1
+    let stream = told || values.count > 1
     var out: [UInt8] = []
     for (i, value) in values.enumerated() {
         var walk = Walk(spelling, checks: .writer(limits), prefix: indexed ? [.index(i)] : [])
@@ -234,15 +253,18 @@ struct Printer {
     let indent: Int
     let width: Int
     let layout: Layout
+    /// Told that the file is a stream: a comma after a single item too.
+    let stream: Bool
 
     init(_ options: FormatOptions) {
         indent = options.indent
         width = options.width
         layout = options.layout
+        stream = options.stream
     }
 
     consuming func file(_ file: FileNode) -> String {
-        let stream = file.items.count > 1
+        let stream = stream || file.items.count > 1
         if layout == .pretty {
             var first = true
             var multiline = false

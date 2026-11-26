@@ -54,6 +54,10 @@ extern "C" {
 #define HAUS_PRETTY 0
 #define HAUS_COMPACT 1
 #define HAUS_MINIMISED 2
+/* Or'ed into the layout of haus_format and haus_stringify_doc: the file is a
+ * stream (spec §11, "Streams"), so a single item has a comma after it too.
+ * haus_stringify writes one value and refuses it (HAUS_INVALID_ARGUMENT). */
+#define HAUS_STREAM 0x100
 
 /* Kinds of values (spec §1). */
 #define HAUS_NUMBER 1
@@ -91,7 +95,8 @@ int haus_hash_all(const char *text, size_t len, char out[65], haus_error *err);
 
 /* Formats a file in a layout (spec §11), keeping comments in pretty.
  * indent and width are pretty's options (2 and 80 are the defaults; 0 is
- * taken literally); a negative one is HAUS_INVALID_ARGUMENT. */
+ * taken literally); a negative one is HAUS_INVALID_ARGUMENT. layout may have
+ * HAUS_STREAM or'ed in. */
 int haus_format(const char *text, size_t len, int layout, int indent, int width,
                 char **out, size_t *out_len, haus_error *err);
 
@@ -140,8 +145,10 @@ const char *haus_variant_tag(const haus_value *v, size_t *len);
 const haus_value *haus_variant_arg(const haus_value *v, size_t i);
 /* A Secret in a decoded value (spec §15) is a value of kind HAUS_SECRET: the
  * accessors above see nothing in it, and every writer, the canonical form, the
- * hash, equality and order reject it ("cannot-encode", the value not shown),
- * so it isn't written or logged by mistake; haus_encode writes it in full.
+ * hash, equality and order reject it ("cannot-encode" with the secret's place
+ * in path, the value not shown: "$.pin"; "$[i].pin" for haus_stringify_doc;
+ * for equality and order the message says which operand), so it isn't
+ * written or logged by mistake; haus_encode writes it in full.
  * This explicit call gives out the value it hides; NULL for another kind. */
 const haus_value *haus_secret_reveal(const haus_value *v);
 
@@ -184,7 +191,8 @@ int haus_new_variant(haus_doc *doc, const char *tag, size_t tag_len, const haus_
 /* One value in a layout (spec §11), without a line break after it. The
  * writers check the limits of spec §7 ("nesting-too-deep", "number-too-long", …). */
 int haus_stringify(const haus_value *v, int layout, int indent, int width, char **out, size_t *out_len, haus_error *err);
-/* The top-level values of a doc as a file (spec §6, §11). */
+/* The top-level values of a doc as a file (spec §6, §11); with HAUS_STREAM
+ * or'ed into layout, as a stream: a comma after every value, a single one too. */
 int haus_stringify_doc(const haus_doc *doc, int layout, int indent, int width, char **out, size_t *out_len, haus_error *err);
 /* The canonical form (spec §12) of a value, without a line break. */
 int haus_value_canonical(const haus_value *v, char **out, size_t *out_len, haus_error *err);

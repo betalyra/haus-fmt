@@ -1,0 +1,3 @@
+// Formatted as a stream, a single item has a comma after it, which counts toward the width:
+// these 80 columns and the comma don't fit.
+Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

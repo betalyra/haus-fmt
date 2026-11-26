@@ -811,6 +811,8 @@ export class Reader {
         this.pos++
       }
     }
+    // Read left to right (spec §4): a character the comment can't hold comes before its missing `*/`.
+    this.checkCommentText(open, this.src.length)
     this.fail("unterminated-comment", "unterminated block comment", open)
   }
 

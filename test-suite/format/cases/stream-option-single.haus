@@ -1,0 +1,2 @@
+// A log that has one entry so far, formatted as a stream: its comma stays.
+Entry { at: 1, msg: "start" } // the first

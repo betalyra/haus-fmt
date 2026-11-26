@@ -56,15 +56,20 @@ public fun InputStream.hausValues(
 
 // ── Writing ──
 
-private fun options(layout: Layout, indent: Int, width: Int, limits: Limits) = FormatOptions(layout, indent, width, limits)
+private fun options(layout: Layout, indent: Int, width: Int, limits: Limits, stream: Boolean = false) =
+    FormatOptions(layout, indent, width, limits, stream)
 
-/** This haus text, reformatted in a standard layout (spec §11); see [Haus.format]. */
+/**
+ * This haus text, reformatted in a standard layout (spec §11); see [Haus.format]. With [stream],
+ * the file is a stream: a single item has a comma after it too ([FormatOptions.stream]).
+ */
 public fun String.formatHaus(
     layout: Layout = Layout.PRETTY,
     indent: Int = 2,
     width: Int = 80,
     limits: Limits = Limits.DEFAULT,
-): String = Haus.format(this, options(layout, indent, width, limits))
+    stream: Boolean = false,
+): String = Haus.format(this, options(layout, indent, width, limits, stream))
 
 /**
  * This value as haus text, in the compact layout by default, without the line break that ends a
@@ -77,13 +82,17 @@ public fun Value.toHaus(
     limits: Limits = Limits.DEFAULT,
 ): String = Haus.write(this, options(layout, indent, width, limits)).removeSuffix("\n")
 
-/** These values as a haus file: one alone, more as a stream with a comma after each; see [Haus.writeAll]. */
+/**
+ * These values as a haus file: one alone, more as a stream with a comma after each; with [stream],
+ * a single value has a comma after it too. See [Haus.writeAll].
+ */
 public fun Iterable<Value>.toHaus(
     layout: Layout = Layout.COMPACT,
     indent: Int = 2,
     width: Int = 80,
     limits: Limits = Limits.DEFAULT,
-): String = Haus.writeAll(toList(), options(layout, indent, width, limits))
+    stream: Boolean = false,
+): String = Haus.writeAll(toList(), options(layout, indent, width, limits, stream))
 
 /** The canonical form of this value (spec §12); see [Haus.canonical]. */
 public val Value.canonical: String get() = Haus.canonical(this)

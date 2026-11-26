@@ -28,13 +28,17 @@ For each input:
   the same values. No line of the pretty result ends in a space or tab,
   except inside a comment.
 - `NAME.options`, where present, is a haus record of options for every
-  layout, `{ indent: 4, width: 40 }`. Without it, the defaults apply: indent
-  2, width 80.
+  layout, `{ indent: 4, width: 40 }`, or `{ stream: True }`: the file is a
+  stream (spec §11), so a single item has a comma after it too. Without it,
+  the defaults apply: indent 2, width 80, not a stream. Formatting the
+  results again, and the minimised result as pretty, use the same options.
 
-`options.cases.haus` checks the two options of the pretty layout themselves:
-each case is `input`, `indent` and `width` where given (unset otherwise, so
-the default applies), and `result`: `Ok(text)`, the pretty result, or
-`Rejected` for options a formatter must refuse (a negative number, spec §11).
+`options.cases.haus` checks the options of the pretty layout themselves:
+each case is `input`, `indent`, `width` and `stream` where given (unset
+otherwise, so the default applies), and `result`: `Ok(text)`, the pretty
+result, or `Rejected` for options a formatter must refuse (a negative
+number, spec §11). Its inputs have no comments, so a binding also checks its
+writer of values that takes a list (`stringifyAll`, spec §11) with them.
 Rejecting is an API error, with no code of §17; a binding whose option types
 can't hold a negative number rejects it by its types and passes the case.
 
@@ -45,7 +49,10 @@ files are UTF-8 too.
 The TypeScript formatter is the reference: its test
 (`typescript/packages/haus/test/format-suite.test.ts`) writes the expected
 files when run with `HAUS_UPDATE_FORMAT=1`. Review the diff against spec §11
-before committing it. A new file in `valid/` needs its expected output written
+before committing it. The expected files of `cases/stream-option-*` were
+written by the Lean reference (`haus-ref --format-suite` checks them), and
+the TypeScript formatter, which takes the stream option, writes them the
+same. A new file in `valid/` needs its expected output written
 this way.
 
 ## What the cases pin down
@@ -100,3 +107,9 @@ wrong:
   files name one option each; the other keeps its default.
 - In `options.cases.haus`, an option given alone leaves the other at its
   default, and a negative option is rejected also next to a valid one.
+- Formatted as a stream (`stream: True`), a single item has a comma after it
+  in every layout, and in pretty the comma counts toward the width; a file of
+  several items, or of none, is written as without the option
+  (`cases/stream-option-*`, `options.cases.haus`).
+- Several comments on one line above an entry are written one per line;
+  comments after an entry's comma stay together (`cases/comments-one-line`).

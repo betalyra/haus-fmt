@@ -228,6 +228,7 @@ haus fmt --check .                 # list what would change, write nothing
 haus fmt - < in.haus > out.haus    # standard input to standard output
 haus fmt --layout compact -        # one line per top-level value, no comments
 haus fmt --layout minimised -      # the same without whitespace between tokens
+haus fmt --stream events.haus      # a stream: a comma after a single value too
 ```
 
 Writes a standard layout (spec §11), keeping the key order and the spelling
@@ -249,8 +250,17 @@ when standard input is a pipe (`tail -f events.haus | haus fmt --layout
 compact -`), each value is written as soon as it is complete, followed by a
 comma, as streams are written. So a lone value keeps its comma
 (`{ a: 1 },`), which formatting the whole input drops; one that the input
-ends without a comma stays without. Values before a syntax error are already
-written.
+ends without a comma stays without (with `--stream`, it gets one). Values
+before a syntax error are already written.
+
+A file with one value is written as a document, without a comma after it,
+and one with more as a stream, a comma after every value. Counting can't tell
+a log that holds one event so far from a document, and its comma is what lets
+the next event be appended: `--stream` says the files are streams, so a
+single value gets its comma too, in every layout. A file with more values, or
+none, is written as without it. `haus fmt` takes no schema, so it never turns
+this on by itself (the VS Code extension does, for a file whose schema next
+to it has a `Stream` root).
 
 Compact and minimised drop comments. So that a comment is never lost by
 accident, `haus fmt` refuses to rewrite a file that has comments in one of
@@ -261,9 +271,11 @@ option. `--style` is an older name for `--layout`.
 Only data files are formatted. Directories are searched for `*.haus` files
 that aren't `*.schema.haus`; a schema file named explicitly is a usage error.
 
-Other options: `--indent N` (1–16, default 2), `--width N` (default 80; only
+Other options: `--indent N` (0–16, default 2), `--width N` (default 80; only
 positional payloads such as `Money(7.90, EUR)` wrap). Both only affect the
-pretty layout.
+pretty layout, and 0 means what it says: `--indent 0` writes every line
+without indentation, and `--width 0` is a width nothing fits in, so every
+positional payload gets one argument per line.
 
 ### `haus canonical` and `haus hash`
 

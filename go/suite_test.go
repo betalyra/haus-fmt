@@ -204,17 +204,32 @@ func formatOptions(t *testing.T, c formatCase) FormatOptions {
 	}
 	r := v.(Record)
 	for k, v := range r.All() {
-		n, _ := v.(Number).BigInt()
+		var field *int
 		switch k {
 		case "indent":
-			o.Indent = int(n.Int64())
+			field = &o.Indent
 		case "width":
-			o.Width = int(n.Int64())
+			field = &o.Width
+		case "stream":
+			o.Stream = isTrue(t, v)
+			continue
 		default:
 			t.Fatalf("unknown option %s", k)
 		}
+		n, _ := v.(Number).BigInt()
+		*field = int(n.Int64())
 	}
 	return o
+}
+
+// isTrue reads an option that is True or False.
+func isTrue(t *testing.T, v Value) bool {
+	t.Helper()
+	tag, ok := v.(Variant)
+	if !ok || len(tag.Args) != 0 || (tag.Tag.String() != "True" && tag.Tag.String() != "False") {
+		t.Fatalf("not True or False: %v", v)
+	}
+	return tag.Tag.String() == "True"
 }
 
 func run(t *testing.T, src []byte, o FormatOptions, l Layout) []byte {
@@ -410,6 +425,9 @@ func TestFormatOptionsSuite(t *testing.T) {
 				*field = int(i.Int64())
 			}
 		}
+		if s, ok := r.Get("stream"); ok {
+			o.Stream = isTrue(t, s)
+		}
 		name := mustCanonical(t, v)
 		got, err := Format([]byte(src), o)
 		switch res.Tag.String() {
@@ -419,6 +437,14 @@ func TestFormatOptionsSuite(t *testing.T) {
 				t.Errorf("%s: %v", name, err)
 			} else if string(got) != string(want) {
 				t.Errorf("%s:\n--- got\n%s\n--- want\n%s", name, got, want)
+			}
+			// The inputs have no comments: the writer of values gives the same text.
+			values, err := ParseAll([]byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if written, err := FormatValues(values, o); err != nil || string(written) != string(want) {
+				t.Errorf("%s: FormatValues gives %q, %v", name, written, err)
 			}
 		case "Rejected":
 			if !errors.Is(err, ErrInvalidOptions) {

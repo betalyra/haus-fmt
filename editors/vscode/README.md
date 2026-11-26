@@ -14,6 +14,7 @@ Editor support for `.haus` data files and `.schema.haus` schemas. Learn the form
 - ✨ **Formatting:**
   - **Format Document** (Shift+Alt+F) or **haus: Pretty Print** gives one entry per line and keeps comments.
   - **haus: Compact** puts every item on one line and drops comments.
+  - A file whose schema next to it has a `Stream` root is formatted as a stream: a comma after a single item too, so that the next can be appended.
 - 📝 **haus in Markdown:** ` ```haus ` and ` ```haus-schema ` code blocks are highlighted in the Markdown editor and the Markdown preview.
 - 📐 **haus: Infer Schema from This File** opens a `.schema.haus` draft (command palette or the editor title bar).
 

@@ -16,7 +16,8 @@ on its line is its compact layout, which parses back by L3 (`Val.line`).
 * `parse_pretty`: for every value a parser returns, its pretty layout parses
   back to exactly that value;
 * `parse_prettyAll`: a parsed file or stream in the pretty layout parses
-  back to the same values, in the same order.
+  back to the same values, in the same order, also with the option `stream`
+  (a comma after a single value too).
 -/
 
 namespace Haus.Layout
@@ -215,8 +216,10 @@ theorem file_prettyAll (o : Options) : ∀ {vs : List Value}, (∀ v ∈ vs, Pre
     File L (prettyAll o vs) vs
   | [], _ => by simpa [prettyAll] using File.empty (L := L) [] [] (.inl rfl) (.ws [] .nil)
   | [v], h => by
-    simpa [prettyAll] using
-      File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ ['\n'] v (h v (by simp) [] blank_nil' 0) wsEnd_lf)
+    by_cases hs : o.stream = true
+    · simpa [prettyAll, hs] using File.values [] [] _ _ (.inl rfl) .nil (fileItems_prettyStream o v [] h)
+    · simpa [prettyAll, hs] using
+        File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ ['\n'] v (h v (by simp) [] blank_nil' 0) wsEnd_lf)
   | v :: w :: ws, h => by
     simpa [prettyAll] using File.values [] [] _ _ (.inl rfl) .nil (fileItems_prettyStream o v (w :: ws) h)
 

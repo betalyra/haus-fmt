@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { format, inferSchema, parse, parseAll, parseDocument, parseWithLocations, stringify, infer, printShape } from "../src/index.js"
+import * as h from "../src/schema.js"
 import { suiteJson } from "./suite-json.js"
 import { decode, fixtures, repoFile } from "./haus.js"
 
@@ -8,6 +9,39 @@ const files = [
   ...fixtures("valid").map(({ name, bytes }) => ({ name, bytes })),
   ...["syntax-tour.haus", "events.haus", "person.haus", "thread.haus", "filesystem.haus", "settings-ui.haus", "user-update.haus"].map((name) => ({ name, bytes: repoFile(name) })),
 ]
+
+describe("format: the stream option (spec §11)", () => {
+  const one = "// log\nPaged { n: 1 } // first"
+  const styles = [
+    ["pretty", "// log\nPaged {\n  n: 1,\n}, // first\n"],
+    ["compact", "Paged { n: 1 },\n"],
+    ["minimised", "Paged{n:1},\n"],
+  ] as const
+  it.each(styles)("%s: a comma after a single value", (style, want) => {
+    const { values, comments } = parseDocument(one)
+    expect(format(values, { style, stream: true, source: one, comments })).toBe(want)
+    // From values: the same, without the comments.
+    expect(format(parseAll(one), { style, stream: true })).toBe(want.replace("// log\n", "").replace(" // first", ""))
+    // Without it, none.
+    expect(format(parseAll(one), { style })).not.toMatch(/,\n$/)
+  })
+  it("more than one value, or none, are written as without it; stringify ignores it", () => {
+    for (const style of ["pretty", "compact", "minimised"] as const) {
+      expect(format(parseAll("1, Paged { n: 1 }"), { style, stream: true })).toBe(format(parseAll("1, Paged { n: 1 }"), { style }))
+      expect(format([], { style, stream: true })).toBe("")
+      expect(stringify(parseAll("[1]")[0]!, { style, stream: true })).toBe(stringify(parseAll("[1]")[0]!, { style }))
+    }
+  })
+  it("the schema writer of a file takes it too", () => {
+    const Paged = h.Record({ n: h.Int32 })
+    for (const style of ["pretty", "compact", "minimised", undefined] as const) {
+      const opts = style === undefined ? {} : { style }
+      expect(h.formatAll(Paged, [{ n: 1 }], { ...opts, stream: true })).toMatch(/,\n$/)
+      expect(h.formatAll(Paged, [{ n: 1 }], opts)).not.toMatch(/,\n$/)
+      expect(h.formatAll(Paged, [{ n: 1 }, { n: 2 }], { ...opts, stream: true })).toBe(h.formatAll(Paged, [{ n: 1 }, { n: 2 }], opts))
+    }
+  })
+})
 
 describe("format: round trip and idempotence", () => {
   it.effect.each(files)("$name", ({ bytes }) =>

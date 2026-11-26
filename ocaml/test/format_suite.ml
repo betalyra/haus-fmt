@@ -10,6 +10,18 @@ let int_of v k =
       match List.assoc_opt k fs with Some (Value.Number n) -> Some (int_of_string n) | _ -> None)
   | _ -> None
 
+(* The option [stream], [True] or [False]; unset is [None]. *)
+let bool_of v k =
+  match v with
+  | Value.Record fs -> (
+      match List.assoc_opt k fs with
+      | Some (Value.Variant ("True", [])) -> Some true
+      | Some (Value.Variant ("False", [])) -> Some false
+      | _ -> None)
+  | _ -> None
+
+let options_of v = Layout.options ?indent:(int_of v "indent") ?width:(int_of v "width") ?stream:(bool_of v "stream") ()
+
 let values text = List.map Canonical.canonical (Parser.parse_all text)
 
 let drop_blank_lines s = String.split_on_char '\n' s |> List.filter (fun l -> String.trim l <> "") |> String.concat "\n"
@@ -27,10 +39,7 @@ let run ~root ~check =
     let input = read_file (Filename.concat input_dir (base ^ ".haus")) in
     let opts =
       let p = Filename.concat out_dir (base ^ ".options") in
-      if Sys.file_exists p then
-        let v = Parser.parse (read_file p) in
-        Layout.options ?indent:(int_of v "indent") ?width:(int_of v "width") ()
-      else Layout.default_options
+      if Sys.file_exists p then options_of (Parser.parse (read_file p)) else Layout.default_options
     in
     let fmt style text = Layout.format ~options:opts style text in
     let input_values = try Some (values input) with _ -> None in
@@ -78,14 +87,19 @@ let run ~root ~check =
       let input = match c with Value.Record fs -> (match List.assoc "input" fs with Value.String s -> s | _ -> "") | _ -> "" in
       let result = match c with Value.Record fs -> List.assoc "result" fs | _ -> assert false in
       let got =
-        try Ok (Layout.format ~options:(Layout.options ?indent:(int_of c "indent") ?width:(int_of c "width") ()) Layout.Pretty input)
+        try
+          let options = options_of c in
+          Ok (Layout.format ~options Layout.Pretty input, Layout.write_all ~options Layout.Pretty (Parser.parse_all input))
         with Invalid_argument _ -> Error ()
       in
+      (* The inputs have no comments: the writer of a list of values gives
+         the same text (test-suite/format/README.md). *)
       let ok =
         match (result, got) with
-        | Value.Variant ("Ok", [ Value.String s ]), Ok g -> s = g
+        | Value.Variant ("Ok", [ Value.String s ]), Ok (g, w) -> s = g && s = w
         | Value.Variant ("Rejected", []), Error () -> true
         | _ -> false
       in
-      check "format/options" (string_of_int i) ok (fun () -> match got with Ok g -> g | Error () -> "rejected"))
+      check "format/options" (string_of_int i) ok (fun () ->
+          match got with Ok (g, w) -> g ^ "---write_all\n" ^ w | Error () -> "rejected"))
     (Parser.parse_all (read_file (Filename.concat fdir "options.cases.haus")))

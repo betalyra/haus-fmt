@@ -62,7 +62,16 @@ fn with_extension(path: &Path, ext: &str) -> PathBuf {
     p.into()
 }
 
-/// NAME.options: a record `{ indent: 4, width: 40 }`, applied to every layout.
+/// An option that is `True` (`stream: True`); unset or `False` is false.
+fn is_true(v: Option<&Value>) -> bool {
+    match v {
+        None => false,
+        Some(Value::Variant { tag, args }) if args.is_empty() && (tag == "True" || tag == "False") => tag == "True",
+        Some(v) => panic!("not True or False: {}", haus::canonical(v)),
+    }
+}
+
+/// NAME.options: a record `{ indent: 4, width: 40 }` or `{ stream: True }`, applied to every layout.
 fn options(case: &Case, style: Style) -> FormatOptions {
     let mut options = FormatOptions { style, ..FormatOptions::default() };
     let Ok(text) = fs::read_to_string(with_extension(&case.expected, "options")) else { return options };
@@ -77,6 +86,7 @@ fn options(case: &Case, style: Style) -> FormatOptions {
     if let Some(width) = int("width") {
         options.width = width;
     }
+    options.stream = is_true(values[0].get("stream"));
     options
 }
 
@@ -333,6 +343,7 @@ fn format_options() {
             let options = FormatOptions {
                 indent: indent.unwrap_or(defaults.indent),
                 width: width.unwrap_or(defaults.width),
+                stream: is_true(c.get("stream")),
                 ..defaults
             };
             match (haus::format(input, &options), expected) {

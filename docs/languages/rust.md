@@ -88,7 +88,7 @@ haus_build::Config::new()
 Without them, the build prints a [`missing-codec`](/docs/errors#missing-codec) Cargo warning for each profiled type, and only the shape is checked. Your own codec implements `haus::Codec` (a `jiff` date for `std/time#Date`, integer cents for `Money`). [What haus checks](/docs/checks)
 
 - **Packages.** A schema package is a crate: depend on it and `import @haus-fmt/money (Money)` works. Don't rename the dependency.
-- **Streams.** `haus::stream::decode::<T, _>(reader)` iterates over any `std::io::Read`; `haus::stream::Reader` takes byte chunks and does no I/O, for async code. [Logs and streams](/docs/tours/streams)
+- **Streams.** `haus::stream::decode::<T, _>(reader)` iterates over any `std::io::Read`; `haus::stream::Reader` takes byte chunks and does no I/O, for async code. `haus::to_string_all` writes a comma after every value, a single one too; to format a log that holds one value so far as a stream, set `FormatOptions { stream: true, .. }` (`haus fmt --stream`). [Logs and streams](/docs/tours/streams)
 - **JSON.** `haus::json::to_string(&order)` writes schema-based JSON (`{"id":"7",…}`), `haus::json::from_str` reads it. [Coming from JSON](/docs/from-json)
 - **Integers.** `Int` is `haus::Int`, any size, kept as its digits; `to_i64()` and `to_i128()` convert it. Use `Int64` in the schema for a native integer.
 - **Secrets.** `Secret a` is `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`, `expose()` gives the value. Decoded at runtime with `haus_schema`, a value is a `Decoded` that hides its secrets the same way; `reveal()` makes it a `haus::Value`. [Config and secrets](/docs/tours/secrets)

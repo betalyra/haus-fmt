@@ -49,6 +49,14 @@ export interface FormatOptions {
    */
   readonly width?: number
   /**
+   * The file is a stream (spec §11), in every layout: `format` writes a comma
+   * after every top-level value, a single one too, so that the next can be
+   * appended. Without it (the default) a single value has no comma; more
+   * than one, or none, are written the same either way. `stringify` writes
+   * one value and ignores it.
+   */
+  readonly stream?: boolean
+  /**
    * The text the values were parsed from (with `parseWithLocations` or
    * `parseDocument`). Numbers and single-line strings then keep their
    * original spelling (`0xFF`, `1_000`, escapes), and blank lines between
@@ -71,16 +79,19 @@ export interface FormatOptions {
   readonly limits?: Partial<WriteLimits>
 }
 
-/** Format a whole file: one value, or a stream with a comma after each value. */
+/**
+ * Format a whole file: one value, or a stream with a comma after each value
+ * (with `stream`, a single value too).
+ */
 export function format(values: readonly Value[], options: FormatOptions = {}): string {
   // A value's errors are at `$[i]`, value i of the stream (of one value too).
   const f = formatter(options, values, (i) => [i])
   if (oneLine(options)) {
     if (values.length === 0) return ""
-    if (values.length === 1) return f.line(values[0]!, [0]) + "\n"
+    if (values.length === 1 && options.stream !== true) return f.line(values[0]!, [0]) + "\n"
     return values.map((v, i) => f.line(v, [i]) + ",\n").join("")
   }
-  const text = f.file(values)
+  const text = f.file(values, options.stream === true)
   return text === "" ? "" : text + "\n"
 }
 
@@ -227,9 +238,9 @@ class Formatter {
 
   // ── entry points ───────────────────────────────────────────
 
-  /** Pretty: the values of a file, value i's errors at `$[i]`. */
-  file(values: readonly Value[]): string {
-    const stream = values.length > 1
+  /** Pretty: the values of a file, value i's errors at `$[i]`; a comma after each if there is more than one, or `asStream`. */
+  file(values: readonly Value[], asStream: boolean): string {
+    const stream = asStream || values.length > 1
     const entries = values.map(entryOf)
     const end = this.source?.length ?? 0
     const list = this.entryList(0, end, entries, "", stream ? "," : "", stream, 0, true)

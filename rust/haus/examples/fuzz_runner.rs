@@ -14,7 +14,9 @@
 //! `haus::to_string_minimised` (`minimised`), and the values as a stream with
 //! `haus::to_string_all` (`compact`; `null` for `minimised`, which has no
 //! stream writer), and prints `ok {"values": [<line>, …], "stream": …}`. An
-//! encoding error is `err 0 0 <code> <reason>`.
+//! encoding error is `err 0 0 <code> <reason>`. With `--format` or `--write`,
+//! `--stream` anywhere before DIR says the file is a stream (spec §11):
+//! `FormatOptions::stream`; `to_string_all` writes a stream anyway.
 
 use haus::Value;
 use serde_json::{Map, Value as Json, json};
@@ -89,7 +91,9 @@ fn format_line(bytes: &[u8], options: &haus::FormatOptions) -> String {
 }
 
 /// With `--write`: every value through the value writer, and the values
-/// through the stream writer, as JSON strings.
+/// through the stream writer, as JSON strings. The stream writer writes a
+/// comma after every value, a single one included: what a writer told that
+/// the file is a stream writes (spec §11), so `--stream` changes nothing.
 fn write_line(bytes: &[u8], style: haus::Style) -> String {
     let values = match haus::parse_bytes(bytes) {
         Ok(values) => values,
@@ -127,21 +131,24 @@ enum Mode {
     Write(haus::Style),
 }
 
-const USAGE: &str =
-    "usage: fuzz_runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE] DIR N";
+const USAGE: &str = "usage: fuzz_runner [--stream | --canonical | --format STYLE [--indent N] [--width N] [--stream] | --write STYLE [--stream]] DIR N";
 
 fn main() {
     let mut args: Vec<String> = env::args().skip(1).collect();
     assert!(args.len() >= 2, "{USAGE}");
     let n: usize = args.pop().expect("N").parse().expect("N");
     let dir = args.pop().expect("DIR");
+    // `--stream` alone is the stream reader; with `--format` or `--write`, anywhere before DIR, the file is a stream.
+    let as_stream = args.len() > 1 && args.iter().any(|a| a == "--stream");
+    args.retain(|a| !(as_stream && a == "--stream"));
     let mode = match args.as_slice() {
         [] => Mode::Parse,
         [flag] if flag == "--stream" => Mode::Stream,
         [flag] if flag == "--canonical" => Mode::Canonical,
+        // `to_string_all` writes a stream, with or without `--stream`.
         [flag, name] if flag == "--write" => Mode::Write(style(name)),
         [flag, name, rest @ ..] if flag == "--format" => {
-            let mut options = haus::FormatOptions { style: style(name), ..Default::default() };
+            let mut options = haus::FormatOptions { style: style(name), stream: as_stream, ..Default::default() };
             for pair in rest.chunks(2) {
                 match pair {
                     [k, v] if k == "--indent" => options.indent = v.parse().expect("--indent N"),

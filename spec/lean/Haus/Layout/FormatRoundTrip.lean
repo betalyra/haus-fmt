@@ -510,12 +510,15 @@ theorem fileItems_build (sp : Spacing) : ∀ (x : Item) (xs : List Item),
     simpa [Item.values, streamLine] using this
 
 /-- Top-level items one per line, each derived on its line, are a file with exactly their values. -/
-theorem file_build (sp : Spacing) : ∀ {xs : List Item}, (∀ y ∈ xs, Val L L.maxDepth (line sp y.node) y.node.value) →
-    Grammar.File L (lineItemsFile sp xs) (Item.values xs)
+theorem file_build (sp : Spacing) (stream : Bool) : ∀ {xs : List Item},
+    (∀ y ∈ xs, Val L L.maxDepth (line sp y.node) y.node.value) →
+    Grammar.File L (lineItemsFile sp stream xs) (Item.values xs)
   | [], _ => by simpa [lineItemsFile, Item.values] using Grammar.File.empty (L := L) [] [] (.inl rfl) (.ws [] .nil)
   | [.mk v g], h => by
-    simpa [lineItemsFile, Item.values] using
-      Grammar.File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ ['\n'] _ (h (.mk v g) (by simp)) wsEnd_lf)
+    cases stream
+    · simpa [lineItemsFile, Item.values] using
+        Grammar.File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ ['\n'] _ (h (.mk v g) (by simp)) wsEnd_lf)
+    · simpa [lineItemsFile] using Grammar.File.values [] [] _ _ (.inl rfl) .nil (fileItems_build sp (.mk v g) [] h)
   | x :: y :: ys, h => by
     simpa [lineItemsFile] using Grammar.File.values [] [] _ _ (.inl rfl) .nil (fileItems_build sp x (y :: ys) h)
 
@@ -539,12 +542,12 @@ theorem read_ok {input : Text} {f : File} (h : read L input = .ok f) :
     · simp at h
 
 /-- **A document written in a one-line layout parses to the values it was read with.** -/
-theorem parse_lineFile (sp : Spacing) (hsp : sp.Blank) {input : Text} {f : File} (h : read L input = .ok f) :
-    Parser.parse L (lineFile sp f) = Parser.parse L input := by
+theorem parse_lineFile (sp : Spacing) (hsp : sp.Blank) (stream : Bool) {input : Text} {f : File}
+    (h : read L input = .ok f) : Parser.parse L (lineFile sp stream f) = Parser.parse L input := by
   obtain ⟨hp, hok⟩ := read_ok h
   rw [hp]
   have hvals := File.vals ((parse_correct L input f.values).mp hp)
-  refine (parse_correct L _ _).mpr (file_build sp fun y hy => ?_)
+  refine (parse_correct L _ _).mpr (file_build sp stream fun y hy => ?_)
   have hmem : y.node.value ∈ f.values := by
     simp only [File.values, Item.values_eq]; exact List.mem_map.mpr ⟨y, hy, rfl⟩
   obtain ⟨s, hs⟩ := hvals _ hmem
@@ -562,7 +565,7 @@ theorem parse_format_compact {o : Options} {input out : Text} (h : format L .com
   | ok f =>
     simp only [hr, Except.map, Except.ok.injEq, File.format] at h
     subst h
-    exact parse_lineFile _ Spacing.spaced_blank hr
+    exact parse_lineFile _ Spacing.spaced_blank _ hr
 
 /-- **Minimised keeps the values** (§11), as compact does. -/
 theorem parse_format_minimised {o : Options} {input out : Text} (h : format L .minimised o input = .ok out) :
@@ -573,6 +576,6 @@ theorem parse_format_minimised {o : Options} {input out : Text} (h : format L .m
   | ok f =>
     simp only [hr, Except.map, Except.ok.injEq, File.format] at h
     subst h
-    exact parse_lineFile _ Spacing.tight_blank hr
+    exact parse_lineFile _ Spacing.tight_blank _ hr
 
 end Haus.Format

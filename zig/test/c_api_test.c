@@ -65,7 +65,15 @@ static void test_text_functions(void) {
     CHECK(haus_format(S("{a:1}"), HAUS_COMPACT, 2, 80, &out, &len, &err) == HAUS_OK);
     CHECK(eq(out, len, "{ a: 1 }\n"));
     haus_free(out, len);
+    /* The file is a stream: a single item has a comma after it too (spec §11). */
+    CHECK(haus_format(S("{a:1}"), HAUS_COMPACT | HAUS_STREAM, 2, 80, &out, &len, &err) == HAUS_OK);
+    CHECK(eq(out, len, "{ a: 1 },\n"));
+    haus_free(out, len);
+    CHECK(haus_format(S("{a:1}"), HAUS_PRETTY | HAUS_STREAM, 2, 80, &out, &len, &err) == HAUS_OK);
+    CHECK(eq(out, len, "{\n  a: 1,\n},\n"));
+    haus_free(out, len);
     CHECK(haus_format(S("{a:1}"), 9, 2, 80, &out, &len, &err) == HAUS_INVALID_ARGUMENT);
+    CHECK(haus_format(S("{a:1}"), 3 | HAUS_STREAM, 2, 80, &out, &len, &err) == HAUS_INVALID_ARGUMENT);
     CHECK(haus_format(S("{a:1}"), HAUS_PRETTY, 2, -1, &out, &len, &err) == HAUS_INVALID_ARGUMENT);
     CHECK(haus_format(S("{a:"), HAUS_PRETTY, 2, 80, &out, &len, &err) == HAUS_ERROR);
     CHECK(strcmp(haus_spec_version(), "0.1") == 0);
@@ -147,6 +155,8 @@ static void test_parse_and_read(void) {
     CHECK(haus_stringify_doc(doc, HAUS_MINIMISED, 0, 0, &out, &len, &err) == HAUS_OK);
     CHECK(eq(out, len, "1,\n\"a\",\n[],\n"));
     haus_free(out, len);
+    /* HAUS_STREAM is for files: haus_stringify writes one value. */
+    CHECK(haus_stringify(haus_doc_value(doc, 0), HAUS_MINIMISED | HAUS_STREAM, 0, 0, &out, &len, &err) == HAUS_INVALID_ARGUMENT);
     CHECK(haus_stringify_doc(NULL, HAUS_MINIMISED, 0, 0, &out, &len, &err) == HAUS_INVALID_ARGUMENT);
     haus_doc_free(doc);
     CHECK(haus_parse_all(S("1 2"), &doc, &err) == HAUS_ERROR && code_is(&err, "missing-comma"));
@@ -311,14 +321,20 @@ static void test_schema(void) {
     CHECK(eq(haus_string(haus_secret_reveal(pin), &len), len, "1234"));
     CHECK(haus_secret_reveal(v) == NULL && haus_secret_reveal(NULL) == NULL);
     char *written = NULL;
+    /* Refused with cannot-encode at the secret (spec §15, "Hiding"). */
     CHECK(haus_stringify(v, HAUS_COMPACT, 2, 80, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
-    CHECK(strstr(err.message, "1234") == NULL);
+    CHECK(strstr(err.message, "1234") == NULL && strcmp(err.path, "$.pin") == 0);
     CHECK(haus_value_canonical(pin, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    CHECK(strcmp(err.path, "$") == 0);
     char digest[65];
     int equal = 0;
     CHECK(haus_value_hash(v, digest, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
     CHECK(haus_to_haus_json(v, &written, &len, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
-    CHECK(haus_value_equals(v, v, &equal, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));    CHECK(canonical_is(haus_record_get(v, S("lines")), "[{qty:2,sku:\"a\"}]"));
+    CHECK(haus_value_equals(v, v, &equal, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    CHECK(strcmp(err.path, "$.pin") == 0 && strstr(err.message, "first value") != NULL);
+    CHECK(haus_value_compare(haus_record_get(v, S("id")), v, &equal, &err) == HAUS_ERROR && code_is(&err, "cannot-encode"));
+    CHECK(strcmp(err.path, "$.pin") == 0 && strstr(err.message, "second value") != NULL);
+    CHECK(canonical_is(haus_record_get(v, S("lines")), "[{qty:2,sku:\"a\"}]"));
     CHECK(canonical_is(haus_record_get(v, S("id")), "0"));
     haus_doc_free(doc);
     /* Encoding writes the data in full. */

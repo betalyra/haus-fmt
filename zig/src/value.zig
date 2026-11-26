@@ -75,6 +75,7 @@ pub const Limits = struct {
 
 test "the derived hex limit" {
     try std.testing.expectEqual(@as(u32, 829), (Limits{}).maxHexDigits());
+    try std.testing.expectEqual(@as(u32, 0), (Limits{ .max_number_length = 0 }).maxHexDigits());
     try std.testing.expectEqual(@as(u32, 0), (Limits{ .max_number_length = 1 }).maxHexDigits());
     try std.testing.expectEqual(@as(u32, 1), (Limits{ .max_number_length = 3 }).maxHexDigits());
 }

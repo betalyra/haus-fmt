@@ -50,7 +50,10 @@ digits      ::= [0-9] ( "_"? [0-9] )*
 hex         ::= "0x" [0-9A-Fa-f] ( "_"? [0-9A-Fa-f] )*
 binary      ::= "0b" [01] ( "_"? [01] )*
                 (* A number must not be directly followed by [A-Za-z0-9_.].
-                   So `007`, `1.`, `1_`, `0x` and `1e` are errors. *)
+                   So `007`, `1.`, `1_`, `0x` and `1e` are errors. `-` and
+                   `+` may follow a number: `[1-2]` is the number 1 and then
+                   `-2` without a comma between them, `missing-comma` at the
+                   `-` (and `[1+2]` at the `+`), not an invalid number. *)
 
 (* rule: grammar.lexical.bytes *)
 bytes       ::= 'x"' [ \t]* ( hex_byte ( [ \t]* hex_byte )* [ \t]* )? '"'

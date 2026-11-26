@@ -56,7 +56,9 @@ comments (F20b). In a stream (more than one top-level item), an item whose
 value is written over more than one line is followed by a blank line before
 the next item and the comments that lead it (after the comments on its own
 line, F19; one blank line, never two); not before the comments after the
-last item, unless the source has one there.
+last item, unless the source has one there. A file with one item is a
+stream too when the options say so (`Options.stream`, §11): it then has a
+comma after its item, in every layout.
 
 `Tag({ … })` is written `Tag { … }`: the gaps between the parentheses and
 the braces join the record's (F16, F20c).
@@ -519,14 +521,20 @@ end
 def streamLine (sp : Spacing) : Item → Text
   | .mk v _ => line sp v ++ [',', '\n']
 
-/-- Top-level items in a one-line layout, as `Layout.lines` writes values. -/
-def lineItemsFile (sp : Spacing) : List Item → Text
+/--
+Top-level items in a one-line layout, as `Layout.linesAs` writes values: a
+single item without a comma, unless the file is a stream (`stream`, §11).
+-/
+def lineItemsFile (sp : Spacing) (stream : Bool) : List Item → Text
   | [] => []
-  | [.mk v _] => line sp v ++ ['\n']
+  | [.mk v g] => if stream then streamLine sp (.mk v g) else line sp v ++ ['\n']
   | x :: y :: ys => (x :: y :: ys).flatMap (streamLine sp)
 
-/-- A file in a one-line layout: one item per line, a comma after each when there is more than one. -/
-def lineFile (sp : Spacing) (f : File) : Text := lineItemsFile sp f.items
+/--
+A file in a one-line layout: one item per line, a comma after each when
+there is more than one, or when the file is a stream (`stream`).
+-/
+def lineFile (sp : Spacing) (stream : Bool) (f : File) : Text := lineItemsFile sp stream f.items
 
 /-! ## Pretty -/
 
@@ -653,9 +661,13 @@ def fields (o : Options) (r : Run) (first multi : Bool) (carry : List (Text × W
     start ++ r.ind ++ pre ++ pretty o r.ind used v (r.sep ++ trailingText tr ++ '\n' :: fields o r false multi' own w fs rest)
 end
 
-/-- **A file in the pretty layout**: its items at indent 0, a comma after each when there is more than one. -/
+/--
+**A file in the pretty layout**: its items at indent 0, a comma after each
+when there is more than one, or when the options say the file is a stream
+(`o.stream`, §11).
+-/
 def prettyFile (o : Options) (f : File) : Text :=
-  let stream := f.items.length > 1
+  let stream := o.stream || f.items.length > 1
   let (cs, w) := comments f.first .none
   items o ⟨[], if stream then [','] else [], stream, []⟩ true false cs w f.items []
 
@@ -674,12 +686,12 @@ def Style.ofString? : String → Option Style
   | "minimised" => some .minimised
   | _ => none
 
-/-- A file in a layout; compact and minimised ignore the options. -/
+/-- A file in a layout; compact and minimised ignore the options but `stream`. -/
 def File.format (style : Style) (o : Options) (f : File) : Text :=
   match style with
   | .pretty => prettyFile o f
-  | .compact => lineFile .spaced f
-  | .minimised => lineFile .tight f
+  | .compact => lineFile .spaced o.stream f
+  | .minimised => lineFile .tight o.stream f
 
 /-- **The standard formatter** (§11): the text in a layout, or why it isn't a haus file. -/
 def format (L : Limits) (style : Style) (o : Options) (input : Text) : Except Error Text :=
@@ -731,6 +743,14 @@ private def fmt (style : Style) (src : String) (o : Options := {}) : String :=
 -- After a comment with a line break, the comments lead the next entry; at most one blank line.
 #guard fmt .pretty "[1, /* a\nb */ /* c */ 2]" == "[\n  1, /* a\nb */\n  /* c */\n  2,\n]\n"
 #guard fmt .pretty "A, // c\n\n\nB" == "A, // c\n\nB,\n"
+-- Several comments on one line above an entry: each on its own line.
+#guard fmt .pretty "/* a */ /* b */\n1" == "/* a */\n/* b */\n1\n"
+-- Told that the file is a stream (§11): a comma after a single item too, in every layout; nothing else changes.
+#guard fmt .pretty "// log\nPaged { n: 1 } // first" { stream := true } == "// log\nPaged {\n  n: 1,\n}, // first\n"
+#guard fmt .compact "Paged { n: 1 }" { stream := true } == "Paged { n: 1 },\n"
+#guard fmt .minimised "Paged { n: 1 }" { stream := true } == "Paged{n:1},\n"
+#guard fmt .pretty "A, B" { stream := true } == fmt .pretty "A, B"
+#guard fmt .pretty "// only\n" { stream := true } == "// only\n" && fmt .compact "" { stream := true } == ""
 -- Not haus: the parser's error.
 #guard fmt .pretty "[1 2]" == "error missing-comma"
 

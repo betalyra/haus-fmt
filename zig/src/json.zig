@@ -1318,3 +1318,20 @@ test "base64 is canonical" {
     try std.testing.expect(decodeBase64(a, "Cz Q=") == null);
     try std.testing.expect(decodeBase64(a, "-_8=") == null);
 }
+
+test "JSON is read with three of I-JSON's restrictions only (spec §16)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // Noncharacters are characters: raw and escaped.
+    const raw = try importJson(a, a, "[\"\u{FDD0}\", \"\\uFDD0\", \"\\uDBFF\\uDFFF\"]", .{});
+    try std.testing.expectEqualStrings("\u{FDD0}", raw.array[0].string);
+    try std.testing.expectEqualStrings("\u{FDD0}", raw.array[1].string);
+    try std.testing.expectEqualStrings("\u{10FFFF}", raw.array[2].string);
+    // Numbers of any size and precision, within the limits of §7.
+    const big = try importJson(a, a, "[123456789012345678901234567890.123456789012345678901234567890, 1e400]", .{});
+    try std.testing.expectEqualStrings("123456789012345678901234567890.123456789012345678901234567890", big.array[0].number);
+    try std.testing.expectEqualStrings("1e400", big.array[1].number);
+    const hj = try fromHausJson(a, a, "{\"_haus\": 1, \"_value\": \"\u{FFFE}\"}", .{});
+    try std.testing.expectEqualStrings("\u{FFFE}", hj.string);
+}

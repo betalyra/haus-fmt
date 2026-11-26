@@ -142,9 +142,9 @@ It is also an `Iterator<Value>`, and `stream()` gives a `java.util.stream.Stream
 
 ## Formatting
 
-`Haus.format(text, FormatOptions.PRETTY)` rewrites text in one of the three layouts of spec §11: `PRETTY` keeps comments and blank lines, `COMPACT` writes one item per line, and `MINIMISED` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. Indent (default 2) and width (default 80) are the only options: `FormatOptions.PRETTY.withIndent(4)`. `Haus.hasComments` tells a tool that rewrites files in place whether compact or minimised would drop comments.
+`Haus.format(text, FormatOptions.PRETTY)` rewrites text in one of the three layouts of spec §11: `PRETTY` keeps comments and blank lines, `COMPACT` writes one item per line, and `MINIMISED` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. Indent (default 2) and width (default 80) are the options of the pretty layout: `FormatOptions.PRETTY.withIndent(4)`. `withStream(true)` (default false) says the file is a stream, in every layout: a single item gets a comma after it too, so a log with one entry so far keeps the comma the next one is appended after; a file of several items, or of none, is written the same either way. `Haus.hasComments` tells a tool that rewrites files in place whether compact or minimised would drop comments.
 
-`Haus.write(value, options)` and `Haus.writeAll(values, options)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value.
+`Haus.write(value, options)` and `Haus.writeAll(values, options)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes. `writeAll` writes a file: one value alone, more as a stream with a comma after every value, and with `withStream(true)` a comma after a single value too (`write` writes one value and ignores the option; in Kotlin, `values.toHaus(stream = true)` and `text.formatHaus(stream = true)`).
 
 ## Canonical form and hashing
 

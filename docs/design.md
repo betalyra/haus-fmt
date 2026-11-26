@@ -60,7 +60,7 @@ type Booking = {
 
 ### Open by default
 
-Records and variants are open. A reader ignores fields its schema doesn't list, and reads a tag it doesn't know as an *unknown* value that keeps the raw data. So writers can add fields and cases without breaking older readers. Where guessing is wrong, `closed` makes anything unlisted an error.
+Records and variants are open. A reader ignores fields its schema doesn't list, and reads a tag it doesn't know as an *unknown* value that keeps the raw data. So writers can add fields and cases without breaking older readers. An older reader that writes the data back keeps the unknown values, but not the fields it ignored: a program that edits files it doesn't fully know edits the parsed values, not the decoded ones. Where guessing is wrong, `closed` makes anything unlisted an error. The tour [Evolving your data](/docs/tours/evolving) walks through it.
 
 ```haus-schema
 type Contact = < Email String | Slack { workspace: String, user: String } >
@@ -177,7 +177,7 @@ Which one? Whoever knows least decides. If every reader has the schema, schema-b
 
 ### Which languages are supported?
 
-TypeScript (`@haus-fmt/haus`, also through Standard Schema libraries such as Zod), Effect (`@haus-fmt/effect`), Rust (`haus-fmt`, with code generation in `haus-fmt-build`), Python (`haus-fmt`), Roc and Go (`github.com/betalyra/haus-fmt/go`). The [`haus` command](/docs/cli) checks, formats and hashes files, and the VS Code extension shows errors and types as you type. The libraries are published with the first release; until then, use them from the repository. [Install](/docs/install)
+TypeScript (`@haus-fmt/haus`, also through Standard Schema libraries such as Zod), Effect (`@haus-fmt/effect`), Rust (`haus-fmt`, with code generation in `haus-fmt-build`), Python (`haus-fmt`), Go (`github.com/betalyra/haus-fmt/go`), Swift (the Swift package in `github.com/betalyra/haus-fmt`), Java and Kotlin (`org.haus-fmt:haus`), Zig (with a C ABI, `libhaus`) and Roc. The [`haus` command](/docs/cli) checks, formats and hashes files, and the VS Code extension shows errors and types as you type. What each library offers: [Languages](/docs/languages). [Install](/docs/install)
 
 ### Is the parser really proven?
 
@@ -192,7 +192,7 @@ The reference parser, written in Lean, is. Proven in Lean:
 
 Not proven:
 
-- **The bindings you use.** TypeScript, Effect, Rust, Python, Go and Roc are checked against the reference by the conformance suites and by differential fuzzing in CI. That has found real bugs, but it is testing, not proof.
+- **The bindings you use.** TypeScript, Effect, Rust, Python, Go, Swift, Java and Kotlin, Zig and Roc are checked against the reference by the conformance suites and by differential fuzzing in CI. That has found real bugs, but it is testing, not proof.
 - **Running time in the bindings.** The reference parser is proven linear in a cost model that counts its steps, and so is the reference decoder, assuming float rounding and `std/time` checks are linear in their literal. The bindings' own speed is checked by tests with hostile inputs, not proven.
 - **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered, and neither are error positions; the proofs cover the text that is hashed, not SHA-256 itself.
 

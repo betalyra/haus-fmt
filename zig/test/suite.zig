@@ -56,6 +56,11 @@ fn get(val: Value, key: []const u8) ?Value {
     return null;
 }
 
+/// Whether a value is the tag `True`.
+fn isTrue(val: Value) bool {
+    return val == .variant and std.mem.eql(u8, val.variant.tag, "True");
+}
+
 fn canon(arena: Allocator, val: Value) ![]const u8 {
     return haus.canonical(arena, val, .{});
 }
@@ -406,6 +411,7 @@ fn formatCase(arena: Allocator, tally: *Tally, input_path: []const u8, expected_
         const o = (try haus.parse(arena, try readFile(arena, options_path), .{})).value;
         if (get(o, "indent")) |i| opts.indent = try std.fmt.parseInt(u32, i.number, 10);
         if (get(o, "width")) |wd| opts.width = try std.fmt.parseInt(u32, wd.number, 10);
+        if (get(o, "stream")) |s| opts.stream = isTrue(s);
     }
     const values = (try valuesOf(arena, text)).?;
     var outputs: [3][]const u8 = undefined;
@@ -474,6 +480,7 @@ fn formatSuite() !void {
         if (get(case, "width")) |wd| {
             if (wd.number[0] == '-') rejected = true else o.width = try std.fmt.parseInt(u32, wd.number, 10);
         }
+        if (get(case, "stream")) |s| o.stream = isTrue(s);
         const result = get(case, "result").?;
         if (result == .variant and std.mem.eql(u8, result.variant.tag, "Rejected")) {
             // The option types can't hold a negative number: rejected by the types.
@@ -482,7 +489,12 @@ fn formatSuite() !void {
         }
         const want = result.variant.args[0].string;
         const got = try haus.format(arena, input, o);
-        tally.check(!rejected and std.mem.eql(u8, got, want), "{any}: got {any}, want {any}", .{ input, got, want });
+        tally.check(!rejected and std.mem.eql(u8, got, want), "{s}: got {any}, want {any}", .{ input, got, want });
+        // The inputs have no comments: the writer of a list of values
+        // (`stringifyAll`) gives the same text (test-suite/format/README.md).
+        const vals = (try haus.parseAll(arena, input, .{})).value;
+        const written = try haus.stringifyAll(arena, vals, o);
+        tally.check(std.mem.eql(u8, written, want), "{s}: stringifyAll: got {any}, want {any}", .{ input, written, want });
     }
     try tally.report();
 }

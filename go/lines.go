@@ -9,17 +9,18 @@ import (
 
 // writeLines writes values built in code in the compact or minimised layout
 // (spec §11): each top-level value on a line of its own, followed by a comma
-// in a stream of two or more. These layouts make no decisions about lines,
+// in a stream of two or more, or of one with asStream (FormatOptions.Stream).
+// These layouts make no decisions about lines,
 // so the values are written as they are checked, without building a syntax
 // tree; the checks are the pretty layout's, in its order (writeCheck), so a
 // value that can't be written fails with the same error in every layout.
-func writeLines(vs []Value, lim Limits, minimised, indexed bool) ([]byte, error) {
+func writeLines(vs []Value, lim Limits, minimised, indexed, asStream bool) ([]byte, error) {
 	if len(vs) == 0 {
 		return nil, nil // an empty file
 	}
 	buf := lineBuffers.Get().(*[]byte)
 	w := lineWriter{writeCheck: writeCheck{lim: lim}, b: (*buf)[:0], minimised: minimised}
-	stream := len(vs) > 1
+	stream := asStream || len(vs) > 1
 	for i, v := range vs {
 		w.start(i, indexed)
 		if err := w.value(v, 0); err != nil {

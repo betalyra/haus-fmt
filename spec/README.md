@@ -3,7 +3,9 @@
 The syntax is defined in [`grammar.ebnf`](grammar.ebnf). This document defines
 what the syntax means and the rules every implementation must follow. The
 standard types are in [`prelude.schema.haus`](prelude.schema.haus) and [`std/`](std) (§13), and
-[`../test-suite`](../test-suite) holds the conformance tests.
+[`../test-suite`](../test-suite) holds the conformance tests. The package layer (where a
+build finds the packages a schema imports, profiles, how codecs are wired) is
+the companion document [`packages.md`](packages.md), with its own version (§10).
 
 "MUST", "SHOULD" and "MAY" are used as in RFC 2119.
 
@@ -120,7 +122,7 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
   <!-- rule: strings.utf8.checked-first -->
   Text is checked for valid UTF-8 before it is parsed, so invalid UTF-8 is reported before any syntax error in the same text (`1 2` followed by an invalid byte is `invalid-utf8`). A stream reader does this for each chunk as it arrives: it checks the text read so far. So with input in chunks, which error is reported can depend on where the chunks are cut: a syntax error in an earlier chunk can be reported before invalid UTF-8 in a later one, where a reader given the whole text reports the invalid UTF-8. The conformance suites and the fuzzer don't compare such inputs across ways of cutting them.
   <!-- rule: strings.utf8.host-strings -->
-- **Host strings:** a parser that takes the language's string type instead of bytes (UTF-16 in JavaScript and Java, Python's `str`) MUST reject an unpaired surrogate in it as `invalid-utf8`, at its position (one column, §8), as it rejects invalid UTF-8: the string has no UTF-8 form, so no other reader could read it. This holds for data and schema files alike. A JSON reader reports one in a JSON string as `unpaired-surrogate` (§16).
+- **Host strings:** a parser that takes the language's string type instead of bytes (UTF-16 in JavaScript and Java, Python's `str`) MUST reject an unpaired surrogate in it as `invalid-utf8` (at the surrogate, one column, where it gives a place: §8), as it rejects invalid UTF-8: the string has no UTF-8 form, so no other reader could read it. This holds for data and schema files alike. A JSON reader reports one in a JSON string as `unpaired-surrogate` (§16).
   <!-- rule: strings.escapes.set -->
   <!-- rule: strings.escapes.scalar-value -->
 - **Escapes:** `\"`, `\\`, `\n`, `\r`, `\t` and `\u{1–6 hex digits}`. A `\u{…}` escape MUST denote a Unicode scalar value, so surrogates are rejected.
@@ -158,10 +160,14 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
   <!-- rule: strings.error.outside-value -->
   <!-- rule: strings.error.outside-key -->
   <!-- rule: strings.error.outside-after-value -->
-- **Which error.** A raw control character in a string, block string or comment is `control-character`, and so is a carriage return in a `"…"` string, also one directly before a line feed; a raw line feed in a `"…"` string is `string-line-break`. A carriage return not followed by a line feed in whitespace or a comment is `lone-carriage-return`. Outside strings and comments a control or bidi character is not a token, so the error is the one for that place: `expected-value` where a value is expected, `expected-key` where a key is, `missing-comma` after a value.
+  <!-- rule: strings.error.outside-after-key -->
+  <!-- rule: strings.error.outside-after-tag -->
+- **Which error.** A raw control character in a string, block string or comment is `control-character`, and so is a carriage return in a `"…"` string, also one directly before a line feed; a raw line feed in a `"…"` string is `string-line-break`. A carriage return not followed by a line feed in whitespace or a comment is `lone-carriage-return`. Outside strings and comments a control or bidi character is not a token, so the error is the one for that place, at the character: `expected-value` where a value is expected, `expected-key` where a key is, `missing-colon` after a key, and `missing-comma` after a value and after a tag (where a payload or a comma may follow): `[A\u{1}]` and `[1\u{1}]` are `missing-comma`, `{ a\u{1}: 1 }` is `missing-colon`.
+  <!-- rule: strings.error.comment-order -->
+  A comment is read left to right: a control or bidi character or a lone carriage return in it is reported at its place, also in a block comment that is never closed, and such a comment is `unterminated-comment` only when its text has no other error. So `/* a⏎b *` with a lone carriage return for `⏎` is `lone-carriage-return` at the carriage return, not `unterminated-comment`. (A block string is checked the other way round, its closing quotes first: below.)
   <!-- rule: strings.error.block-opening -->
   <!-- rule: strings.error.bytes-not-hex -->
-  The opening line of a block string is empty: anything but spaces and tabs after the opening `"""` on its line, a control character or a lone carriage return included, is `block-string-opening`, and so is the end of the input right after it. Inside a byte string, a byte's first hex digit followed by anything but a second one (a space, the closing quote or a line break included) is `bytes-odd-digits`, at that lone digit; anywhere else, any character other than hex digits, spaces and tabs, a line break or a control or bidi character included, is `bytes-not-hex`.
+  The opening line of a block string is empty: anything but spaces and tabs after the opening `"""` on its line, a control character or a lone carriage return included, is `block-string-opening`, and so is the end of the input right after it. Inside a byte string, a byte's first hex digit followed by anything but a second one (a space, the closing quote or a line break included) is `bytes-odd-digits`, at that lone digit, except the end of the input: a byte string that ends there is never closed, `unterminated-bytes` at its `x` (`x"a`, `x"0`); anywhere else, any character other than hex digits, spaces and tabs, a line break or a control or bidi character included, is `bytes-not-hex`.
   <!-- rule: strings.error.escape-at-end -->
   A backslash at the end of the input, in a `"…"` string, is `invalid-escape` at the backslash, not `unterminated-string` (in a block string, the missing closing quotes come first: below).
   <!-- rule: strings.error.block-order -->
@@ -218,7 +224,7 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 |---|---|
 | nesting depth (records, arrays, payloads) | 256 |
 | characters in one number literal | 1000 |
-| hex digits in one hex literal (`_` not counted) | 829: derived from the number limit *n* as the largest *h* with 16<sup>*h*</sup> ≤ 10<sup>*n*−1</sup>, so that every integer's decimal form, sign included, fits in *n* characters |
+| hex digits in one hex literal (`_` not counted) | 829: derived from the number limit *n* as the largest *h* with 16<sup>*h*</sup> ≤ 10<sup>*n*−1</sup>, and 0 when *n* is 0, so that every integer's decimal form, sign included, fits in *n* characters |
 | absolute exponent | 6144 |
 | characters in one string (its value, after escapes and a block string's indent are processed), record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
@@ -240,6 +246,8 @@ A stream reader counts a value's characters from the previous top-level comma (o
 After the last comma, the text up to the end of the stream counts too, also when it holds no value (only whitespace or comments): a stream reader can't know that no value follows, and must bound what it holds while it waits. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
 <!-- rule: limits.value.before-syntax -->
 A stream reader counts a value's characters before it parses the value, so a value that is over the limit and also has a syntax error is `value-too-long` there, while parsing the whole text reports the syntax error.
+<!-- rule: limits.value.syntax-error-first -->
+To count before parsing, a reader finds the next top-level comma by scanning the text, past strings, byte strings, comments and brackets. Where that scan has no single answer, because before the limit is reached a string, byte string or comment isn't closed as the grammar says (a raw line break in a `"…"` string) or a bracket doesn't match, a stream reader may report either error: `value-too-long` or the syntax error. Any other syntax error, such as `,,` in `[1,,2,3,4]` with a limit of 5, is behind the counting: `value-too-long`.
 
 <!-- rule: limits.depth.counting -->
 <!-- rule: limits.depth.values-in-code -->
@@ -280,14 +288,14 @@ Parsing time MUST be linear in the input size for any input within the limits, a
 Errors report a 1-based line and column. Columns count **Unicode code points**, so a character outside the Basic Multilingual Plane, such as an emoji, is one column. A byte order mark at the start is a character too: the first character after it is in column 2. A line ends at a line feed; a carriage return before it belongs to that line break, and no other character (not U+2028 or U+2029) starts a new line. Every error also has a code that names the mistake, the same in every implementation (§17).
 
 <!-- rule: positions.error.in-strings -->
-An error inside a string is at the character that is wrong, in a block string too: a control or bidi character, or a bad escape, at that character; a content line indented less than the closing `"""` at the start of that line; text before the closing `"""` on its line at the closing `"""`. Only an error about the string as a whole is at its opening quotes: one that isn't closed, or is longer than the string limit (§7).
+An error inside a string is at the character that is wrong, in a block string too: a control or bidi character, or a bad escape, at that character; a content line indented less than the closing `"""` at the start of that line; text before the closing `"""` on its line at the closing `"""`. Only an error about the string as a whole is at its opening quotes: one that isn't closed, or is longer than the string limit (§7). A byte string's opening is its `x`: every error about the whole literal is there, `unterminated-bytes` and `string-too-long` alike.
 
 <!-- rule: positions.error.normative -->
 <!-- rule: positions.error.catalogue -->
 **Where each error is.** The place of an error is part of the specification, as its code is: for the same input, every implementation reports the same line and column. The catalogue ([`errors.md`](errors.md), §17) gives the place of each code in its column "Reported at". In short:
 
-- An error about a character or token is at its first character: a control or bidi character, a lone carriage return, a stray `/`, a character that can't be in a byte string, a word such as `null`, a key or tag, an empty payload's `(`, a closing bracket that doesn't fit, a payload on a later line at its `(` or `{`. An escape is at its backslash. Every number error (`invalid-number`, `number-too-long`, `exponent-too-large`) is at the literal's first character, a sign or a leading `.` included.
-- An error about something that isn't closed is at its opening: `unclosed-bracket` at the bracket, `unterminated-string`, `unterminated-bytes` and `unterminated-block-string` at the opening quote, `unterminated-comment` at the outermost `/*`.
+- An error about a character or token is at its first character: a control or bidi character, a lone carriage return, a stray `/`, a character that can't be in a byte string, a word such as `null`, a key or tag, an empty payload's `(`, a closing bracket that doesn't fit, a payload on a later line at its `(` or `{`. An escape is at its backslash. Every number error (`invalid-number`, `number-too-long`, `exponent-too-large`) is at the literal's first character, a sign or a leading `.` included. A literal that breaks more than one of these rules (a thousand digits followed by a letter) may be reported with any of their codes; the conformance suite has no such input.
+- An error about something that isn't closed is at its opening: `unclosed-bracket` at the bracket, `unterminated-string` and `unterminated-block-string` at the opening quote, `unterminated-bytes` at the `x`, `unterminated-comment` at the outermost `/*`.
 - An error about something missing is at what stands in its place: `missing-comma`, `missing-colon`, `expected-value` and `expected-key` at the next token, or at the end of the input. `bytes-odd-digits` is at the lone hex digit.
 - `nesting-too-deep` is at the opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. The length limits are at the start of the string, key or tag (above).
 - `duplicate-key` is at the second key, as soon as the key is read, before its colon and its value: `{ a: 1, a: "\q" }` is `duplicate-key`, not `invalid-escape`. JSON is read the same way (§16).
@@ -295,9 +303,13 @@ An error inside a string is at the character that is wrong, in a block string to
 - In a stream reader, `value-too-long` is at the start of the value's text (the character after the previous top-level comma, or the start of the stream), and `stream-truncated` at the end of the stream.
 - An error in JSON text (§16) is at `$`, with the line and column of its place in the text, found as in haus text: a duplicate member name at the second name, a number at its first character, an unterminated string at its opening quote, an escape at its backslash, a syntax error at the token found or at the end of the text.
 - A schema file's errors (§14, §13.3) are at what they are about: a name, parameter, field, tag or attribute (a second one at the second), a definition as a whole at its `type`, a module at its `import`. These places are informative for now, and so is the catalogue's column for them: they come from one checker, and become normative once the fuzzer has compared them across bindings. Warnings about schema files (§14) are not affected: the conformance suite pins their places.
+- The errors of the package layer ([`packages.md`](packages.md): where an import's package is found, its manifest's fields beyond `name` and `version`, a `package.json`, a package's version) are informative too, as long as that document is a draft (§10).
+
+<!-- rule: positions.error.invalid-utf8 -->
+**Invalid UTF-8** has an informative place: bytes that aren't UTF-8 are no character to point at. An implementation SHOULD give the line and column of the first byte of the maximal ill-formed subsequence (Unicode §3.9), counting the characters before it as for any other place, and of an unpaired surrogate in a host string, the surrogate (§4); it MAY give none. The conformance suites and the fuzzer compare its code only.
 
 <!-- rule: positions.error.one-of-several -->
-When an input has several mistakes, which is reported is not fixed (§17), except where this specification says which comes first: invalid UTF-8 (§4), a block string's (§4) and a duplicate key (above).
+When an input has several mistakes, which is reported is not fixed (§17), except where this specification says which comes first: invalid UTF-8 (§4), a block string's (§4), a comment's (§4) and a duplicate key (above).
 
 ## 9. Security considerations
 
@@ -309,7 +321,7 @@ When an input has several mistakes, which is reported is not fixed (§17), excep
    <!-- rule: security.errors.quoted-text-escaped -->
    <!-- rule: security.errors.version-quoted-if-valid -->
    <!-- rule: security.packages.declared-places -->
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that an error message quotes from its input (a token, a key, a tag, a name, a version) is escaped (control and bidirectional characters, and U+2028 and U+2029) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40. This holds for every message: of the data parser, the schema reader and checker, the decoders, the JSON readers and package resolution alike, whatever the input (data, a schema file, a manifest, a `package.json`). A version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used. Relative imports stay inside the build's root directory and follow no symbolic links (§13.3), every file read is a regular file checked on its open handle, and messages about files SHOULD show paths relative to the root, never absolute ones.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that an error message quotes from its input (a token, a key, a tag, a name, a version) is escaped (control and bidirectional characters, and U+2028 and U+2029) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40. This holds for every message: of the data parser, the schema reader and checker, the decoders, the JSON readers and package resolution alike, whatever the input (data, a schema file, a manifest, a `package.json`). A version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used ([`packages.md`](packages.md) §2). Relative imports stay inside the build's root directory and follow no symbolic links (§13.3), every file read is a regular file checked on its open handle, and messages about files SHOULD show paths relative to the root, never absolute ones.
    <!-- rule: security.limits.while-parsing -->
 3. **Enforce limits while parsing** (§7), not afterwards.
    <!-- rule: security.keys.data-only -->
@@ -365,8 +377,11 @@ This specification is versioned. Versions 0.x are drafts, in which anything may 
 <!-- rule: versions.directive.only-at-start -->
 **No version header.** A file doesn't say which version it is written in: every version reads every earlier version's text the same way. Files whose first character (after a byte order mark) is `#` are reserved for a version directive, such as `#haus 2`, should a version that breaks compatibility ever become unavoidable. Such a version would require the directive in every file, and a file without one would always be read by the rules of 1.x. Parsers SHOULD report a file starting with `#haus` (whatever follows it: `#haus 2`, `#haus2`, `#hausfoo`) as needing a newer version of haus (`version-directive`), rather than as an ordinary syntax error; a file starting with any other `#` is an ordinary syntax error (`expected-value`).
 
+<!-- rule: versions.scope.core -->
+**What 1.0 freezes.** The rules above apply to this document from 1.0 on: the data syntax, the layouts, the canonical form and the hash, the error codes, the prelude, `std/time`, the schema language with relative imports, the import syntax and type ids. The package layer (where a build finds packages, by the rules of npm and Cargo; a manifest's fields beyond `name` and `version`; profiles; how codecs are wired to types and what is reported without one) is the companion document [`packages.md`](packages.md). It has its own version, 0.x while it is a draft, and may still change after this document's 1.0.
+
 <!-- rule: versions.conformance.statement -->
-**Conformance.** An implementation states the version it implements ("haus 1.1"). The conformance suite (`../test-suite`) is tagged for each version. Media types MAY carry the version as a parameter: `application/vnd.haus; version=1.1`.
+**Conformance.** An implementation states the version it implements ("haus 1.1"), and, if it finds packages, the version of the package layer too: "haus 1.0, packages 0.3". The conformance suite (`../test-suite`) is tagged for each version; its package cases are kept apart (test-suite/README.md, "Package suite"). Media types MAY carry the version as a parameter: `application/vnd.haus; version=1.1`.
 
 Schema packages are versioned separately, with the rules of §13.3.
 
@@ -409,6 +424,12 @@ The canonical form (§12) is the fourth way to write values; it sorts keys and n
 <!-- rule: format.empty.file -->
 **Empty files.** A file with no values and no comments (empty, or only whitespace) is written as empty text in every layout, without a line break. So is a file with only comments in compact and minimised, which drop them.
 
+<!-- rule: format.stream.option -->
+<!-- rule: format.stream.single-item -->
+**Streams.** Without being told, a formatter writes a file with one top-level item as a single document, without a comma after it, and a file with more than one as a stream, with a comma after every item (below). Counting items can't tell a stream from a document: a log that grows by appending starts with one item, and the comma after it is what lets the next one be appended (§6). So formatters MUST take an option that says the file is a stream (`haus fmt --stream`, say), off by default. With it, every top-level item is followed by a comma, a single item too, in pretty, compact and minimised; nothing else changes, and a file with no items is written as without it (above). A tool that formats a file with a schema (§14, "Which schema describes a file") whose type for the file is a `Stream` sets the option.
+<!-- rule: format.stream.writers -->
+The writers of values that write a list of values as a file or stream (`stringifyAll`, `writeAll`) take the same option, off by default, and write as a formatter does: with it, a comma after every value, a single one too. Without it, nothing changes.
+
 <!-- rule: format.strings.escaped-alike -->
 Strings are escaped alike in every layout: `\"`, `\\`, line feed, carriage return and tab as `\n`, `\r` and `\t` (in `"…"` strings; pretty's block strings below), and `\u{…}` for the other raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw. A string written from its value spells `\u{…}` as the canonical form does (§12): uppercase hex digits, no leading zeros (`\u{1B}`).
 
@@ -432,7 +453,7 @@ For people.
   <!-- rule: format.pretty.width.code-points -->
   <!-- rule: format.pretty.width.whole-line -->
   <!-- rule: format.pretty.container-payload-never-fits -->
-- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry (a single top-level item has none, so nothing is added for it), so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
+- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry (a single top-level item has none, unless the file is formatted as a stream, above, so nothing is added for it), so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
   <!-- rule: format.pretty.spacing -->
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
   <!-- rule: format.keys.minimal -->
@@ -461,12 +482,12 @@ For people.
   <!-- rule: format.pretty.stream.blank-after-multiline -->
   <!-- rule: format.pretty.stream.trailing-comments -->
   <!-- rule: format.pretty.stream.multiline-by-value -->
-- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows (an item is multi-line when its value is written over more than one line; comments after it don't make it so). A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
+- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows (an item is multi-line when its value is written over more than one line; comments after it don't make it so). A single item is written without a comma, unless the file is formatted as a stream (above). Comments after the last item follow it directly, unless the source has a blank line there.
   <!-- rule: format.pretty.stream.blank-placement -->
   The blank line after a multi-line item comes after the comments that stay on the item's line and before the comments above the next item; one the source has there is not doubled. Only comments after the last item, or nothing, following a multi-line item get no blank line from this rule.
 - **Comments** are kept (they are part of the layout, not of the data model):
   <!-- rule: format.comments.own-line -->
-  - A comment on its own line stays above the entry that follows it.
+  - A comment on its own line stays above the entry that follows it. Each comment above an entry is written on its own line, also where the source has several on one line (`/* a */ /* b */⏎1` is written `/* a */⏎/* b */⏎1`).
     <!-- rule: format.comments.after-entry -->
   - A comment after an entry on the same line stays after that entry's comma. Of the comments between an entry and the next one (or the closing bracket), those before the first line break stay there, wherever the comma is (`1 /* a */, // b` keeps both); the others go on their own lines, above the next entry or at the end of the container.
     <!-- rule: format.comments.after-multiline-comment -->
@@ -516,7 +537,7 @@ Person { name: "Jane Smith", age: 28, type: Designer },
   <!-- rule: format.compact.no-multiline-strings -->
 - **Strings never span lines:** multi-line text uses `\n` escapes, and U+2028 and U+2029 are escaped too, so a compact stream can be split by lines (like NDJSON) and is still valid haus.
   <!-- rule: format.compact.stream-commas -->
-- **Streams:** a file with more than one item puts `,` after every item; a single item is written without one, as in pretty. Every item's line ends with a line feed, the last one's too (empty files above).
+- **Streams:** a file with more than one item puts `,` after every item; a single item is written without one, as in pretty, unless the file is formatted as a stream (above). Every item's line ends with a line feed, the last one's too (empty files above).
   <!-- rule: format.compact.comments-dropped -->
 - **Comments are dropped,** also those between top-level items.
   <!-- rule: format.compact.spellings-kept -->
@@ -534,7 +555,7 @@ Person{name:"Jane Smith",age:28,type:Designer},
 ```
 
 <!-- rule: format.minimised.no-whitespace -->
-- **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: `,` after every item when there is more than one.
+- **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: `,` after every item when there is more than one, or when the file is formatted as a stream.
   <!-- rule: format.minimised.literals-as-written -->
 - **Literals stay as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`) are spelling, not whitespace between tokens. When serializing values with no source text, they are written as in pretty.
   <!-- rule: format.minimised.comments-dropped -->
@@ -549,7 +570,7 @@ Person{name:"Jane Smith",age:28,type:Designer},
 <!-- rule: format.values.place-informative -->
 Bindings SHOULD check when the value is built, so that the mistake is reported where it is made: their constructors then build only haus values. Where these errors are reported, by the constructor or by the writer, and the place they name, is informative. Checking that a value is valid is never checking a limit: limits belong to the writer, and two writers may be configured with different ones.
 
-- a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`. A tag with an unpaired surrogate (`\uD800` in a JavaScript string) is one of them: it is `invalid-tag`, not `cannot-encode`, as a tag is checked before it is encoded;
+- a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`. The tag rule is checked first, so a tag that also has no UTF-8 form is one of them: a tag with an unpaired surrogate (`\uD800` in a JavaScript string), or, in a binding whose strings are bytes, one that isn't valid UTF-8, is `invalid-tag`, not `cannot-encode`;
 - a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number longer than the number limit is still a number: the writer rejects it (above);
 - a record with a key twice: `duplicate-key`;
   <!-- rule: format.values.bytes-strings-utf8 -->
@@ -659,7 +680,7 @@ Types come from three tiers:
 |---|---|---|---|
 | **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Stream a` (only as the whole type of a definition, §14), `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
 | **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time profile](std/time.md) | MUST support |
-| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`; packages of any other organisation | none in the schema; profiles, which codecs implement | MAY offer codecs |
+| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`; packages of any other organisation | none in the schema; profiles, which codecs implement ([`packages.md`](packages.md) §6) | MAY offer codecs |
 
 The official extensions are schema packages like any other, under the scope `@haus-fmt/`, which is reserved for them (§13.3).
 
@@ -680,7 +701,7 @@ A domain goes in a module even when it is built in: the prelude reserves its nam
 **The schema language has no syntax for rules about values.** A schema describes structure (§9.10). The only rules about values are those of built-in types: the range of `UInt8`, the digits of a `Decimal`, the std/time profile. They are fixed by this specification, run in linear time, and mean the same in every implementation.
 
 <!-- rule: prelude.rules.line -->
-**The line.** A rule about values, at every tier (the prelude, a standard module, a package's profile, §13.3), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, which follows the four rules below), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
+**The line.** A rule about values, at every tier (the prelude, a standard module, a package's profile, [`packages.md`](packages.md) §6), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, which follows the four rules below), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
 
 <!-- rule: prelude.rules.admission -->
 **What a rule about values is.** Every rule about values that haus has, at every tier (the prelude, a standard module, a package's profile), follows four rules:
@@ -690,7 +711,7 @@ A domain goes in a module even when it is built in: the prelude reserves its nam
 3. **It is specified exactly.** A rule in prose defines it, and test vectors test it; it runs in linear time and gives the same result in every binding.
 4. **One spelling per value where possible.** A rule never changes equality, the canonical form or the hash (below), so two spellings of one value that it accepts stay two haus values. Its grammar leaves one spelling per value, with the exceptions it lists, as the std/time profile does.
 
-A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a profile of a package (§13.3), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's. Which tier a type's rule belongs to is §13.2's question.
+A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a profile of a package ([`packages.md`](packages.md) §6), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's. Which tier a type's rule belongs to is §13.2's question.
 
 There are two conformance classes:
 
@@ -713,7 +734,7 @@ Standard modules ship with this specification and are versioned with it. A modul
 - [`std/time`](std/time.schema.haus): `Date`, `Time`, `DateTime`, `Instant`, `ZonedDateTime`, `Duration`, `YearMonth`, `TimeZone`, the model of JavaScript's Temporal and java.time. Values are a tag around a string; the strings a schema binding accepts are defined by the [std/time profile](std/time.md), a strict subset of RFC 3339, RFC 9557 and ISO 8601. Nothing in it depends on a registry: zone names are checked for their syntax, never looked up.
 
 <!-- rule: prelude.std.admission -->
-**When a type goes into a standard module.** Its rule follows the four rules of §13.1 with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding and never changes (§10), while a package's rule is checked only where the application adds its codec (§13.4), and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with each definition a profile (`iso` is one), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
+**When a type goes into a standard module.** Its rule follows the four rules of §13.1 with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding, always, and never changes (§10), while a package's rule is defined by the package and the package layer ([`packages.md`](packages.md)), can be left out by an application, and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with each definition a profile (`iso` is one), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
 
 When in doubt, a type is a package. Data never names where a type comes from, so data stays valid when a package's type later moves into a standard module, and a schema changes an import line. Code is not as free: a type's id names its package or module (`@haus-fmt/money@1#Money`, `std/time#Instant`, §13.3), and bindings select codecs and generate code by id (§13.4), so moving a type breaks the codec registrations and generated code of applications that use it. Nothing can leave a standard module after 1.0.
 
@@ -734,12 +755,13 @@ A **schema package** is a directory with two files: a manifest, `package.haus`, 
 - `name` is `@organisation/name`, with npm's rules for scoped names in lowercase: each part starts with a letter or digit and has only `a`–`z`, `0`–`9`, `-`, `.` and `_`, is not `node_modules`, and the whole name has at most 214 characters. `@haus-fmt/` is reserved for the official extensions maintained with haus.
   <!-- rule: packages.version.semver -->
 - `version` is a semantic version (below).
-  <!-- rule: packages.manifest.other-fields-ignored -->
-- Other fields of the manifest are ignored, so later versions can add some. A manifest is at most 64 KiB.
+- A manifest is at most 64 KiB ("Files and limits" below). Its other fields belong to the package layer ([`packages.md`](packages.md) §4).
   <!-- rule: packages.schema.imports-packages-only -->
 - `schema.haus` is an ordinary schema file: shape only, like every schema. It imports standard modules and other packages, never files. Packages change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
   <!-- rule: packages.layout.other-files-unread -->
-- The directory may hold other files, such as profiles (below) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them.
+- The directory may hold other files, such as profiles ([`packages.md`](packages.md) §6) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them.
+
+Which package an import reaches, and from where (packages given to the build explicitly, or the build's dependencies by the rules of npm and Cargo, never global locations or the network), is the package layer: [`packages.md`](packages.md) §2–§4. This section says what holds for every package, however it was found.
 
 <!-- rule: packages.relative.extension-added -->
 <!-- rule: packages.relative.leading-dotdot -->
@@ -755,7 +777,7 @@ The checks of a relative import are made in one order, and the first that fails 
 <!-- rule: packages.root.option -->
 <!-- rule: packages.root.inside -->
 <!-- rule: packages.root.checked-first -->
-**The root.** A build has a root directory: by default, the directory of the real path of the schema file it starts from (the entry file). A build MAY take a `root` option naming a directory that contains the entry file, to widen it, such as a repository whose schemas share files across folders; one that doesn't contain the entry file is `import-outside-root`, at no place. A relative `root` option is resolved against the entry file's real directory (`root: ".."` is the directory above it), whatever the working directory. The entry file and the `root` option are resolved to real paths once, when the build starts, and may be reached through links; nothing a relative import names is. A relative import MUST NOT reach a file outside the root. As its path has no links, this is checked on its text: an import whose `..` names go above the root is `import-outside-root`, at the import, rejected before anything is looked at, so its message says nothing about what is there. Packages are not bound by the root: they are found where the rules below say.
+**The root.** A build has a root directory: by default, the directory of the real path of the schema file it starts from (the entry file). A build MAY take a `root` option naming a directory that contains the entry file, to widen it, such as a repository whose schemas share files across folders; one that doesn't contain the entry file is `import-outside-root`, at no place. A relative `root` option is resolved against the entry file's real directory (`root: ".."` is the directory above it), whatever the working directory. The entry file and the `root` option are resolved to real paths once, when the build starts, and may be reached through links; nothing a relative import names is. A relative import MUST NOT reach a file outside the root. As its path has no links, this is checked on its text: an import whose `..` names go above the root is `import-outside-root`, at the import, rejected before anything is looked at, so its message says nothing about what is there. Packages are not bound by the root: they are found where the package layer says ([`packages.md`](packages.md) §2).
 <!-- rule: packages.root.relative-messages -->
 Messages about files SHOULD show their paths relative to the root (`../vendor/x` for a package outside it), not absolute paths, which name users and directories that build logs shouldn't show. Before a build has a root (the packages given explicitly, by their directory or in a folder, are read first), messages SHOULD show paths relative to the parent of the directory given (`schemas/broken` in the folder `schemas`), never absolute ones.
 
@@ -765,83 +787,9 @@ Messages about files SHOULD show their paths relative to the root (`../vendor/x`
 
 <!-- rule: packages.files.regular-only -->
 <!-- rule: packages.files.open-checked -->
-**Files read.** Every file a build reads (the entry file, the files of relative imports, a package's `package.haus`, `schema.haus` and `package.json`, a project's `package.json`) MUST be a regular file. A build opens each by its real path or in a real directory, without following a link at its last name and without blocking (a FIFO or a device must not hang the build), checks on the opened file that it is a regular file, and reads from that file, so that the file checked is the file read. A file of a relative import or the entry file that isn't a regular file is `import-not-found`; one of a package's files is `package-path` (below); a project's `package.json` that isn't one declares nothing (npm, below).
+**Files read.** Every file a build reads (the entry file, the files of relative imports, a package's `package.haus`, `schema.haus` and `package.json`, a project's `package.json`) MUST be a regular file. A build opens each by its real path or in a real directory, without following a link at its last name and without blocking (a FIFO or a device must not hang the build), checks on the opened file that it is a regular file, and reads from that file, so that the file checked is the file read. A file of a relative import or the entry file that isn't a regular file is `import-not-found`; one of a package's files is `package-path` (below); a project's `package.json` that isn't one declares nothing ([`packages.md`](packages.md) §3, npm).
 
 > **Implementation note.** The pattern, on Unix: `lstat` the path (the type and the device and inode expected), `open` it with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` (and `O_NOCTTY`), `fstat` the handle, and require a regular file with the same device and inode; then read at most the limit plus one byte from the handle. On Windows: `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT` (so a link is opened, not followed), then `GetFileType` (`FILE_TYPE_DISK`) and `GetFileInformationByHandle` (not a reparse point, not a directory; the same volume serial and file index as the path's). Where the platform's API gives only the file index, without the volume serial, comparing the index alone is acceptable, and the binding documents it. A platform that can't open without blocking or can't ask an open handle for its type (the JVM's standard library) checks the path's type without following links just before it opens, and documents the race that is left: a file swapped for a FIFO between the check and the open can block the build.
-
-Resolution follows five principles, and the rules below apply them; an implementation for another ecosystem derives its rules from them the same way:
-
-<!-- rule: packages.principles.own-files -->
-1. A build reads only a package's own files, and those are plain files, never links.
-   <!-- rule: packages.principles.declared-places -->
-2. Packages are found only where the build declared them, never because something happens to be nearby or in a shared place.
-   <!-- rule: packages.principles.no-silent-sharing -->
-3. Two different packages never share a name silently.
-   <!-- rule: packages.principles.bounded-work -->
-4. The work is bounded: sizes, the number of files, each file read once.
-   <!-- rule: packages.principles.escaped-text -->
-5. Text from files is never repeated unescaped.
-
-<!-- rule: packages.lookup.only-two-places -->
-**Where packages come from.** Where an implementation looks for packages is part of the security model (§9.2). It MUST look only in:
-
-<!-- rule: packages.explicit.accepted -->
-<!-- rule: packages.explicit.folder-children -->
-<!-- rule: packages.explicit.directory-wins -->
-<!-- rule: packages.explicit.folder-no-override -->
-- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found, by the folder's last name and its own (`schemas/broken`), however the folder was given: the folder's last name is the last name of its real path (`./schemas/` and a link to `schemas` are both `schemas`; for `.`, the current directory's own name). A subdirectory whose `package.json` gives another version than its manifest, where versions are checked ("Package versions" below), is skipped the same way. A package given by its directory with such a manifest is rejected, with such a version `package-version`. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
-  <!-- rule: packages.lookup.build-dependencies -->
-- the dependencies of the build, as its package manager installed them, by the rules of its ecosystem (below): `node_modules` (npm), the crate's dependencies (Cargo);
-
-<!-- rule: packages.lookup.never-global -->
-and never in global or environment-wide locations (npm's global folder, `NODE_PATH`, a shared cache), and never over the network.
-
-<!-- rule: packages.explicit.file-tree -->
-A package given explicitly is a directory on disk, or a read-only tree of files that code provides, such as a Go `fs.FS`, a Swift `Bundle`, classpath resources on the JVM or a Python `importlib.resources` `Traversable`, so that a schema package can be published inside a library of any language. A tree is a package under the same rules as a directory: its `package.haus` and `schema.haus`, the version check, the limits, exact names, and no links (a tree that can hold links follows none of them). How to publish a schema package for each language is documentation, not specification.
-
-<!-- rule: packages.installed.declared -->
-<!-- rule: packages.installed.project-local -->
-<!-- rule: packages.installed.manager-resolution -->
-<!-- rule: packages.installed.same-rules -->
-**Installed packages.** Packages that the build's package manager installed follow these rules, whatever the ecosystem:
-
-- A file imports only packages that the build declared as its dependencies in its own manifest (`package.json`, `Cargo.toml`), checked before anything is looked for.
-- They are installed in a place of the project's own (`node_modules`, Cargo's build), never in a global or shared cache, and never found on the network.
-- Each one is the package the package manager's own resolution gives for that dependency: an implementation reads where the package manager put it, and doesn't search for it elsewhere.
-- Its files follow the rules of a package's files, and its version is checked against its `package.haus` ("Package versions", below).
-
-<!-- rule: packages.ecosystems.defined -->
-<!-- rule: packages.ecosystems.npm-only -->
-An **ecosystem** says how a package manager meets these rules, in a subsection of its own; a later ecosystem adds one, and the rules above stay. Two are defined: npm and Cargo. Only implementations of the npm ecosystem, JavaScript runtimes that resolve modules from `node_modules` (Node, Bun, Deno), look in `node_modules`; every other implementation MUST NOT, also when a `node_modules` is next to its files, since its build declares its dependencies elsewhere (`go.mod`, `pyproject.toml`). A project in several languages installs a schema package once per language: the copies define the same types (`@haus-fmt/money@1#Money`), so data passes between them unchanged.
-
-**npm.** An implementation of the npm ecosystem MUST follow these rules, so that every such implementation finds the same package and a dependency can't place one where another is looked for:
-
-<!-- rule: packages.npm.declared-first -->
-<!-- rule: packages.npm.declaration-source -->
-<!-- rule: packages.npm.declared-fields -->
-<!-- rule: packages.npm.explicit-declared -->
-- A file imports only packages it declares, and the implementation checks this before it looks. For a package's `schema.haus`, the declarations are in the package's own `package.json`. For other files, they are in the nearest `package.json` above the file's real path, skipping one that is valid JSON but not an object, or an object with neither a `name` nor a dependency field (such as `{ "type": "module" }`). The search stops at a `package.json` that isn't valid JSON or isn't a regular file (a directory, a symbolic link, a FIFO): that one declares nothing, and is not read. The declared packages are the member names of `dependencies`, `peerDependencies` and `optionalDependencies`, and for every file other than a package's `schema.haus` also `devDependencies`; a dependency field that isn't an object declares nothing, and still makes the file a project's. Without such a `package.json`, a file declares nothing. Explicit packages count as declared. Otherwise: `undeclared-package`.
-  <!-- rule: packages.npm.search-upward -->
-  <!-- rule: packages.npm.skip-node-modules-dirs -->
-  <!-- rule: packages.npm.skip-world-writable -->
-- It starts from the real path of the importing file and tries `D/node_modules/@org/name` for each directory `D` from the file's directory up to the root of the file system, nearest first, as Node does: the build's root (above) bounds relative imports, not this search, so that a schema finds the packages Node finds for the code next to it. It skips a `D` that is itself named `node_modules`, a scope directory directly inside one (`node_modules/@acme`), or the root of a Windows drive or share (`C:\`, `\\server\share\`), where any user can create `node_modules`. On Unix it SHOULD skip a `D` that everyone may write to (the mode's write bit for others, such as `/tmp`), so that a `node_modules` planted there is never used. Windows has no such simple test (who may create a directory is the outcome of inherited and denying entries of an ACL), so this rule is Unix-only; an implementation MAY skip on Windows a `D` whose ACL lets Everyone, Authenticated Users or Users create subdirectories.
-  <!-- rule: packages.npm.first-found-stops -->
-  <!-- rule: packages.npm.candidate-stops -->
-- The first `node_modules/@org/name` that exists is the package, where it exists when its directory lists it (as `lstat` sees it, not following it). If it has no `package.haus`, the import is not found; the search doesn't go on. A candidate that exists but can't be used stops the search the same way, with `import-not-found`: a link that dangles or is part of a cycle of links (`ENOENT`, `ELOOP` when followed), or a candidate that can't be told apart from a missing one because `D`, `D/node_modules` or `D/node_modules/@org` can't be listed or entered (`EACCES`): a directory `D` on the way up that can't be listed can't show whether it has a `node_modules`, so it stops the search too (it fails closed). Only a `D` that lists no `node_modules`, a `D/node_modules` that isn't a directory or doesn't list `@org`, or a `D/node_modules/@org` that doesn't list `name`, lets the search go on, so that a broken install never falls through to a package further up.
-  <!-- rule: packages.npm.name-matches -->
-- A package found this way MUST have the imported name in its manifest, and npm's name for it (its directory) is that name too.
-  <!-- rule: packages.npm.package-json-strict -->
-- The `package.json` of a package found this way is one of its files: a symbolic link, or a file that isn't a regular one, is `package-path`, and one larger than its limit `file-too-large`. It declares the package's own dependencies and gives its version. So does the `package.json` of a package found in a folder given explicitly, when the build uses it. (Beside a package given by its directory, it is read leniently instead, below.)
-
-<!-- rule: packages.cargo.direct-dependencies -->
-**Cargo.** A schema package published as a crate has a build script that tells Cargo where its directory is (`haus_build::package()`, through the crate's `links` metadata), and Cargo passes that only to the crates that depend on it directly (`DEP_<LINKS>_HAUS_PACKAGE`): a crate's own files import its direct dependencies, the dependencies' graph is passed on by each package crate for the packages they import, and nothing is searched. The version checked is the crate's package version. A build script's build has the crate's directory (`CARGO_MANIFEST_DIR`) as its root by default ("The root" above), for a schema inside the crate, rather than the schema's own directory: a crate's schemas share files across its folders, and not with other crates. Code generators of other languages that build with Cargo follow the same rules (`haus-build` for Roc).
-
-<!-- rule: packages.version.check-manager -->
-**Package versions** (`package-version`): implementations SHOULD check that a package's manifest `version` equals the version the package manager gives it, where it gives one (the `version` of npm's `package.json`, Cargo's package version). The check catches publishing mistakes and doesn't change what a schema means.
-<!-- rule: packages.version.explicit-too -->
-This holds for packages given explicitly too: an implementation that finds a version next to the manifest (the `version` of a `package.json` beside the `package.haus`, Cargo's package version) checks it, and reports `package-version` when it differs for a package given by its directory; a subdirectory of a folder with such a version is skipped (above).
-<!-- rule: packages.version.explicit-unreadable -->
-A `package.json` beside a package given explicitly is read leniently, by every implementation of every ecosystem, npm included: only to catch a version that differs. One that can't be read (a symbolic link or not a regular file, larger than its limit, not JSON) is ignored: it gives no version, and is no error. This holds for a package given by its directory, and for each package of a folder when the folder is read. Under npm, a package's `package.json` also declares the dependencies of its own imports: beside a package given by its directory it is read leniently for that too, while a package of a folder that a build uses reads it as the npm rules say (above), as it reads every package the npm search could find in that place, so that a folder never changes how a package is read.
 
 <!-- rule: packages.files.regular-not-links -->
 <!-- rule: packages.files.no-follow -->
@@ -859,28 +807,7 @@ A `package.json` beside a package given explicitly is read leniently, by every i
 | entries in a folder of packages | 4096 | `too-many-files` |
 | schema files in one schema, the root included (manifests and `package.json` don't count) | 256 | `too-many-files` |
 
-<!-- rule: packages.package-json.invalid -->
-A `package.json` that isn't valid JSON, or isn't an object, declares nothing and gives no version to check. Its `version` is checked only when it is a string.
-
-**Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project (vendored, still imported by name). Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
-
-The reasons:
-
-- Package managers already provide hosting, mirrors, lock files, hashes, authentication and private registries.
-- A haus registry would be one more service to run and one more point of failure for every build.
-- Types are identified by manifest names (`@haus-fmt/money@1#Money`), not by a registry, so a registry or a catalog can be added later without breaking anything; removing one could not be done the same way.
-
-What this means for users:
-
-<!-- rule: packages.publishing.owned-names -->
-- **Names are claims.** A manifest name doesn't prove who wrote a package: trust comes from the dependency the application chose to add. Scopes make names reliable on npm, and less so on registries with unscoped names. `@haus-fmt/` is reserved by convention; on npm the `@haus-fmt` scope enforces it. Organisations SHOULD use a name they own: their domain or their code hosting organisation.
-  <!-- rule: packages.publishing.no-install-scripts -->
-- **No install scripts.** A schema package is data and MUST NOT need code to install, such as npm `postinstall`. Codecs are code, and are trusted like any other library.
-  <!-- rule: packages.publishing.one-source -->
-- **Copies in several languages.** A package published to several registries SHOULD be published from one source, so that equal versions have equal files.
-  <!-- rule: packages.npm.peer-dependencies -->
-- **One copy per build.** On npm, a schema package SHOULD declare the schema packages it imports as `peerDependencies`, so that npm installs one copy for the whole application or reports a conflict when installing, as Cargo does.
-- **Discovery.** There is no index. The official extensions are listed in [`../extensions`](../extensions).
+How packages are published and distributed (there is no haus registry) is [`packages.md`](packages.md) §5.
 
 <!-- rule: packages.identity.ids -->
 <!-- rule: packages.identity.real-path -->
@@ -908,7 +835,7 @@ A file's id MUST NOT have the form of a package's id, `@org/name@N` (§13.3, gra
   <!-- rule: packages.imports.into-package-checked -->
 - a relative import from a file outside a package to a file in a package's directory (import the package by name). The directories looked at are those from the file's directory up to the root, the root included, each a package's when it lists `package.haus` ("Spelling" above). A directory among them that can't be listed can't show whether it is a package's: the import is `import-not-found` (it can't be checked), and never passes as one outside a package;
   <!-- rule: packages.imports.reject-links -->
-- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file (a `package.json` beside a package given explicitly is ignored instead, "Package versions" above). Such a file is not read;
+- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file (a `package.json` beside a package given explicitly is ignored instead, [`packages.md`](packages.md) §4). Such a file is not read;
   <!-- rule: packages.imports.reject-non-schema-file -->
 - a relative import with a symbolic link on its path, one that spells a name differently from its directory, or whose file isn't a regular file ("Resolution" and "Files read" above). Such a file is not read. The checks come in the order "Resolution" gives: `..` names above the root first (`import-outside-root`), then the walk down the names, then a target in a package's directory (the error above), then the file;
   <!-- rule: packages.imports.reject-cycles -->
@@ -939,24 +866,14 @@ A field or tag that an open type doesn't list is reserved for later versions of 
 <!-- rule: packages.imports.major-only -->
 An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
-<!-- rule: packages.profiles.definitions -->
-**Profiles.** A package MAY define profiles, named like `@haus-fmt/money/iso`. A profile is a definition of the package's types: which of the values its schema accepts are values of the type. It follows the four rules of §13.1, as every rule about values does. A package has one profile when its domain has one definition (`@haus-fmt/geo/wgs84`), and several when its domain has several (which codes are currencies). Codecs implement profiles (§13.4), and the application picks one. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
-
-<!-- rule: packages.profiles.vectors -->
-<!-- rule: packages.profiles.rule-over-vectors -->
-A profile is defined by its **rule**, written in prose in `profiles/<name>.md`: which values a codec implementing it accepts, stated on the value the type's schema decoded (§13.4), never on how it was written. Its **test vectors** (`profiles/<name>.vectors.haus`) are examples of the rule that every implementation must pass: values it accepts, with the text they encode back to where that differs from the input, and values it rejects. The rule defines the profile, and the vectors only test it: two codecs can pass all of them and still disagree, so where a rule and its vectors disagree, the vectors are wrong. The official profiles also have a reference checker in Lean, which the bindings' codecs are fuzzed against.
-
-<!-- rule: packages.profiles.spellings -->
-Where a type's values have several spellings that mean the same (the host of a URL in upper or lower case, its percent-escapes), the profile's rule decides, before its package is first published, whether it accepts one spelling only (lowercase hosts, say) or several. A profile that accepts several says so in its rule, and that haus equality (§2), the canonical form and the hash tell them apart.
+A package's **profiles**, definitions of its types that codecs implement (§13.4), are the package layer: [`packages.md`](packages.md) §6.
 
 ### 13.4 Codecs
 
 <!-- rule: codecs.api.optional -->
 A schema binding MAY let applications choose the host type of a named type without arguments: a **codec**, selected by the type's id.
 <!-- rule: codecs.api.any-named-type -->
-Every such type can have one: a type of the prelude (`prelude#Decimal`), of a standard module (`std/time#Instant`), of a package, or of the application's own files. A codec for `prelude#Decimal` applies to every `Decimal`, in the types of every package too.
-<!-- rule: codecs.api.one-per-id -->
-An application sets at most one codec per id: a binding given two for one id rejects them, as a mistake of its configuration (not of the data, so with no code of §17).
+Every such type can have one: a type of the prelude (`prelude#Decimal`), of a standard module (`std/time#Instant`), of a package, or of the application's own files. A codec for `prelude#Decimal` applies to every `Decimal`, in the types of every package too. How codecs are set (one per id), and what a binding reports about a codec that matches no type or a profile without its codec (`unused-codec`, `missing-codec`), is the package layer: [`packages.md`](packages.md) §7.
 
 A codec:
 
@@ -982,25 +899,9 @@ A codec applies wherever its type occurs: inside the types of imported packages 
 <!-- rule: codecs.apply.inside-out -->
 When codecs apply at several places in one value (a codec for `Currency` inside one for `Money`), decoding runs them from the inside out: a part's codec runs before the codec of the value that holds it, and the first that rejects gives the error, at its own place (`$[1]` for the currency).
 <!-- rule: codecs.apply.outer-input -->
-<!-- rule: codecs.apply.rules-on-schema-values -->
-What an outer codec receives for a part that has a codec of its own (the part's host value, or the value the schema decoded) is the binding's choice, which it documents. A profile's rule is checked on the values the schema decoded (§13.3, "Profiles"), never on what an inner codec made of them, so no codec can make a value pass the rule of another codec. With `iso`'s codec for `Money`, `Money(19.90, Bitcoin)` is `codec-rejected`, whatever codec the application sets for `Currency`.
+What an outer codec receives for a part that has a codec of its own (the part's host value, or the value the schema decoded) is the binding's choice, which it documents. A profile's rule is checked on the values the schema decoded, whatever the inner codecs made of them ([`packages.md`](packages.md) §6).
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
-
-<!-- rule: packages.codecs.missing-warning -->
-**A profile without its codec.** A package's rule is checked only where a codec applies it: without one, the values of its types are checked for their shape only (`Money(19.90, Eur)` decodes). So a schema binding SHOULD report the warning `missing-codec` when a type it decodes reaches a type that an official profile has a rule for, and no codec is set for that type's id. These types are:
-
-| Type | Profiles |
-|---|---|
-| `@haus-fmt/money@1#Currency` | `iso` |
-| `@haus-fmt/geo@1#LatLng` | `wgs84` |
-| `@haus-fmt/geo@1#BBox` | `wgs84` |
-| `@haus-fmt/uuid@1#Uuid` | `rfc9562` |
-
-(`iso`'s rule for `Money` is its currency's, so `Currency` stands for it.) Only the types the decoded type reaches count (a binding that builds every type of a schema file at once: the types the file's own definitions reach), and a type reached only inside a type that has a codec doesn't: that codec decides which values it holds (a codec for `Money` covers its `Currency`). The warning is reported where the binding learns which codecs are set (when a set of codecs is built, a schema is compiled with them, or decoding starts), once per type id, at no place, through the channel of the binding's other schema warnings (`unknown-attribute`, `deprecated`, `no-json-form`). Its message names the type's id and its profiles: `@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only`. It is a warning, never an error: decoding is unchanged. Tools that have no codecs (`haus check`, editors) report instead, with the same code as a note of the lowest severity (a hint), once per import of a package that has such a type, at the import: `the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec`.
-
-<!-- rule: codecs.unused.warning -->
-**A codec that matches no type.** A codec set for an id that no type has never runs, and the values it was meant to check pass: a typo, or `@haus-fmt/money@2#Money` when the schema imports major 1. So a schema binding SHOULD report the warning `unused-codec` for a codec whose id is no type of the prelude or a standard module, nor of the schema's files and the packages they import. It is reported as `missing-codec` is: where the binding learns which codecs are set, once per id, at no place, through the channel of its other schema warnings; its message names the id. A binding MAY reject such a codec instead, as a mistake of its configuration, and MAY leave out codecs that a library ships as a set (the codecs of a profile) when the application passes the whole set.
 
 ## 14. Schema files
 
@@ -1031,6 +932,8 @@ Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-ta
 - Only after a successful parse: a document (a type that isn't a `Stream`) with a syntax or limit error has that one error, as when stopping at the first.
   <!-- rule: schema.check.all-errors-stream-items -->
   A `Stream` type (§15, "Streams") is checked item by item, as a stream decoder reads it: each item is parsed, then checked, before the next is read. A syntax or limit error ends the check, after the errors of the items before it. With `type Root = Stream String`, the text `1,⏎"ok",⏎"ok" "oops"` has two errors in this mode, `type-mismatch` at `$[0]` and `missing-comma` at line 3, column 6, and only the first when stopping at the first.
+  <!-- rule: schema.check.all-errors-stream-utf8 -->
+  Invalid UTF-8 is an error of the item it is in, as a syntax error is: it is reported after the errors of the items before it, and ends the check. With `type Root = Stream String`, `1,⏎"ok",⏎"` followed by the byte FF and `"` has two errors, `type-mismatch` at `$[0]` and `invalid-utf8`. A document's invalid UTF-8 is its one error (§4).
   <!-- rule: schema.check.all-errors-once -->
 - Each error once, at its place of §15 (`$.items[2].price`). Several errors can share a place: a record missing two fields has two `missing-field` errors, both at the record.
   <!-- rule: schema.check.all-errors-nothing-below -->
@@ -1038,7 +941,7 @@ Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-ta
   <!-- rule: schema.check.all-errors-no-order -->
 - No order: which errors are reported is specified, their order is not, and a tool may sort them by place for display. The error of a check that stops at the first is one of them.
   <!-- rule: schema.check.all-errors-cap -->
-- A tool MAY stop after a number of errors it documents, at least 100, so that hostile input costs bounded work (§9), and SHOULD then say that it stopped. The cap is one for the whole check, a stream's every item together, and counts errors only, not hints.
+- A tool MAY stop after a number of errors it documents, at least 100, so that hostile input costs bounded work (§9), and SHOULD then say that it stopped. The cap is one for the whole check, a stream's every item together, and counts errors only, not hints. The minimum binds the cap a tool documents and uses by default: a checker in a library MAY take a lower cap as an option the application sets.
 
 <!-- rule: schema.check.hints-both-modes -->
 Hints (`unlisted-field`, `unlisted-tag`, `deprecated`) are never reported inside a `Secret`. Each mode reports the hints of the data it looked at: all of them when it reports every error, and those found before the error when it stops at the first.
@@ -1251,7 +1154,7 @@ How it is represented is up to the binding. For example, a binding MAY represent
 - leave the value out of error messages, when decoding and when encoding: an error inside a `Secret` is reported at the secret itself (`$.apiKey`), with its type, never with the value found or any part of it. A path into the secret could itself reveal it, through the keys of a `Map` or an `Any`.
 
 <!-- rule: decode.secret.hiding -->
-**Hiding** means that the value never shows outside that explicit call. Printing, logging, inspecting it and converting it to JSON with the language's own tools (`JSON.stringify`, Foundation's `JSONEncoder`, serde) show a marker such as `<redacted>`, or fail. A writer of the binding's that doesn't apply the secret's schema (haus or JSON written from the binding's values, the canonical form, the hash) refuses a secret, with an error that doesn't show it: it never writes the value, nor a marker that a reader would take for data. Encoding with the schema writes the value in full (above), so decoding and encoding again keeps it. A binding whose values have no printing hooks, such as a C ABI's tree of handles, hides a secret as a value of its own kind: its accessors see nothing in it, every writer refuses it, and an explicit call gives the value.
+**Hiding** means that the value never shows outside that explicit call. Printing, logging, inspecting it and converting it to JSON with the language's own tools (`JSON.stringify`, Foundation's `JSONEncoder`, serde) show a marker such as `<redacted>`, or fail. A writer of the binding's that doesn't apply the secret's schema (haus or JSON written from the binding's values, the canonical form, the hash) refuses a secret with `cannot-encode`, at the secret, in an error that doesn't show it: it never writes the value, nor a marker that a reader would take for data. Encoding with the schema writes the value in full (above), so decoding and encoding again keeps it. A binding whose values have no printing hooks, such as a C ABI's tree of handles, hides a secret as a value of its own kind: its accessors see nothing in it, every writer refuses it, and an explicit call gives the value.
 
 <!-- rule: decode.secret.tools-mask -->
 Tools that show data, such as editors and `haus check`, SHOULD mask values of a `Secret` type.
@@ -1326,7 +1229,7 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.read.numbers-exact -->
 <!-- rule: json.read.self-describing-controls -->
 <!-- rule: json.read.raw-controls-accepted -->
-**JSON that is read.** Readers read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names (`duplicate-key`), no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
+**JSON that is read.** Readers read JSON (RFC 8259) with three restrictions, and no others: the text is UTF-8 (RFC 8259 §8.1 requires it only for JSON exchanged outside a closed ecosystem); member names are unique in each object (`duplicate-key`; RFC 8259 §4 says only that they SHOULD be); and a `\u` escape is never an unpaired surrogate (`unpaired-surrogate`; RFC 8259 §8.2 allows one). These are three of the restrictions of I-JSON (RFC 7493), but a reader doesn't apply the others: a noncharacter such as U+FDD0 is read like any other character, as haus strings hold it (§4), and numbers are read exactly, whatever their size or precision, within the limits of §7 (Limits, below). A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
 <!-- rule: json.read.text-errors -->
 <!-- rule: json.read.duplicate-at-name -->
 Errors in the JSON text itself have the codes of haus text where the mistake is the same: a string that isn't closed is `unterminated-string`, and a backslash before the end of the text or before a character that starts no escape is `invalid-escape`. A duplicate member name is reported as soon as the name is read, before its value (`{"a": "", "a": 1e99999}` is `duplicate-key`, not `exponent-too-large`), as a duplicate key is in haus text (§8). These errors are at `$`, with the line and column of their place in the text (§8).
@@ -1444,7 +1347,7 @@ JSON in such forms is converted before a haus reader reads it.
 So a reader accepts the schema-based JSON of a newer minor version of its schema (§13.3): it ignores the new fields and reads the new tags as unknown values. Such an unknown value is the import's reading of the newer case, not that case ("Which form", above).
 
 <!-- rule: json.schema.round-trip -->
-**Round trip.** For every value `v` that a type accepts, reading the schema-based JSON of `decode(v)` gives `decode(v)` back, and two different decoded values never have the same schema-based JSON.
+**Round trip.** For every value `v` that a type accepts, where the value has a schema-based JSON form (a record payload with a field named `_tag` or `_args` has none, above), reading the schema-based JSON of `decode(v)` gives `decode(v)` back, and two different decoded values never have the same schema-based JSON.
 
 ## 17. Error codes
 
@@ -1463,7 +1366,7 @@ The catalogue is [`errors.md`](errors.md), generated from its machine-readable s
   <!-- rule: errors.code.one-mistake -->
 - A code names one mistake that its user can fix, not one message: a missing comma between two values is `missing-comma`, and a payload on the line after its tag is `payload-newline`, although both are found as "no comma where one is needed".
   <!-- rule: errors.code.same-everywhere -->
-- Which error is reported when an input has several is not fixed, except where this specification fixes it: invalid UTF-8 is reported before anything in the text it is found in (§4); a block string's errors come in a fixed order (§4); and a duplicate key is reported at its name, before its value, in haus text and in JSON (§8, §16). For an input with one mistake, every implementation reports the same code, at the same place (§8); the conformance suite checks this (test-suite/README.md).
+- Which error is reported when an input has several is not fixed, except where this specification fixes it: invalid UTF-8 is reported before anything in the text it is found in (§4); a block string's errors come in a fixed order (§4), and a comment's are read left to right (§4); and a duplicate key is reported at its name, before its value, in haus text and in JSON (§8, §16). For an input with one mistake, every implementation reports the same code, at the same place (§8); the conformance suite checks this (test-suite/README.md).
 
 <!-- rule: errors.json.object -->
 **JSON form.** An implementation that reports errors to programs, as a library or a command-line tool, SHOULD offer each error as a JSON object:

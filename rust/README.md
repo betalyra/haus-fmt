@@ -330,6 +330,7 @@ let minimised = haus::format(&text, &haus::FormatOptions { style: haus::Style::M
 | `style` | `Style::Pretty` | `Pretty`: one entry per line in every non-empty record and array, comments and blank lines (at most one) kept. `Compact`: every top-level item on one line, comments dropped. `Minimised`: compact without whitespace between tokens (`Person{name:"Ada",age:36}`), for the wire and storage. |
 | `indent` | 2 | Spaces per level. |
 | `width` | 80 | Positional payloads like `Money(7.90, EUR)` stay inline up to this width, counted in code points and including the comma after the entry. |
+| `stream` | `false` | The file is a stream, in every layout: a comma after every top-level item, a single one too, so that a log holding one item so far can be appended to (`haus fmt --stream`). Without it a single item has none; more than one, or none, are written the same either way. |
 | `limits` | `Limits::default()` | The limits the text is parsed with. |
 
 Numbers, single-line strings and byte strings keep their source spelling

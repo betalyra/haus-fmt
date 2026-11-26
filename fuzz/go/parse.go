@@ -16,6 +16,10 @@ package main
 //     ...}`, each value written alone by haus.FormatValue (without the line
 //     break after it) and all of them by haus.FormatValues, as JSON strings;
 //     an encoding error is `err 0 0 <code> <reason>`.
+//
+// With --format or --write, `--stream` anywhere before DIR says the file is a
+// stream (spec §11, FormatOptions.Stream): a comma after a single value too,
+// in the output of --format and in --write's "file".
 
 import (
 	"bufio"
@@ -26,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	haus "github.com/betalyra/haus-fmt/go"
@@ -55,6 +60,12 @@ func files(args []string, out *bufio.Writer) error {
 }
 
 func fileMode(flags []string) (func([]byte, int) string, error) {
+	// `--stream` alone is the stream reader; with --format or --write, anywhere
+	// before DIR, the file is a stream: moved after the mode's other flags,
+	// where formatOptions reads it.
+	if len(flags) > 1 && slices.Contains(flags, "--stream") {
+		flags = append(slices.DeleteFunc(slices.Clone(flags), func(f string) bool { return f == "--stream" }), "--stream")
+	}
 	switch {
 	case len(flags) == 0:
 		return func(src []byte, _ int) string { return suiteLine(haus.ParseAll(src)) }, nil
@@ -78,8 +89,9 @@ func fileMode(flags []string) (func([]byte, int) string, error) {
 	return nil, errors.New(usage)
 }
 
-// formatOptions reads `STYLE [--indent N] [--width N]`, the indent and width
-// taken literally (0 included), 2 and 80 when not given.
+// formatOptions reads `STYLE [--indent N] [--width N] [--stream]`, the
+// indent and width taken literally (0 included), 2 and 80 when not given;
+// `--stream`: the file is a stream (spec §11).
 func formatOptions(flags []string) (haus.FormatOptions, error) {
 	layout, err := layoutOf(flags[0])
 	if err != nil {
@@ -87,8 +99,15 @@ func formatOptions(flags []string) (haus.FormatOptions, error) {
 	}
 	opts := haus.DefaultFormatOptions()
 	opts.Layout = layout
-	rest := flags[1:]
-	for ; len(rest) >= 2; rest = rest[2:] {
+	for rest := flags[1:]; len(rest) > 0; {
+		if rest[0] == "--stream" {
+			opts.Stream = true
+			rest = rest[1:]
+			continue
+		}
+		if len(rest) < 2 {
+			return opts, errors.New(usage)
+		}
 		v, err := strconv.Atoi(rest[1])
 		switch {
 		case err != nil:
@@ -100,9 +119,7 @@ func formatOptions(flags []string) (haus.FormatOptions, error) {
 		default:
 			return opts, errors.New(usage)
 		}
-	}
-	if len(rest) != 0 {
-		return opts, errors.New(usage)
+		rest = rest[2:]
 	}
 	return opts, nil
 }

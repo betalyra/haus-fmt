@@ -975,6 +975,8 @@ class Parser:
                 self._check_comment(start, m.end())
                 self.pos = m.end()
                 return
+        # Read left to right (§4): a character the comment can't hold comes before the missing `*/`.
+        self._check_comment(start, len(self.src))
         self._fail("unterminated-comment", "unterminated block comment", start)
 
     def _check_comment(self, start: int, end: int) -> None:

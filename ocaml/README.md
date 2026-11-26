@@ -31,4 +31,8 @@ dune test                     # the conformance suite's text-core directories an
 
 The fuzz runner, `_build/default/fuzz/runner.exe`, follows
 [`fuzz/README.md`](../fuzz/README.md): `DIR N`, `--stream`, `--canonical`,
-`--format STYLE` and `--write STYLE` (with `--indent N --width N`).
+`--format STYLE` and `--write STYLE` (with `--indent N --width N`, and
+`--stream` for the stream option of spec §11: `Layout.options ~stream:true`,
+taken by `Layout.format` and `Layout.write_all`, writes a comma after a single
+item too; `--write` applies it to its `"file"`). Every mode's
+error line is `err LINE COLUMN CODE REASON`, `0 0` where there is no place.

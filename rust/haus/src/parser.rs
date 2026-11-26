@@ -1019,6 +1019,9 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
+        // Read left to right: a character the comment can't hold comes before
+        // the missing `*/` at the end, and is reported first, at its place.
+        self.check_comment(open, self.b.len())?;
         Err(self.fail_at(open, Code::UnterminatedComment, "unterminated block comment"))
     }
 
@@ -1160,6 +1163,33 @@ mod tests {
         // Anywhere else, or another `#`, is an ordinary syntax error.
         for text in [" #haus 2", "1, #haus 2", "#2"] {
             assert_eq!(parse(text).unwrap_err().reason, "expected a value, found '#'", "{text:?}");
+        }
+    }
+
+    /// A comment is read left to right (finding O7): a character it can't hold
+    /// is reported at its own place, before the `*/` missing at the end;
+    /// `unterminated-comment` only when its text has no other mistake. The
+    /// stream reader agrees, however the input is split into chunks.
+    #[test]
+    fn an_unclosed_comment_reports_its_first_bad_character() {
+        let cases = [
+            ("/* a\rb *", "lone-carriage-return", 1, 5),
+            ("/* a\u{1}b *", "control-character", 1, 5),
+            ("/* a /* b \u{1} */", "control-character", 1, 11),
+            ("/* \u{202E} x", "bidi-control", 1, 4),
+            ("1, /* a\u{7F}", "control-character", 1, 8),
+            ("/* a\r\nb", "unterminated-comment", 1, 1),
+            ("1,\n  /* a /* b */", "unterminated-comment", 2, 3),
+        ];
+        for (text, code, line, column) in cases {
+            let e = parse(text).unwrap_err();
+            assert_eq!((e.code.as_str(), e.line, e.column), (code, line, column), "parse {text:?}");
+            for size in 1..=text.len() {
+                let mut reader = crate::stream::Reader::default();
+                let pushed = text.as_bytes().chunks(size).try_for_each(|chunk| reader.push(chunk).map(|_| ()));
+                let e = pushed.and_then(|()| reader.finish().map(|_| ())).unwrap_err();
+                assert_eq!((e.code.as_str(), e.line, e.column), (code, line, column), "stream {text:?} in {size}s");
+            }
         }
     }
 }

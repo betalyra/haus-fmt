@@ -1,9 +1,11 @@
 // The pretty layout's two options (spec §11): `indent` and `width`, whole
-// numbers of zero or more. Each case: `input` (a haus text without
-// comments), the options given (an option not given is left unset, so its
-// default applies), and the result of formatting `input` in the pretty
-// layout: `Ok(text)`, the formatted text, or `Rejected`, a formatter that
-// refuses the options (a misuse of its API, so no error code is compared).
+// numbers of zero or more, and the option every layout has, `stream`
+// (`True` or `False`, default `False`): the file is a stream. Each case:
+// `input` (a haus text without comments), the options given (an option not
+// given is left unset, so its default applies), and the result of formatting
+// `input` in the pretty layout: `Ok(text)`, the formatted text, or
+// `Rejected`, a formatter that refuses the options (a misuse of its API, so
+// no error code is compared).
 // A binding whose API can't express an option set (a negative number in an
 // unsigned type) rejects it by its types, and passes the case.
 
@@ -21,6 +23,15 @@
 { input: "Point(1, 2)", width: 0, result: Ok("Point(\n  1,\n  2,\n)\n") },
 { input: "Point(1, 2)", indent: 0, width: 0, result: Ok("Point(\n1,\n2,\n)\n") },
 { input: "{ a: Point(1, 2) }", width: 0, result: Ok("{\n  a: Point(\n    1,\n    2,\n  ),\n}\n") },
+
+// ── `stream: True`: the file is a stream (spec §11), so a single item has a comma after it too ──
+{ input: "Paged { n: 1 }", stream: True, result: Ok("Paged {\n  n: 1,\n},\n") },
+{ input: "Point(1, 2)", stream: True, result: Ok("Point(1, 2),\n") },
+{ input: "Point(1, 2)", width: 11, stream: True, result: Ok("Point(\n  1,\n  2,\n),\n") },
+{ input: "Point(1, 2)", width: 12, stream: True, result: Ok("Point(1, 2),\n") },
+{ input: "1, 2", stream: True, result: Ok("1,\n2,\n") },
+{ input: "", stream: True, result: Ok("") },
+{ input: "Paged { n: 1 }", stream: False, result: Ok("Paged {\n  n: 1,\n}\n") },
 
 // ── a negative option is rejected, not clamped or read as the default ──
 { input: "{ a: Point(1, 2) }", width: -1, result: Rejected },

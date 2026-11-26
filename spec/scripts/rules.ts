@@ -4,7 +4,8 @@
  *
  * Rule IDs are comments before each rule in the spec files:
  *
- *   spec/README.md, spec/std/time.md   <!-- rule: limits.depth.default -->
+ *   spec/README.md, spec/packages.md,
+ *   spec/std/time.md                   <!-- rule: limits.depth.default -->
  *   spec/grammar.ebnf                  (* rule: grammar.lexical.number *)
  *
  * The cases that cover a rule are listed in test-suite/rules.haus, one record
@@ -44,6 +45,7 @@ const ALLOWLIST = join(root, "spec/scripts/rules-uncovered.txt")
 /** The spec files, the comment syntax of each, and the prefix their IDs must have. */
 const SOURCES = [
   { file: "spec/README.md", comment: /<!--\s*rule:\s*(.*?)\s*-->/g, prefix: null },
+  { file: "spec/packages.md", comment: /<!--\s*rule:\s*(.*?)\s*-->/g, prefix: null },
   { file: "spec/std/time.md", comment: /<!--\s*rule:\s*(.*?)\s*-->/g, prefix: "time" },
   { file: "spec/grammar.ebnf", comment: /\(\*\s*rule:\s*(.*?)\s*\*\)/g, prefix: "grammar" },
 ] as const

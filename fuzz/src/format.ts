@@ -7,7 +7,8 @@
  * keep the properties of §11; and generated values through the
  * value writers of TypeScript, Rust, Roc, Go, Swift, the JVM and Python, which
  * must write what Lean's layout writers write (compact, minimised and pretty),
- * byte for byte. See ../README.md.
+ * byte for byte. Every fourth batch is formatted and written as streams
+ * (`--stream`, spec §11), by the runners that take the flag. See ../README.md.
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
  */
@@ -22,11 +23,19 @@ import { runProgram, timeoutFor } from "./spawn.ts"
 export const STYLES = ["pretty", "compact", "minimised"] as const
 export type Style = (typeof STYLES)[number]
 
-/** Indentation and width, the same for every case of a batch. */
+/**
+ * Indentation and width, the same for every case of a batch, and whether
+ * the files are formatted as streams (spec §11: a comma after a single item
+ * too; `--stream`, run only by the formatters and writers that take it).
+ */
 export interface Options {
   readonly indent: number
   readonly width: number
+  readonly stream?: boolean
 }
+
+/** `--stream` for a batch formatted as streams, else nothing: put after a mode's other arguments, before DIR N. */
+const streamFlag = (o: Options): readonly string[] => (o.stream === true ? ["--stream"] : [])
 
 /** A formatter's output, or the input rejected (a crash is a finding). */
 export type Out = { readonly ok: true; readonly text: string; readonly crash?: undefined } | { readonly ok: false; readonly crash?: string }
@@ -127,7 +136,8 @@ const positional = (v: Extract<Value, { kind: "variant" }>) => v.args.length > 0
  * after the entry) and can be (no comment, block string or non-empty
  * container in it); at most one blank line in a row; in a stream, a comma
  * after every item and a blank line after each multi-line item that another
- * item follows, and a single item without a comma.
+ * item follows, and a single item without a comma, unless the text is
+ * formatted as a stream (`options.stream`), where it has one too.
  */
 export function layoutRules(style: Style, out: string, options: Options): [string, string][] {
   const problems: [string, string][] = []
@@ -232,10 +242,11 @@ export function layoutRules(style: Style, out: string, options: Options): [strin
 
   const blank = /\n[ \t]*\n[ \t]*\n/.exec(skeleton)
   if (blank) problem("blank lines", `two blank lines in a row: ${context(blank.index)}`)
+  const asStream = options.stream === true
   values.forEach((v, i) => {
     const comma = out[v.end!] === ","
-    if (values.length > 1 && !comma) problem("stream", `item ${i + 1} of a stream without a comma: ${context(v.end!)}`)
-    if (values.length === 1 && comma) problem("stream", "a single item with a comma")
+    if ((values.length > 1 || asStream) && !comma) problem("stream", `item ${i + 1} of a stream without a comma: ${context(v.end!)}`)
+    if (values.length === 1 && !asStream && comma) problem("stream", "a single item with a comma")
     const next = values[i + 1]
     if (next && out.slice(v.start!, v.end!).includes("\n") && !/\n[ \t]*\n/.test(skeleton.slice(v.end!, next.start!))) {
       problem("stream", `no blank line after multi-line item ${i + 1}: ${context(v.end!)}`)
@@ -275,8 +286,8 @@ export function layoutFailures(style: Style, input: string, out: string, options
   lines.forEach((line, i) => {
     const one = valuesOf(line)
     if (one === undefined || JSON.parse(one).length !== 1) fail("lines", `line ${i + 1} is not one item: ${show(line)}`)
-    if (count > 1 && !line.endsWith(",")) fail("lines", `line ${i + 1} of a stream has no comma`)
-    if (count === 1 && line.endsWith(",")) fail("lines", "a single item with a comma")
+    if ((count > 1 || options.stream === true) && !line.endsWith(",")) fail("lines", `line ${i + 1} of a stream has no comma`)
+    if (count === 1 && options.stream !== true && line.endsWith(",")) fail("lines", "a single item with a comma")
   })
   return failures
 }
@@ -294,7 +305,7 @@ export function tsFormat(bytes: Uint8Array, style: Style, options: Options): Out
     return { ok: false }
   }
   try {
-    return { ok: true, text: format(doc.values, { style, indent: options.indent, width: options.width, source: text, comments: doc.comments }) }
+    return { ok: true, text: format(doc.values, { style, indent: options.indent, width: options.width, stream: options.stream === true, source: text, comments: doc.comments }) }
   } catch (e) {
     return { ok: false, crash: String(e) }
   }
@@ -337,7 +348,10 @@ function external(program: string, args: readonly string[], dir: string, cases: 
   return cases.map((c) => external(program, args, `${dir}-single`, [c])[0]!)
 }
 
-/** A formatter that is a separate program: `program --format STYLE --indent N --width N DIR N`. */
+/**
+ * A formatter that is a separate program: `program --format STYLE --indent N
+ * --width N [--stream] DIR N`.
+ */
 interface Formatter {
   readonly name: string
   readonly program: string
@@ -345,17 +359,24 @@ interface Formatter {
   readonly script?: readonly string[]
   /** The mode's arguments, when they aren't `--format STYLE --indent N --width N`. */
   readonly args?: (style: Style, options: Options) => readonly string[]
+  /**
+   * Whether it takes `--stream` after the mode's arguments (the file is a
+   * stream, spec §11). A batch formatted as streams runs only the formatters
+   * that do; set it here when a runner learns the flag.
+   */
+  readonly stream?: boolean
 }
 
 /**
  * The reference: Lean's model of the formatter (`haus-ref --format-batch
- * STYLE INDENT WIDTH`, `Format.format`), which every other formatter must
- * agree with, TypeScript's included.
+ * STYLE INDENT WIDTH [--stream]`, `Format.format`), which every other
+ * formatter must agree with, TypeScript's included.
  */
 const LEAN_FORMATTER: Formatter = {
   name: "lean",
   program: LEAN,
   args: (style, o) => ["--format-batch", style, String(o.indent), String(o.width)],
+  stream: true,
 }
 
 /**
@@ -364,22 +385,26 @@ const LEAN_FORMATTER: Formatter = {
  * --format`, `format`), the JVM's (`jvm-runner --format`, `Haus.format`) and
  * Python's (`python/fuzz/runner.py --format`, `haus.format`). Every one
  * takes every option, an indent or width of 0 included (spec §11: taken
- * literally, not as the default).
+ * literally, not as the default). Those with `stream: true` take `--stream`
+ * too (the TypeScript formatter always does).
  */
 let FORMATTERS: readonly Formatter[] = [
-  { name: "rust", program: RUST },
-  { name: "go", program: GO },
-  { name: "swift", program: SWIFT },
-  { name: "jvm", program: JVM },
-  { name: "python", program: PYTHON, script: [PYTHON_RUNNER] },
-  { name: "zig", program: ZIG },
+  { name: "rust", program: RUST, stream: true },
+  { name: "go", program: GO, stream: true },
+  { name: "swift", program: SWIFT, stream: true },
+  { name: "jvm", program: JVM, stream: true },
+  { name: "python", program: PYTHON, script: [PYTHON_RUNNER], stream: true },
+  { name: "zig", program: ZIG, stream: true },
 ]
+
+/** The external formatters for a batch: those that take `--stream`, if it is formatted as streams. */
+const formattersFor = (options: Options): readonly Formatter[] => (options.stream === true ? FORMATTERS.filter((f) => f.stream === true) : FORMATTERS)
 
 /** An external formatter's outputs. */
 function externalFormat(f: Formatter, dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
   if (cases.length === 0) return []
   const args = f.args?.(style, options) ?? ["--format", style, "--indent", String(options.indent), "--width", String(options.width)]
-  return external(f.program, [...(f.script ?? []), ...args], dir, cases).map((line) => {
+  return external(f.program, [...(f.script ?? []), ...args, ...streamFlag(options)], dir, cases).map((line) => {
     if (line.startsWith("crash ")) return { ok: false, crash: line }
     const r = parseOut<string>(line)
     return r.ok ? { ok: true, text: r.json } : { ok: false }
@@ -400,8 +425,9 @@ const same = (a: Out, b: Out) => (a.ok && b.ok ? a.text === b.text : a.ok === b.
  */
 export function checkFormat(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
+  const formatters = formattersFor(options)
   /** The formatters compared with Lean's: TypeScript's, then the external ones. */
-  const names = ["typescript", ...FORMATTERS.map((f) => f.name)]
+  const names = ["typescript", ...formatters.map((f) => f.name)]
   /** A failure for each formatter whose output differs from Lean's. */
   const compare = (i: number, what: string, lean: Out, others: readonly Out[]) =>
     names.forEach((name, k) => {
@@ -411,7 +437,7 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
   /** Lean's outputs, and those of the formatters in `names`. */
   const formatAll = (d: string, inputs: readonly Uint8Array[], style: Style): [Out[], Out[][]] => [
     externalFormat(LEAN_FORMATTER, d, inputs, style, options),
-    [inputs.map((c) => tsFormat(c, style, options)), ...FORMATTERS.map((f) => externalFormat(f, d, inputs, style, options))],
+    [inputs.map((c) => tsFormat(c, style, options)), ...formatters.map((f) => externalFormat(f, d, inputs, style, options))],
   ]
   const outs = new Map<Style, Out[]>()
   for (const style of STYLES) {
@@ -465,7 +491,7 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
     if (t.ok) {
       const input = utf8.decode(cases[i]!)
       const { values } = parseDocument(input)
-      const bare = format(values, { style: "pretty", indent: options.indent, width: options.width, source: input, comments: [] })
+      const bare = format(values, { style: "pretty", indent: options.indent, width: options.width, stream: options.stream === true, source: input, comments: [] })
       if (withoutBlankLines(t.text) !== withoutBlankLines(bare)) {
         failures[i]!.push({ check: "minimised → pretty = pretty without comments", detail: `pretty(minimised)  ${show(t.text)}\npretty, no comments ${show(bare)}` })
       }
@@ -480,7 +506,9 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
  * What a value writer wrote for a case: each value alone (no line break
  * after it), and, where the binding has a writer for them, the whole file
  * (one value alone, more each followed by a comma; spec §6, §11) or a stream
- * (every value followed by a comma); or why it couldn't.
+ * (every value followed by a comma); or why it couldn't. With `--stream`
+ * (spec §11), the file is written as a stream: a single value is followed
+ * by a comma too.
  */
 type Written =
   | { readonly ok: true; readonly values: readonly string[]; readonly file?: string | null; readonly stream?: string | null }
@@ -496,11 +524,22 @@ function externalWritten(program: string, args: readonly string[], dir: string, 
 
 const describeValues = (w: Written) => (w.ok ? JSON.stringify(w.values) : `err ${w.reason}`)
 
-/** A value writer that is a separate program, and its arguments for a layout and options (undefined: it can't be given them). */
+/**
+ * A value writer that is a separate program, and its arguments for a layout
+ * and options (undefined: it can't be given them); `--stream` goes after
+ * them in a batch written as streams.
+ */
 interface Writer {
   readonly name: string
   readonly program: string
   readonly args: (style: Style, options: Options) => readonly string[] | undefined
+  /**
+   * Whether it takes `--stream` (spec §11: its `"file"` is then the values
+   * written as a stream, a comma after a single one too). A batch written as
+   * streams runs only the writers that do; set it here when a runner learns
+   * the flag.
+   */
+  readonly stream?: boolean
 }
 
 /**
@@ -517,13 +556,13 @@ interface Writer {
  * TypeScript's `stringify` and `format` run in this process.
  */
 let WRITERS: readonly Writer[] = [
-  { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
+  { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]), stream: true },
   { name: "roc", program: ROC, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
-  { name: "go", program: GO, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
-  { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
-  { name: "jvm", program: JVM, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
-  { name: "python", program: PYTHON, args: (s, o) => [PYTHON_RUNNER, "--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
-  { name: "zig", program: ZIG, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
+  { name: "go", program: GO, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)], stream: true },
+  { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)], stream: true },
+  { name: "jvm", program: JVM, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)], stream: true },
+  { name: "python", program: PYTHON, args: (s, o) => [PYTHON_RUNNER, "--write", s, "--indent", String(o.indent), "--width", String(o.width)], stream: true },
+  { name: "zig", program: ZIG, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)], stream: true },
 ]
 
 /** Lean's layout argument: pretty with the options. */
@@ -538,7 +577,11 @@ const leanLayout = (style: Style, o: Options) => (style === "pretty" ? ["pretty"
  * value, and the file or stream where they have a writer for it, byte for
  * byte as Lean does. Lean's text is also read back without any writer: it
  * must hold the values and keep the layout's rules (`layoutRules`), which
- * checks the checks.
+ * checks the checks. A batch written as streams (`options.stream`) passes
+ * `--stream` to Lean and to the writers that take it (the others don't
+ * run): `"file"` is then the values written as a stream (a comma after a
+ * single value too), compared with Lean's; `"stream"` stays what a writer
+ * that always writes a stream writes.
  */
 export function checkWriters(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
@@ -550,11 +593,14 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[], options:
     }
   })
   const input = join(dir, "input")
+  const asStream = options.stream === true
+  // A single value written alone is never followed by a comma, also in a batch written as streams.
+  const alone = { ...options, stream: false }
   for (const style of STYLES) {
-    const lean = externalWritten(LEAN, ["--write-batch", ...leanLayout(style, options)], input, cases)
+    const lean = externalWritten(LEAN, ["--write-batch", ...leanLayout(style, options), ...streamFlag(options)], input, cases)
     const writers = WRITERS.flatMap((w) => {
       const args = w.args(style, options)
-      return args ? [{ name: w.name, out: externalWritten(w.program, args, input, cases) }] : []
+      return args && (!asStream || w.stream === true) ? [{ name: w.name, out: externalWritten(w.program, [...args, ...streamFlag(options)], input, cases) }] : []
     })
     const opts = { style, indent: options.indent, width: options.width }
     parsed.forEach((values, i) => {
@@ -564,10 +610,11 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[], options:
       if (!reference.ok) return fail("writer: lean rejects", `err ${reference.reason}`)
       let ts: Written
       try {
-        ts = { ok: true, values: values.map((v) => stringify(v, opts)), file: format(values, opts) }
+        ts = { ok: true, values: values.map((v) => stringify(v, opts)), file: format(values, { ...opts, stream: asStream }) }
       } catch (e) {
         ts = { ok: false, reason: String(e) }
       }
+      // What the writers that always write a stream write (Rust's `to_string_all`, Roc's `Encode.stream`; compact and minimised).
       const stream = reference.values.map((v) => v + ",\n").join("")
       for (const { name, out } of [{ name: "typescript", out: ts }, ...writers.map((w) => ({ name: w.name, out: w.out[i]! }))]) {
         if (describeValues(out) !== describeValues(reference)) {
@@ -582,7 +629,7 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[], options:
         const one = valuesOf(text)
         if (one !== JSON.stringify([canonical(values[j]!)])) fail("writer values", `${show(text)} reads as ${one ?? "not haus"}, not ${canonical(values[j]!)}`)
         if (style !== "pretty" && /[\n\r\u2028\u2029]/.test(text)) fail("writer lines", show(text))
-        for (const [check, detail] of layoutRules(style, text, options)) fail(`writer ${check}`, detail)
+        for (const [check, detail] of layoutRules(style, text, alone)) fail(`writer ${check}`, detail)
       })
       const file = reference.file!
       if (valuesOf(file) !== JSON.stringify(values.map(canonical))) fail("writer file values", `${show(file)} reads as ${valuesOf(file) ?? "not haus"}`)
@@ -623,7 +670,7 @@ function outputs(bytes: Uint8Array, options: Options): string {
   return STYLES.flatMap((style) => {
     const lean = describeOut(externalFormat(LEAN_FORMATTER, dir("report"), [bytes], style, options)[0])
     const ts = `  ${"".padEnd(9)} ${"typescript".padEnd(10)} ${describeOut(tsFormat(bytes, style, options))}`
-    const others = FORMATTERS.map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
+    const others = formattersFor(options).map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
     return [`  ${style.padEnd(9)} ${"lean".padEnd(10)} ${lean}`, ts, ...others]
   }).join("\n")
 }
@@ -663,6 +710,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   let accepted = 0
   let comments = 0
   let streams = 0
+  let streamBatches = 0
   const MAX_SHRUNK = 3
 
   console.log(
@@ -670,7 +718,13 @@ export async function run(argv: readonly string[]): Promise<number> {
   )
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
-    const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)
+    // A batch formatted as streams runs only the formatters and writers with `stream: true`: to
+    // add a runner, make it take `--stream` after its mode's arguments and set it in FORMATTERS / WRITERS.
+    // Every fourth batch, the second first, is formatted and written as streams
+    // (`--stream`, spec §11), by Lean, TypeScript and the runners that take it.
+    const asStream = Math.floor(done / batch) % 4 === 1
+    if (asStream) streamBatches++
+    const options: Options = { ...(rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)), stream: asStream }
     const cases = Array.from({ length: Math.min(batch, count - done) }, () => formatInput(rng, seeds))
     const formatRun: Checker = (d, cs) => checkFormat(d, cs, options)
     const writeRun: Checker = (d, cs) => checkWriters(d, cs, options)
@@ -698,7 +752,10 @@ export async function run(argv: readonly string[]): Promise<number> {
     })
   }
   const seconds = (Date.now() - started) / 1000
-  console.log(`${accepted} accepted (${comments} with comments, ${streams} streams), ${count - accepted} rejected; ${seconds.toFixed(1)} s`)
+  console.log(
+    `${accepted} accepted (${comments} with comments, ${streams} streams), ${count - accepted} rejected; ` +
+      `${streamBatches} of ${Math.ceil(count / batch)} batches formatted as streams (lean, typescript${FORMATTERS.filter((f) => f.stream).map((f) => `, ${f.name}`).join("")}); ${seconds.toFixed(1)} s`,
+  )
 
   rmSync(join(outDir, "format", "failures"), { recursive: true, force: true })
   mkdirSync(join(outDir, "format", "failures"), { recursive: true })
@@ -714,7 +771,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       const report = [
         `check: ${check}`,
         `input: ${show(Buffer.from(bytes).toString("utf8"))}`,
-        `options: indent ${options.indent}, width ${options.width}`,
+        `options: indent ${options.indent}, width ${options.width}${options.stream === true ? ", stream" : ""}`,
         failure.detail,
         ...(formatter ? ["outputs:", outputs(bytes, options)] : []),
       ].join("\n")

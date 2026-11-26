@@ -84,7 +84,18 @@ struct FormatSuiteTests {
         guard exists(file), case .record(let r) = try parse(readText(file)) else { return FormatOptions() }
         return try FormatOptions(
             indent: r["indent"].flatMap { if case .number(let n) = $0 { n.integer() } else { nil } } ?? 2,
-            width: r["width"].flatMap { if case .number(let n) = $0 { n.integer() } else { nil } } ?? 80)
+            width: r["width"].flatMap { if case .number(let n) = $0 { n.integer() } else { nil } } ?? 80,
+            stream: streamOption(r["stream"]))
+    }
+
+    /// `stream: True` or `False`; not given, the default (false).
+    static func streamOption(_ v: HausValue?) -> Bool {
+        switch v {
+        case nil: false
+        case .variant("True", [])?: true
+        case .variant("False", [])?: false
+        default: fatalError("not a stream option: \(v!)")
+        }
     }
 
     /// Whether two texts hold the same values.
@@ -136,16 +147,18 @@ struct FormatSuiteTests {
         #expect(try Self.sameValues(trimmed.joined(separator: "\n"), input))
     }
 
-    /// A case of options.cases.haus: the pretty layout's `indent` and `width`.
+    /// A case of options.cases.haus: the pretty layout's `indent` and `width`, and `stream`.
     struct OptionsCase: CustomTestStringConvertible, Sendable {
         let input: String
         /// The options given; nil: not given, the default applies.
         let indent: Int?
         let width: Int?
+        let stream: Bool
         /// The pretty result, or nil for `Rejected`.
         let result: String?
         var testDescription: String {
             "\(input.debugDescription) indent \(indent.map(String.init) ?? "-") width \(width.map(String.init) ?? "-")"
+                + (stream ? " stream" : "")
         }
     }
 
@@ -166,7 +179,9 @@ struct FormatSuiteTests {
                 case ("Rejected", nil): nil
                 default: fatalError("not a result: \(v)")
                 }
-            return OptionsCase(input: input, indent: int("indent"), width: int("width"), result: result)
+            return OptionsCase(
+                input: input, indent: int("indent"), width: int("width"), stream: streamOption(v["stream"]),
+                result: result)
         }
     }()
 
@@ -175,12 +190,15 @@ struct FormatSuiteTests {
     }
 
     /// The options of the pretty layout themselves (format/README.md): 0 is 0,
-    /// and a negative number is rejected (`FormatOptions` throws).
+    /// and a negative number is rejected (`FormatOptions` throws). The inputs
+    /// have no comments, so `stringifyAll` writes the same text.
     @Test(arguments: optionsCases)
     func options(_ c: OptionsCase) async throws {
         let (input, indent, width) = (c.input, c.indent ?? 2, c.width ?? 80)
         guard c.result == nil else {
-            #expect(try Haus.format(input, FormatOptions(indent: indent, width: width)) == c.result)
+            let options = try FormatOptions(indent: indent, width: width, stream: c.stream)
+            #expect(try Haus.format(input, options) == c.result)
+            #expect(try stringifyAll(parseAll(input), options) == c.result)
             return
         }
         #expect(throws: FormatOptionsError.self) { try FormatOptions(indent: indent, width: width) }

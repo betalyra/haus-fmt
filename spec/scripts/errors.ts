@@ -28,10 +28,10 @@ export const CATEGORIES = [
   ["Limits", "limits", "Limits", "The resource limits of §7. Each can be configured; the defaults are in §7."],
   ["Streams", "streams", "Streams", "Sequences of values (§6)."],
   ["SchemaFiles", "schema-files", "Schema files", "Schema files that implementations must reject (§14)."],
-  ["Imports", "imports", "Imports", "Standard modules, schema packages and files (§13.3)."],
+  ["Imports", "imports", "Imports", "Standard modules, schema packages and files (§13.3), and where packages are found ([packages.md](packages.md))."],
   ["Decoding", "decoding", "Decoding and encoding", "Values that don't fit a schema type (§15), and values a program can't encode."],
   ["Json", "json", "JSON", "The JSON mappings (§16)."],
-  ["Hints", "hints", "Hints and warnings", "Reported without failing, by checkers and editors (§14) and by schema bindings (§13.4)."],
+  ["Hints", "hints", "Hints and warnings", "Reported without failing, by checkers and editors (§14) and by schema bindings ([packages.md](packages.md) §7)."],
 ] as const
 
 export type Example =

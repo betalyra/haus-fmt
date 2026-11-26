@@ -1590,6 +1590,13 @@ test "every error of a stream, item by item" {
     try t.expectError(error.Haus, decodeText(t.allocator, a, s.get("Log").?, text, .{ .diagnostic = &d }));
     try t.expectEqual(Code.@"type-mismatch", d.code);
     try t.expectEqualStrings("$[0].n", d.path());
+    // Invalid UTF-8 is an error of the item it is in (spec §14,
+    // `schema.check.all-errors-stream-utf8`): after the errors before it.
+    const bad = "1,\n\"ok\",\n\"\xff\"";
+    try t.expectEqualStrings("Error type-mismatch $[0]; Error invalid-utf8 ; ", (try checkText(a, "type Root = Stream String", "Root", bad, .{}))[0]);
+    try t.expectEqualStrings("Error type-mismatch $[0]; ", (try checkText(a, "type Root = Stream String", "Root", bad, .{ .first = true }))[0]);
+    // A document's invalid UTF-8 is its one error.
+    try t.expectEqualStrings("Error invalid-utf8 ; ", (try checkText(a, "type Root = Array String", "Root", "[1, \"\xff\"]", .{}))[0]);
 }
 
 test "every error stops at the cap, and says so" {

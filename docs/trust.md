@@ -36,7 +36,7 @@ The proofs use only Lean's standard axioms.
 
 ### What is not proven
 
-- **The bindings you use.** TypeScript, Rust, Python, Go, Zig and Roc are separate programs. They are tested against the reference, as described [below](#the-same-everywhere), but testing is not proof.
+- **The bindings you use.** TypeScript, Rust, Python, Go, Swift, Java and Kotlin, Zig and Roc are separate programs. They are tested against the reference, as described [below](#the-same-everywhere), but testing is not proof.
 - **Running time in the bindings.** The linear bound is about the reference parser in its cost model. The bindings' own speed is not proven; they have tests with hostile inputs that would make a quadratic implementation slow. Converting a long hex literal to decimal is quadratic in its digits, which the number limit keeps small when parsing. Constructors of values built in code check no limit (spec §11), so a number built from a million hex digits is slow before any writer rejects it: text from outside goes through the parser, not a constructor.
 - **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered, and neither are error positions. The hash proofs are about the text that is hashed, not SHA-256 itself.
 - **Imports in schema files.** Finding packages is modelled and proven on its own, but the Lean schema-file reader doesn't bring in the definitions of imported packages.
@@ -84,7 +84,9 @@ Some of the bugs it found, all fixed:
 
 ## Safe to accept
 
-haus is meant to be read from sources you don't control: a request body, a file a user uploaded, a message from another service. A parser that follows the spec gives such input no way to make it slow, run out of memory or show something other than what the file holds.
+haus is meant to be read from sources you don't control: a request body, a file a user uploaded, a message from another service. A parser that follows the spec gives such input no way to make it slow or show something other than what the file holds.
+
+Memory is bounded piece by piece, not for a whole file. The limits below cap each number, string and nesting level, and a stream reader holds one value at a time, but nothing caps the size of a file: a parser given the whole text holds all of it, and what it returns grows with it. The limits also count characters, not the bytes or objects your language stores them in. So cap the size of what you accept before you parse it, or read it as a stream and handle each value as it arrives.
 
 ### Limits
 
@@ -134,7 +136,7 @@ Every error has a code, such as `nesting-too-deep` or `duplicate-key`. For an in
 
 1. **Keep the default limits**, or lower them. Raise them only for input you trust.
 2. **Decode with a schema** that lists the types you expect. Use `closed` where an unknown field or case should be an error. In an open variant, an unknown case keeps its raw data: treat it as untrusted, like the rest of the input.
-3. **Read network streams in strict mode**, so a cut-off last value is an error and not a shorter number ([`stream-truncated`](/docs/errors#stream-truncated)).
+3. **Read network streams in strict mode**, so a cut-off last value is an error and not a shorter number ([`stream-truncated`](/docs/errors#stream-truncated)). A cut right after a comma still reads as a valid, shorter stream: to know that nothing is missing, the sender has to say how much it sent (a length, or a last entry of its own).
 4. **Mark passwords and keys `Secret`**, so they stay out of your logs and error messages.
 5. **Act on error codes**, not on messages.
 6. **Sign the exact bytes, or the canonical form.** Then equal values verify whatever their layout.

@@ -354,6 +354,10 @@ describe("comments, whitespace and strings are those of data files (spec §14)",
   it.each([
     ['type A = { "x: Int }', "unterminated-string", 1, 12],
     ["type A = Int /* never closed", "unterminated-comment", 1, 14],
+    // Read left to right (spec §4): a character a comment can't hold comes before its missing `*/`.
+    ["type A = Int /* a\rb *", "lone-carriage-return", 1, 18],
+    ["type A = Int /* a /* b \x01 */", "control-character", 1, 24],
+    ["type A = Int /* \u{202E} y", "bidi-control", 1, 17],
     ["type A = Int\rtype B = Int", "lone-carriage-return", 1, 13],
     ["// a\rb\ntype A = Int", "lone-carriage-return", 1, 5],
     ["// a\x07b\ntype A = Int", "control-character", 1, 5],

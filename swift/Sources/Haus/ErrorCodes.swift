@@ -8,7 +8,7 @@ extension HausError {
     public enum Code: String, Sendable, CaseIterable {
         /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
         ///
-        /// Reported at: Where the decoder says, at the first byte that isn't UTF-8; nowhere when it doesn't say. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives. An unpaired surrogate in a string of the language: at it, one column.
+        /// Reported at: Informative (§8): an implementation SHOULD give the first byte of the maximal ill-formed subsequence (Unicode §3.9), and MAY give no place. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives; a `Stream` checked item by item, in the item it is in (§14). An unpaired surrogate in a string of the language: at it, one column.
         case invalidUtf8 = "invalid-utf8"
         /// `version-directive`: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
         ///
@@ -46,9 +46,9 @@ extension HausError {
         ///
         /// Reported at: The word.
         case bareIdentifier = "bare-identifier"
-        /// `expected-key`: Something that can't be a record key where a key should be, such as a number or a comma.
+        /// `expected-key`: Something that can't be a record key where a key should be, such as a number or a comma. The end of the input where a key should be (`{`, `{ a: 1,`) is `unclosed-bracket`.
         ///
-        /// Reported at: What stands where the key should be: the token, or the end of the input.
+        /// Reported at: What stands where the key should be: the token.
         case expectedKey = "expected-key"
         /// `uppercase-key`: A record key starts with a capital letter. Bare keys start with a lowercase letter or `_`; capitalized words are tags.
         ///
@@ -114,7 +114,7 @@ extension HausError {
         ///
         /// Reported at: The opening `"""`. Found before any error in the lines (§4).
         case unterminatedBlockString = "unterminated-block-string"
-        /// `unterminated-bytes`: A byte string `x"…` has no closing `"`.
+        /// `unterminated-bytes`: A byte string `x"…` has no closing `"`, also when the input ends after a lone hex digit (`x"a`).
         ///
         /// Reported at: The `x` of `x"`.
         case unterminatedBytes = "unterminated-bytes"
@@ -122,7 +122,7 @@ extension HausError {
         ///
         /// Reported at: The character.
         case bytesNotHex = "bytes-not-hex"
-        /// `bytes-odd-digits`: A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`).
+        /// `bytes-odd-digits`: A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`). The end of the input after it is `unterminated-bytes`.
         ///
         /// Reported at: The lone hex digit.
         case bytesOddDigits = "bytes-odd-digits"
@@ -130,7 +130,7 @@ extension HausError {
         ///
         /// Reported at: The carriage return.
         case loneCarriageReturn = "lone-carriage-return"
-        /// `unterminated-comment`: A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`.
+        /// `unterminated-comment`: A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`. A comment is read left to right: a control or bidi character or a lone carriage return in an unclosed comment is reported first, at its place (§4).
         ///
         /// Reported at: The outermost `/*`.
         case unterminatedComment = "unterminated-comment"
@@ -152,7 +152,7 @@ extension HausError {
         case exponentTooLarge = "exponent-too-large"
         /// `string-too-long`: A string or byte string has more characters than the limit (default 16 Mi).
         ///
-        /// Reported at: The opening quote.
+        /// Reported at: The opening quote; for a byte string, its `x` (§8).
         case stringTooLong = "string-too-long"
         /// `key-too-long`: A record key has more characters than the string limit (default 16 Mi).
         ///
@@ -310,7 +310,7 @@ extension HausError {
         ///
         /// Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory: no place.
         case packageManifest = "package-manifest"
-        /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
+        /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (packages.md §4), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
         ///
         /// Reported at (informative): The import that reaches the package; the message names both versions.
         case packageVersion = "package-version"
@@ -394,9 +394,9 @@ extension HausError {
         ///
         /// Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
         case codecRejected = "codec-rejected"
-        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
+        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. A decoded `Secret` given to a writer that doesn't apply its schema (haus or JSON from the binding's values, the canonical form, the hash; §15, "Hiding").
         ///
-        /// Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
+        /// Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type; for a secret, the secret. Building a value in code: informative (§11).
         case cannotEncode = "cannot-encode"
         /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
         ///
@@ -434,7 +434,7 @@ extension HausError {
         ///
         /// Reported at: The member: `$._value._bytes`.
         case hausJsonBytes = "haus-json-bytes"
-        /// `invalid-tag`: A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.
+        /// `invalid-tag`: A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). The tag rule is checked first: a tag with an unpaired surrogate, or one that isn't UTF-8 in a binding whose strings are bytes, is this error, not `cannot-encode`.
         ///
         /// Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
         case invalidTag = "invalid-tag"
@@ -470,13 +470,13 @@ extension HausError {
         ///
         /// Reported at: The variant. Never inside a `Secret` (§14).
         case unlistedTag = "unlisted-tag"
-        /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
+        /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (packages.md §7). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
         ///
         /// Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
         case missingCodec = "missing-codec"
-        /// `unused-codec`: A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
+        /// `unused-codec`: A warning: a codec is set for an id that no type has (packages.md §7): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
         ///
-        /// Reported at: Nowhere: it is about the codecs the application set, reported once per id.
+        /// Reported at: Nowhere: it is about the codecs the application set, reported once per id, where the binding learns which codecs are set or on request, through a function of the binding's.
         case unusedCodec = "unused-codec"
     }
 

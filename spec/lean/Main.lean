@@ -25,10 +25,11 @@ import Lean.Data.Json
     haus-ref --minimised FILE     the same in the minimised layout (`Layout.minimisedAll`)
     haus-ref --pretty FILE [INDENT WIDTH]  the same in the pretty layout without comments
                                   (`Layout.prettyAll`; default indent 2, width 80)
-    haus-ref --write-batch LAYOUT DIR N  like --batch, writing each file's values in LAYOUT
-                                  (`compact`, `minimised`, or `pretty [INDENT WIDTH]`):
+    haus-ref --write-batch LAYOUT [--stream] DIR N  like --batch, writing each file's values
+                                  in LAYOUT (`compact`, `minimised`, or `pretty [INDENT WIDTH]`):
                                   `ok {"values": [<each value alone>, …], "file": <the
-                                  file>}` (fuzz/, the value writers)
+                                  file>}`; with `--stream`, the file written as a stream, a
+                                  comma after a single value too (fuzz/, the value writers)
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
     haus-ref --time-batch FILE    for each line `TYPE HEX` of FILE (the text as hex-encoded
                                   UTF-8): `ok` or `no` (fuzz/)
@@ -73,10 +74,11 @@ import Lean.Data.Json
                                   §2, §12) in both directions; compare from the canonical forms
     haus-ref --format-options FILE       the pretty layout's options (test-suite/format/
                                   options.cases.haus, spec §11) with `Layout.prettyAll`
-    haus-ref --format-batch STYLE INDENT WIDTH DIR N  like --batch, reformatting each file with
-                                  the standard formatter (`Format.format`, spec §11: comments,
-                                  blank lines and spellings kept) in STYLE (`pretty`, `compact`,
-                                  `minimised`): `ok <the text as a JSON string>`, the parser's
+    haus-ref --format-batch STYLE INDENT WIDTH [--stream] DIR N  like --batch, reformatting
+                                  each file with the standard formatter (`Format.format`, spec
+                                  §11: comments, blank lines and spellings kept) in STYLE
+                                  (`pretty`, `compact`, `minimised`; `--stream`: the files are
+                                  streams): `ok <the text as a JSON string>`, the parser's
                                   `err <line> <column> <code> <reason>`, or `crash <reason>`
                                   for a bug of the model (fuzz/, the formatters)
     haus-ref --format-suite DIR          run the format suite DIR (test-suite/format) with
@@ -147,7 +149,8 @@ def canonicalLine (bytes : ByteArray) : String :=
 One result of `--write-batch`: the values written in a layout from values
 (spec §11), each on its own (`value` with no line break after it) and the
 whole file (`compactAll`, `minimisedAll`, `prettyAll`), as JSON strings:
-`ok {"values": […], "file": …}`.
+`ok {"values": […], "file": …}` (with `--stream`, the file written as a
+stream: a comma after a single value too).
 -/
 def writeLine (value : Value → Text) (file : List Value → Text) (bytes : ByteArray) : String :=
   match String.fromUTF8? bytes with
@@ -159,15 +162,20 @@ def writeLine (value : Value → Text) (file : List Value → Text) (bytes : Byt
           s!"ok {(Json.mkObj [("values", values), ("file", Json.str (String.ofList (file vs)))]).compress}"
       | .error _ => batchLine bytes
 
-def writeUsage := "usage: haus-ref --write-batch (compact | minimised | pretty [INDENT WIDTH]) DIR N"
+def writeUsage := "usage: haus-ref --write-batch (compact | minimised | pretty [INDENT WIDTH]) [--stream] DIR N"
 
-/-- The layout `--write-batch` writes: compact, minimised, or pretty with the options. -/
-def writeLayout : List String → Option ((Value → Text) × (List Value → Text))
-  | ["compact"] => some (Layout.compact, Layout.compactAll)
-  | ["minimised"] => some (Layout.minimised, Layout.minimisedAll)
-  | ["pretty"] => some (Layout.pretty {} [] 0, Layout.prettyAll {})
+/--
+The layout `--write-batch` writes: compact, minimised, or pretty with the
+options, and whether the values are written as a stream (`--stream`, §11).
+-/
+def writeLayout (args : List String) : Option ((Value → Text) × (List Value → Text)) :=
+  let stream := args.contains "--stream"
+  match args.filter (· != "--stream") with
+  | ["compact"] => some (Layout.compact, (Layout.compactAll · stream))
+  | ["minimised"] => some (Layout.minimised, (Layout.minimisedAll · stream))
+  | ["pretty"] => some (Layout.pretty {} [] 0, Layout.prettyAll { stream })
   | ["pretty", indent, width] =>
-      let o : Layout.Options := { indent := indent.toNat!, width := width.toNat! }
+      let o : Layout.Options := { indent := indent.toNat!, width := width.toNat!, stream }
       some (Layout.pretty o [] 0, Layout.prettyAll o)
   | _ => none
 
@@ -1179,7 +1187,8 @@ def equalityCase : Value → Verdict
 /--
 A case of `format/options.cases.haus` (spec §11): `input` in the pretty
 layout (`Layout.prettyAll`; the input has no comments) with `indent` and
-`width` where given, the defaults otherwise. The options are natural numbers:
+`width` where given, the defaults otherwise, and as a stream with
+`stream: True`. The numeric options are natural numbers:
 a negative one can't be given, it is rejected by the types (and the case
 passes when `Rejected` is expected).
 -/
@@ -1195,7 +1204,8 @@ def optionsCase : Value → Verdict
         | .variant "Rejected" [] => .right
         | _ => .wrong "a negative option, not a natural number"
       | _, _ =>
-        let o : Layout.Options := { indent := (indent.join).getD 2, width := (width.join).getD 80 }
+        let o : Layout.Options :=
+          { indent := (indent.join).getD 2, width := (width.join).getD 80, stream := fs.lookup "stream" == some (.variant "True" []) }
         match Parser.parse {} input.toList, result with
         | .error e, _ => .wrong s!"the input: {e.code}"
         | .ok vs, .variant "Ok" [.str want] =>
@@ -1230,7 +1240,7 @@ def formatLine (style : Format.Style) (o : Layout.Options) (bytes : ByteArray) :
       | .ok t => s!"ok {(Json.str (String.ofList t)).compress}"
       | .error e => s!"crash {oneLine e.reason}"
 
-def formatUsage := "usage: haus-ref --format-batch (pretty | compact | minimised) INDENT WIDTH DIR N"
+def formatUsage := "usage: haus-ref --format-batch (pretty | compact | minimised) INDENT WIDTH [--stream] DIR N"
 
 /-- The values of a text, or none when it isn't haus. -/
 def valuesOf (s : String) : Option (List Value) := (Parser.parse {} s.toList).toOption
@@ -1280,13 +1290,16 @@ def trimLines (s : String) : String :=
 def withoutBlankLines (s : String) : String :=
   "\n".intercalate ((s.splitOn "\n").filter (· != ""))
 
-/-- `NAME.options`: `{ indent: 4, width: 40 }`, for every layout; the default for an option not given. -/
+/--
+`NAME.options`: `{ indent: 4, width: 40 }` or `{ stream: True }`, for every
+layout; the default for an option not given.
+-/
 def readFormatOptions (file : System.FilePath) : IO Layout.Options := do
   if !(← file.pathExists) then return {}
   match ← readCaseFile file with
   | [.record fs] =>
     let get (k : String) (d : Nat) := ((natField? fs k).join).getD d
-    return { indent := get "indent" 2, width := get "width" 80 }
+    return { indent := get "indent" 2, width := get "width" 80, stream := fs.lookup "stream" == some (.variant "True" []) }
   | _ => throw (IO.userError s!"{file}: expected a record")
 
 def styleName : Format.Style → String
@@ -1352,7 +1365,8 @@ def formatOptionsCase : Value → Verdict
         | .variant "Rejected" [] => .right
         | _ => .wrong "a negative option, not a natural number"
       | _, _ =>
-        let o : Layout.Options := { indent := (indent.join).getD 2, width := (width.join).getD 80 }
+        let o : Layout.Options :=
+          { indent := (indent.join).getD 2, width := (width.join).getD 80, stream := fs.lookup "stream" == some (.variant "True" []) }
         match formatText .pretty o input, result with
         | .error e, _ => .wrong s!"the input: {e}"
         | .ok got, .variant "Ok" [.str want] => if got == want then .right else .wrong s!"got {oneLine got}"
@@ -1404,10 +1418,14 @@ def main : List String → IO UInt32
   | ["--equality", file] => runCases file equalityCase
   | ["--format-options", file] => runCases file optionsCase
   | ["--format-suite", dir] => runFormatSuite dir
-  | ["--format-batch", style, indent, width, dir, n] =>
-      match Format.Style.ofString? style, indent.toNat?, width.toNat? with
-      | some style, some indent, some width => runBatch (formatLine style { indent, width }) dir n.toNat!
-      | _, _, _ => do IO.eprintln formatUsage; return 2
+  | "--format-batch" :: style :: indent :: width :: rest =>
+      -- `--stream` before DIR: the files are streams (§11).
+      let (stream, rest) := match rest with
+        | "--stream" :: rest => (true, rest)
+        | rest => (false, rest)
+      match Format.Style.ofString? style, indent.toNat?, width.toNat?, rest with
+      | some style, some indent, some width, [dir, n] => runBatch (formatLine style { indent, width, stream }) dir n.toNat!
+      | _, _, _, _ => do IO.eprintln formatUsage; return 2
   | ["--stream-suite", dir] => runStreamSuite dir
   | ["--profile", name, file] => runProfile name file
   | ["--profile-batch", name, file] => runProfileBatch name file

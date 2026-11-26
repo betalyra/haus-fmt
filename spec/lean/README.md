@@ -258,9 +258,11 @@ space or tab of a line as `\u{20}` or `\t`.
 on one line (`Tag { a: 1, b: [1, 2] }`, `Tag{a:1,b:[1,2]}`), `compactAll` and
 `minimisedAll` a file or stream one value per line; `pretty o ind used v` and
 `prettyAll o vs` write the pretty layout with the options `o` (indent, line
-width). Fields in the order given, numbers normalized, bytes as lowercase
-hex, as when a binding serializes values. They hold for any limits and any
-options:
+width). Told that the values are a stream (`compactAll vs true`,
+`prettyAll { stream := true }`, spec §11), the file writers put a comma
+after a single value too. Fields in the order given, numbers normalized,
+bytes as lowercase hex, as when a binding serializes values. They hold for
+any limits and any options, the stream option included:
 
 | Theorem | Says |
 |---|---|
@@ -282,7 +284,8 @@ included (`plans/zig-findings.md` F15–F20d; `#guard`s). `haus-ref
 (all inputs and `options.cases.haus` pass), and it is the reference of the
 format fuzzer (`haus-ref --format-batch`). Proven in
 [`Layout/FormatRoundTrip.lean`](Haus/Layout/FormatRoundTrip.lean), for any
-limits and options:
+limits and options, `stream` included (a file is a stream: a comma after a
+single item too, in every layout):
 
 | Theorem | Says |
 |---|---|

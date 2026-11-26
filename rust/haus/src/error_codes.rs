@@ -6,7 +6,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum ErrorCode {
-    /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes. Reported at: Where the decoder says, at the first byte that isn't UTF-8; nowhere when it doesn't say. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives. An unpaired surrogate in a string of the language: at it, one column.
+    /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes. Reported at: Informative (§8): an implementation SHOULD give the first byte of the maximal ill-formed subsequence (Unicode §3.9), and MAY give no place. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives; a `Stream` checked item by item, in the item it is in (§14). An unpaired surrogate in a string of the language: at it, one column.
     InvalidUtf8,
     /// `version-directive`: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus. Reported at: The `#` (line 1, column 2 after a byte order mark).
     VersionDirective,
@@ -26,7 +26,7 @@ pub enum ErrorCode {
     BooleanLiteral,
     /// `bare-identifier`: A lowercase word where a value should be. Lowercase identifiers are only record keys. Reported at: The word.
     BareIdentifier,
-    /// `expected-key`: Something that can't be a record key where a key should be, such as a number or a comma. Reported at: What stands where the key should be: the token, or the end of the input.
+    /// `expected-key`: Something that can't be a record key where a key should be, such as a number or a comma. The end of the input where a key should be (`{`, `{ a: 1,`) is `unclosed-bracket`. Reported at: What stands where the key should be: the token.
     ExpectedKey,
     /// `uppercase-key`: A record key starts with a capital letter. Bare keys start with a lowercase letter or `_`; capitalized words are tags. Reported at: The key.
     UppercaseKey,
@@ -60,15 +60,15 @@ pub enum ErrorCode {
     BlockStringIndent,
     /// `unterminated-block-string`: A block string has no closing `"""`. Reported at: The opening `"""`. Found before any error in the lines (§4).
     UnterminatedBlockString,
-    /// `unterminated-bytes`: A byte string `x"…` has no closing `"`. Reported at: The `x` of `x"`.
+    /// `unterminated-bytes`: A byte string `x"…` has no closing `"`, also when the input ends after a lone hex digit (`x"a`). Reported at: The `x` of `x"`.
     UnterminatedBytes,
     /// `bytes-not-hex`: A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break, where a byte starts. After a byte's first digit, anything but a second one is `bytes-odd-digits`. Reported at: The character.
     BytesNotHex,
-    /// `bytes-odd-digits`: A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`). Reported at: The lone hex digit.
+    /// `bytes-odd-digits`: A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`). The end of the input after it is `unterminated-bytes`. Reported at: The lone hex digit.
     BytesOddDigits,
     /// `lone-carriage-return`: A carriage return (CR) not followed by a line feed. Line breaks are LF or CRLF. Reported at: The carriage return.
     LoneCarriageReturn,
-    /// `unterminated-comment`: A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`. Reported at: The outermost `/*`.
+    /// `unterminated-comment`: A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`. A comment is read left to right: a control or bidi character or a lone carriage return in an unclosed comment is reported first, at its place (§4). Reported at: The outermost `/*`.
     UnterminatedComment,
     /// `stray-slash`: A `/` that doesn't start a comment. Comments are `//` and `/* */`; haus has no operators. Reported at: The `/`.
     StraySlash,
@@ -78,7 +78,7 @@ pub enum ErrorCode {
     NumberTooLong,
     /// `exponent-too-large`: A number's exponent is larger than the limit (default 6144), in either direction. A writer measures a number built in code on its normalized literal (§11), as for `number-too-long`. Reported at: The literal's first character. In JSON, as `number-too-long`.
     ExponentTooLarge,
-    /// `string-too-long`: A string or byte string has more characters than the limit (default 16 Mi). Reported at: The opening quote.
+    /// `string-too-long`: A string or byte string has more characters than the limit (default 16 Mi). Reported at: The opening quote; for a byte string, its `x` (§8).
     StringTooLong,
     /// `key-too-long`: A record key has more characters than the string limit (default 16 Mi). Reported at: The key's first character.
     KeyTooLong,
@@ -158,7 +158,7 @@ pub enum ErrorCode {
     UndeclaredPackage,
     /// `package-manifest`: A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB. Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory: no place.
     PackageManifest,
-    /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation. Reported at (informative): The import that reaches the package; the message names both versions.
+    /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (packages.md §4), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation. Reported at (informative): The import that reaches the package; the message names both versions.
     PackageVersion,
     /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. Reported at (informative): The import that reaches the file; the message names the file.
     PackagePath,
@@ -200,7 +200,7 @@ pub enum ErrorCode {
     InvalidSecret,
     /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
     CodecRejected,
-    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
+    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. A decoded `Secret` given to a writer that doesn't apply its schema (haus or JSON from the binding's values, the canonical form, the hash; §15, "Hiding"). Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type; for a secret, the secret. Building a value in code: informative (§11).
     CannotEncode,
     /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text. Reported at: The place of the value that contains itself, or `$`.
     CyclicValue,
@@ -220,7 +220,7 @@ pub enum ErrorCode {
     HausJsonNumber,
     /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte. Reported at: The member: `$._value._bytes`.
     HausJsonBytes,
-    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included. Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
+    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). The tag rule is checked first: a tag with an unpaired surrogate, or one that isn't UTF-8 in a binding whose strings are bytes, is this error, not `cannot-encode`. Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
     InvalidTag,
     /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits. Reported at: The string.
     InvalidBase64,
@@ -238,9 +238,9 @@ pub enum ErrorCode {
     UnlistedField,
     /// `unlisted-tag`: A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo. Reported at: The variant. Never inside a `Secret` (§14).
     UnlistedTag,
-    /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
+    /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (packages.md §7). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
     MissingCodec,
-    /// `unused-codec`: A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. Reported at: Nowhere: it is about the codecs the application set, reported once per id.
+    /// `unused-codec`: A warning: a codec is set for an id that no type has (packages.md §7): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. Reported at: Nowhere: it is about the codecs the application set, reported once per id, where the binding learns which codecs are set or on request, through a function of the binding's.
     UnusedCodec,
 }
 

@@ -330,10 +330,17 @@ stringify(value)                                   // one value in the standard 
 stringify(value, { style: "compact" })             // on one line: { a: 1, b: [1, 2] }
 stringify(value, { style: "minimised" })           // on one line, no whitespace: {a:1,b:[1,2]}
 format(values)                                     // a file of values (a stream)
+format(values, { stream: true })                   // a stream: a comma after a single value too
 
 const { values, comments } = parseDocument(text)
 format(values, { source: text, comments })         // reformat a file, comments kept
 ```
+
+A file with one value is written as a document, without a comma after it.
+A log that holds one value so far is still a stream, and the comma after it
+is what lets the next one be appended: `stream: true` (spec §11) writes a
+comma after every value, a single one too, in every layout; `h.formatAll`
+takes it too. `stringify` writes one value and ignores it.
 
 ## Build values
 

@@ -105,19 +105,36 @@ class SuiteTest {
       return o;
     }
     for (Map.Entry<String, Value> e : ((Value.Record) Haus.parse(Suite.bytes(file))).toMap().entrySet()) {
-      int n = ((Value.Number) e.getValue()).toBigInteger().intValueExact();
       switch (e.getKey()) {
         case "indent":
-          o = o.withIndent(n);
+          o = o.withIndent(number(e.getValue()));
           break;
         case "width":
-          o = o.withWidth(n);
+          o = o.withWidth(number(e.getValue()));
+          break;
+        case "stream":
+          o = o.withStream(streamOption(e.getValue()));
           break;
         default:
           throw new AssertionError("unknown option " + e.getKey());
       }
     }
     return o;
+  }
+
+  private static int number(Value v) {
+    return ((Value.Number) v).toBigInteger().intValueExact();
+  }
+
+  /** {@code stream: True} or {@code False}; not given ({@code null}), the default: false. */
+  private static boolean streamOption(Value v) {
+    if (v == null) {
+      return false;
+    }
+    if (v instanceof Value.Variant t && t.size() == 0 && (t.tag().equals("True") || t.tag().equals("False"))) {
+      return t.tag().equals("True");
+    }
+    throw new AssertionError("not a stream option: " + v);
   }
 
   private static Path expected(FormatCase c, Layout l) {
@@ -161,9 +178,10 @@ class SuiteTest {
   }
 
   /**
-   * format/options.cases.haus: the pretty layout with {@code indent} and {@code width} where the
-   * case gives them, the defaults otherwise. FormatOptions refuses a negative number with an
-   * IllegalArgumentException: {@code Rejected}.
+   * format/options.cases.haus: the pretty layout with {@code indent}, {@code width} and {@code
+   * stream} where the case gives them, the defaults otherwise. FormatOptions refuses a negative
+   * number with an IllegalArgumentException: {@code Rejected}. The inputs have no comments, so
+   * {@link Haus#writeAll} writes the same text.
    */
   @TestFactory
   Stream<DynamicTest> formatOptions() {
@@ -175,19 +193,23 @@ class SuiteTest {
       Value.Variant result = (Value.Variant) r.get("result");
       String want = result.tag().equals("Ok") ? "Ok(" + ((Value.Text) result.get(0)).value() + ")" : "Rejected";
       String got;
+      String written;
       try {
-        FormatOptions o = FormatOptions.PRETTY;
+        FormatOptions o = FormatOptions.PRETTY.withStream(streamOption(r.get("stream")));
         if (r.get("indent") != null) {
-          o = o.withIndent(((Value.Number) r.get("indent")).toBigInteger().intValueExact());
+          o = o.withIndent(number(r.get("indent")));
         }
         if (r.get("width") != null) {
-          o = o.withWidth(((Value.Number) r.get("width")).toBigInteger().intValueExact());
+          o = o.withWidth(number(r.get("width")));
         }
         got = "Ok(" + Haus.format(input, o) + ")";
+        written = "Ok(" + Haus.writeAll(Haus.parseAll(input), o) + ")";
       } catch (IllegalArgumentException e) {
         got = "Rejected";
+        written = "Rejected";
       }
       assertEquals(want, got);
+      assertEquals(want, written, "writeAll");
     }));
   }
 }
