@@ -11,7 +11,10 @@ The formatter fuzzer's modes (`main.ts --format`):
 - `--format STYLE --indent N --width N`: `ok` and `haus.format`'s output as a JSON string;
 - `--write STYLE --indent N --width N`: `ok {"values": [...], "file": ...}`, each value written
   alone by `haus.stringify` and all of them by `haus.stringify_all`, as JSON strings; a value
-  that can't be written is `err 0 0 <code> <reason>`."""
+  that can't be written is `err 0 0 <code> <reason>`.
+
+Either takes `--stream` after the width: the file is a stream (spec §11), so `haus.format` and
+`haus.stringify_all` put a comma after a single item too."""
 
 from __future__ import annotations
 
@@ -67,53 +70,65 @@ def line(read: Callable[[], list[Value]], encode: Callable[[Value], object] = su
     return "ok " + json.dumps([encode(v) for v in values], separators=(",", ":"))
 
 
-def formatted(data: bytes, options: dict[str, Any]) -> str:
+def formatted(data: bytes, options: dict[str, Any], stream: bool) -> str:
     try:
-        return "ok " + json.dumps(haus.format(data, **options))
+        return "ok " + json.dumps(haus.format(data, stream=stream, **options))
     except haus.HausSyntaxError as e:
         return syntax_error(e)
 
 
-def written(data: bytes, options: dict[str, Any]) -> str:
+def written(data: bytes, options: dict[str, Any], stream: bool) -> str:
     try:
         values = haus.parse_bytes(data)
     except haus.HausSyntaxError as e:
         return syntax_error(e)
     try:
         each = [haus.stringify(v, **options) for v in values]
-        file = haus.stringify_all(values, **options)
+        file = haus.stringify_all(values, stream=stream, **options)
     except HausEncodeError as e:
         return f"err 0 0 {e.code} {e.reason.replace(chr(10), ' ')}"
     return "ok " + json.dumps({"values": each, "file": file})
 
 
-def run(mode: str, data: bytes, i: int, options: dict[str, Any]) -> str:
+def run(mode: str, data: bytes, i: int, options: dict[str, Any], stream: bool) -> str:
     match mode:
         case "--stream":
             return line(lambda: list(haus.parse_stream(chunks(data, i))))
         case "--canonical":
             return line(lambda: haus.parse_bytes(data), haus.canonical)
         case "--format":
-            return formatted(data, options)
+            return formatted(data, options, stream)
         case "--write":
-            return written(data, options)
+            return written(data, options, stream)
         case _:
             return line(lambda: haus.parse_bytes(data))
 
 
 USAGE = (
-    "usage: runner.py [--stream | --canonical | --format STYLE --indent N --width N"
-    " | --write STYLE --indent N --width N] DIR N"
+    "usage: runner.py [--stream | --canonical | --format STYLE --indent N --width N [--stream]"
+    " | --write STYLE --indent N --width N [--stream]] DIR N"
 )
 
 
 def main() -> None:
     options: dict[str, Any] = {}
+    stream = False
     match sys.argv[1:]:
         case [("--stream" | "--canonical") as mode, directory, count]:
             pass
-        case [("--format" | "--write") as mode, style, "--indent", indent, "--width", width, directory, count]:
+        case [
+            ("--format" | "--write") as mode,
+            style,
+            "--indent",
+            indent,
+            "--width",
+            width,
+            *flag,
+            directory,
+            count,
+        ] if flag in ([], ["--stream"]):
             options = {"style": cast(haus.Style, style), "indent": int(indent), "width": int(width)}
+            stream = bool(flag)
         case [directory, count]:
             mode = ""
         case _:
@@ -121,7 +136,7 @@ def main() -> None:
     out = sys.stdout
     out.reconfigure(encoding="utf-8", newline="\n")  # type: ignore[union-attr]
     for i in range(int(count)):
-        out.write(run(mode, (Path(directory) / f"{i:05}.haus").read_bytes(), i, options) + "\n")
+        out.write(run(mode, (Path(directory) / f"{i:05}.haus").read_bytes(), i, options, stream) + "\n")
 
 
 if __name__ == "__main__":

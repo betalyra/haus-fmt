@@ -137,6 +137,7 @@ export default defineConfig({
             { label: 'What haus checks', slug: 'docs/checks' },
             { label: 'Error codes', slug: 'docs/errors' },
             { label: 'Specification', slug: 'docs/spec' },
+            { label: 'Packages', slug: 'docs/spec/packages' },
             { label: 'std/time', slug: 'docs/spec/time' },
           ],
         },

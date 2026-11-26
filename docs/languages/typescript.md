@@ -85,7 +85,7 @@ Without them, `warnings` lists [`missing-codec`](/docs/errors#missing-codec) for
 
 - **Checking data.** `checkText(file, "Root", text)` reports every error and hint with its place (`$.items[2].price`), as editors show them; `{ first: true }` stops at the first error. A `Stream` is checked item by item, so a syntax error comes after the errors of the items before it. The check stops after `MAX_ERRORS` (200) errors, hints not counted, and says so (`stopped`).
 
-- **Streams.** `for await (const o of h.decodeStream(Order, response.body!))` decodes each value as it arrives; `parseStream` reads values without a schema. [Logs and streams](/docs/tours/streams)
+- **Streams.** `for await (const o of h.decodeStream(Order, response.body!))` decodes each value as it arrives; `parseStream` reads values without a schema. A log that holds one value so far is still a stream: `format(values, { stream: true })` and `h.formatAll(Order, orders, { stream: true })` write a comma after a single value too, so the next can be appended. [Logs and streams](/docs/tours/streams)
 - **JSON.** `h.toJson(Order, order)` gives `{"id":"7","total":"44.40",…}`, the JSON a JSON consumer expects; `h.fromJson` reads it back with the same checks. `importJson` reads any JSON as haus. [Coming from JSON](/docs/from-json)
 - **Dates.** std/time values are their checked text. `h.InstantAsDate` gives a JS `Date`; it keeps the instant to the millisecond and drops the offset as written.
 - **Secrets.** `Secret a` is a `Secret<A>`: it prints `<redacted>`, and `expose()` gives the value. [Config and secrets](/docs/tours/secrets)

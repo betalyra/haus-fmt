@@ -31,8 +31,8 @@ import org.hausfmt.Value;
  *
  * <pre>
  * jvm-runner [--stream | --canonical] DIR N                       the parser, stream reader, canonical form
- * jvm-runner --format STYLE [--indent N] [--width N] DIR N        Haus.format
- * jvm-runner --write STYLE [--indent N] [--width N] DIR N         the value writers, Haus.write and writeAll
+ * jvm-runner --format STYLE [--indent N] [--width N] [--stream] DIR N   Haus.format
+ * jvm-runner --write STYLE [--indent N] [--width N] [--stream] DIR N    the value writers, Haus.write and writeAll
  * jvm-runner --json MODE FILE                                     write, read (schema-based JSON), haus-json-write, haus-json-read, import
  * jvm-runner --schema FILE                                        decoding with a schema (SchemaModes)
  * jvm-runner --schema-check FILE                                  schema files, as Schema.parse reads them
@@ -56,6 +56,8 @@ import org.hausfmt.Value;
  *   <li>--format: {@code ok} and the output as a JSON string;
  *   <li>--write: {@code ok {"values": [...], "file": ...}}, each value written alone (without the
  *       line break after it) and all of them as a file;
+ *   <li>--stream after --format or --write's style: the file is a stream (spec §11), so a single
+ *       item has a comma after it too (Haus.format, Haus.writeAll);
  *   <li>--json: {@code ok <JSON>} (haus-json-write) or {@code ok <canonical form>}, or {@code err
  *       <place> <code> <reason>}, the place in the value ({@code $} for an error in the text);
  *   <li>--time: {@code ok} or {@code no}, or {@code err invalid UTF-8};
@@ -65,7 +67,8 @@ import org.hausfmt.Value;
  */
 public final class Runner {
   private static final String USAGE =
-      "usage: jvm-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N"
+      "usage: jvm-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] [--stream]"
+          + " | --write STYLE [--indent N] [--width N] [--stream]] DIR N"
           + " | --json MODE FILE | --time FILE | --profile FILE | --schema FILE | --schema-check FILE"
           + " | --build FILE | --imports FILE | --strings FILE";
   private static final int[] CHUNKS = {1, 2, 3, 5, 8, 13, 64};
@@ -194,10 +197,19 @@ public final class Runner {
     throw new IllegalArgumentException(USAGE);
   }
 
-  /** Reads {@code STYLE [--indent N] [--width N]} after the mode's flag. */
+  /**
+   * Reads {@code STYLE [--indent N] [--width N] [--stream]} after the mode's flag; {@code
+   * --stream}: the file is a stream (spec §11), a comma after a single item too.
+   */
   private static FormatOptions options(String[] flags) {
     FormatOptions o = FormatOptions.of(layout(flags[1]));
-    for (int k = 2; k < flags.length; k += 2) {
+    int k = 2;
+    while (k < flags.length) {
+      if (flags[k].equals("--stream")) {
+        o = o.withStream(true);
+        k++;
+        continue;
+      }
       if (k + 1 >= flags.length) {
         throw new IllegalArgumentException(USAGE);
       }
@@ -212,6 +224,7 @@ public final class Runner {
         default:
           throw new IllegalArgumentException(USAGE);
       }
+      k += 2;
     }
     return o;
   }

@@ -24,7 +24,8 @@ entry's indent, its key and `: `, and the comma after it).
 
 A file (`prettyAll`): a single value on its own, with a line break after it;
 more than one each followed by `,` and a line break, with a blank line after
-each value that spans more than one line and isn't the last.
+each value that spans more than one line and isn't the last. With the
+option `stream` (§11), a single value is followed by `,` too.
 
 The round trip is proven in `Haus.Layout.PrettyRoundTrip`.
 -/
@@ -32,10 +33,15 @@ The round trip is proven in `Haus.Layout.PrettyRoundTrip`.
 namespace Haus.Layout
 open Haus Canonical
 
-/-- The pretty layout's options (spec §11): spaces per level, and the line width for positional payloads. -/
+/--
+The layouts' options (spec §11): for pretty, spaces per level and the line
+width for positional payloads; for every layout, whether the file is a
+stream (`stream`: a comma after every top-level item, a single one too).
+-/
 structure Options where
   indent : Nat := 2
   width : Nat := 80
+  stream : Bool := false
 
 /-- One level deeper. -/
 def deeper (o : Options) (ind : Text) : Text := ind ++ List.replicate o.indent ' '
@@ -98,10 +104,14 @@ def prettyStream (o : Options) : List Value → Text
     let t := pretty o [] 1 v
     t ++ ',' :: '\n' :: ((if t.contains '\n' && !vs.isEmpty then ['\n'] else []) ++ prettyStream o vs)
 
-/-- **A file or stream in the pretty layout**, without comments. -/
+/--
+**A file or stream in the pretty layout**, without comments. A single value
+is written without a comma, unless the options say the file is a stream
+(`o.stream`, §11).
+-/
 def prettyAll (o : Options) : List Value → Text
   | [] => []
-  | [v] => pretty o [] 0 v ++ ['\n']
+  | [v] => if o.stream then prettyStream o [v] else pretty o [] 0 v ++ ['\n']
   | v :: w :: ws => prettyStream o (v :: w :: ws)
 
 /-! ## Examples -/
@@ -131,6 +141,12 @@ private def prettyOf (src : String) (o : Options := {}) : Option String :=
 #guard prettyOf "Pair(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\")" ==
   some "Pair(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\")\n"
 #guard prettyOf "// nothing\n" == some ""
+-- Told that the file is a stream: a comma after a single item too, and the comma counts toward the width.
+#guard prettyOf "Paged { n: 1 }" { stream := true } == some "Paged {\n  n: 1,\n},\n"
+#guard prettyOf "Pair(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\")" { stream := true } ==
+  some "Pair(\n  \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n),\n"
+#guard prettyOf "A, B" { stream := true } == prettyOf "A, B"
+#guard prettyOf "// nothing\n" { stream := true } == some ""
 -- Options: test-suite/format/cases/width-options (indent 4, width 40), byte for byte.
 #guard prettyOf "{ short: Point(1, 2), long: Pair(\"aaaaaaaaaa\", \"bbbbbbbbbbbbbbbb\"), longer: Pair(\"aaaaaaaaaa\", \"bbbbbbbbbbbbbbbbb\"), list: [Money(7.90, EUR), Money(12.50, EUR)], text: \"a\\nb\" }"
     { indent := 4, width := 40 } ==

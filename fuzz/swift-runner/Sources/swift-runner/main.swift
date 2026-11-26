@@ -5,12 +5,14 @@
 //                                      `err <line> <column> <code> <reason>`
 //   swift-runner --stream DIR N        the same through the stream reader, the input in chunks
 //   swift-runner --canonical DIR N     `ok` and the canonical form of each value, a JSON array of strings
-//   swift-runner --format STYLE [--indent N] [--width N] DIR N
+//   swift-runner --format STYLE [--indent N] [--width N] [--stream] DIR N
 //                                      `ok` and `format`'s output as a JSON string
-//   swift-runner --write STYLE [--indent N] [--width N] DIR N
+//   swift-runner --write STYLE [--indent N] [--width N] [--stream] DIR N
 //                                      `ok {"values": [...], "file": ...}`: each value written
 //                                      alone by `stringify` (without its line break), and all of
 //                                      them by `stringifyAll`
+//   (`--stream` after the style: the file is a stream, spec §11, so `format`
+//   and `stringifyAll` put a comma after a single item too)
 //
 // and the modes that read a FILE of lines (Lines.swift): --time, --schema,
 // --schema-check and --json MODE.
@@ -18,7 +20,8 @@ import Foundation
 import Haus
 
 let usage =
-    "usage: swift-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N"
+    "usage: swift-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] [--stream]"
+    + " | --write STYLE [--indent N] [--width N] [--stream]] DIR N"
     + " | --time FILE | --schema FILE | --schema-check FILE | --json MODE FILE"
 
 func fail(_ message: String) -> Never {
@@ -102,21 +105,26 @@ func streamed(_ bytes: [UInt8], _ i: Int) throws(HausError) -> [HausValue] {
     return values
 }
 
-/// `STYLE [--indent N] [--width N]`.
+/// `STYLE [--indent N] [--width N] [--stream]`; `--stream`: the file is a
+/// stream (spec §11), a comma after a single item too.
 func formatOptions(_ flags: ArraySlice<String>) -> FormatOptions {
     guard let style = flags.first, let layout = Layout(rawValue: style) else { fail(usage) }
-    var (indent, width) = (2, 80)
+    var (indent, width, stream) = (2, 80, false)
     var rest = flags.dropFirst()
-    while rest.count >= 2 {
-        let (flag, value) = (rest.first!, Int(rest.dropFirst().first!))
-        switch (flag, value) {
+    while let flag = rest.first {
+        if flag == "--stream" {
+            stream = true
+            rest = rest.dropFirst()
+            continue
+        }
+        switch (flag, rest.dropFirst().first.flatMap { Int($0) }) {
         case ("--indent", let n?): indent = n
         case ("--width", let n?): width = n
         default: fail(usage)
         }
         rest = rest.dropFirst(2)
     }
-    guard rest.isEmpty, let options = try? FormatOptions(layout: layout, indent: indent, width: width) else {
+    guard let options = try? FormatOptions(layout: layout, indent: indent, width: width, stream: stream) else {
         fail(usage)
     }
     return options

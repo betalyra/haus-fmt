@@ -513,8 +513,12 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
     ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 }
 
-/** Options of the haus encoders: the format, and the limits the value is held to (spec §7). */
-export interface EncodeOptions extends FormatOptions {
+/**
+ * Options of the haus encoders: the format, and the limits the value is held
+ * to (spec §7). Not `stream` (spec §11): `Haus.encode` writes one value, and
+ * `Haus.encodeStream` always writes a stream, a comma after every value.
+ */
+export interface EncodeOptions extends Omit<FormatOptions, "stream"> {
   /** The limits of the reader the text is for: a value beyond them is an error (spec §7). */
   readonly limits?: Limits
 }

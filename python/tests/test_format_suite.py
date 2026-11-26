@@ -5,6 +5,7 @@ spec §11."""
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -23,6 +24,26 @@ STYLES: tuple[Style, ...] = ("pretty", "compact", "minimised")
 class Options(TypedDict, total=False):
     indent: int
     width: int
+    stream: bool
+
+
+def read_options(fields: Mapping[str, haus.Value]) -> Options:
+    """`indent` and `width` (numbers) and `stream` (`True` or `False`) where given."""
+    found = Options()
+    if isinstance(indent := fields.get("indent"), Number):
+        found["indent"] = int(indent.text)
+    if isinstance(width := fields.get("width"), Number):
+        found["width"] = int(width.text)
+    match fields.get("stream"):
+        case haus.Variant("True", ()):
+            found["stream"] = True
+        case haus.Variant("False", ()):
+            found["stream"] = False
+        case None:
+            pass
+        case other:
+            raise AssertionError(f"stream: {other!r}")
+    return found
 
 
 @dataclass(frozen=True)
@@ -37,19 +58,14 @@ class Case:
         return self.input.read_bytes().decode("utf-8")
 
     def options(self) -> Options:
-        """NAME.options, a record `{ indent: 4, width: 40 }`, for every layout."""
+        """NAME.options, a record `{ indent: 4, width: 40 }` or `{ stream: True }`, for every layout."""
         file = self.expected.with_suffix(".options")
         if not file.exists():
             return {}
         options = haus.parse(file.read_text("utf-8"))
         assert isinstance(options, Record)
-        assert set(options.fields) <= {"indent", "width"}
-        found = Options()
-        if isinstance(indent := options.fields.get("indent"), Number):
-            found["indent"] = int(indent.text)
-        if isinstance(width := options.fields.get("width"), Number):
-            found["width"] = int(width.text)
-        return found
+        assert set(options.fields) <= {"indent", "width", "stream"}
+        return read_options(options.fields)
 
     def output(self, style: Style) -> str:
         return self.expected.with_suffix(f".{style}").read_bytes().decode("utf-8")
@@ -89,7 +105,8 @@ def without_comments(text: str, options: Options) -> str:
 
     for item in items:
         strip(item)
-    return _Printer("pretty", options.get("indent", 2), options.get("width", 80)).pretty(items, [])
+    printer = _Printer("pretty", options.get("indent", 2), options.get("width", 80), options.get("stream", False))
+    return printer.pretty(items, [])
 
 
 def trailing_blanks(text: str) -> list[int]:
@@ -153,10 +170,7 @@ class OptionsCase:
 def _options_case(v: haus.Value) -> OptionsCase:
     assert isinstance(v, Record), haus.canonical(v)
     f = v.fields
-    options = Options()
-    for key in ("indent", "width"):
-        if isinstance(n := f.get(key), Number):
-            options[key] = int(n.text)
+    options = read_options(f)
     match f.get("input"), f.get("result"):
         case haus.String(text), haus.Variant("Ok", (haus.String(out),)):
             return OptionsCase(text, options, out)
@@ -175,8 +189,19 @@ def test_the_options_suite_has_cases() -> None:
 
 @pytest.mark.parametrize("case", OPTIONS, ids=[f"{c.input} {dict(c.options)}" for c in OPTIONS])
 def test_options(case: OptionsCase) -> None:
+    """The formatter, and the writer of values that takes a list (the inputs have no comments)."""
+    values = haus.parse_all(case.input)
     if case.result is None:
         with pytest.raises(ValueError):
             haus.format(case.input, **case.options)
+        with pytest.raises(ValueError):
+            haus.stringify_all(values, **case.options)
     else:
         assert haus.format(case.input, **case.options) == case.result
+        assert haus.stringify_all(values, **case.options) == case.result
+
+
+@pytest.mark.parametrize("stream", ["yes", 1])
+def test_the_stream_option_is_true_or_false(stream: object) -> None:
+    with pytest.raises(ValueError):
+        haus.format("1", stream=stream)  # type: ignore[arg-type]

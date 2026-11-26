@@ -218,13 +218,22 @@ pub fn quoteChar(buf: []u8, cp: u21) []const u8 {
 
 /// Writes a token quoted from the input for a message: escaped like
 /// `quoteChar` and at most 40 characters as shown, a cut marked with `…`
-/// within those 40 (spec §9 item 2).
+/// within those 40 (spec §9 item 2). Bytes that aren't UTF-8 (a tag or key
+/// built in code, spec §11) are shown as U+FFFD, one per byte.
 pub fn quoteText(buf: []u8, text: []const u8) []const u8 {
     var w = std.Io.Writer.fixed(buf);
     var shown: usize = 0;
-    var it = std.unicode.Utf8View.initUnchecked(text).iterator();
+    var i: usize = 0;
     w.writeByte('\'') catch return buf[0..0];
-    while (it.nextCodepoint()) |cp| {
+    while (i < text.len) {
+        const cp: u21 = blk: {
+            const n = std.unicode.utf8ByteSequenceLength(text[i]) catch break :blk 0xFFFD;
+            if (i + n > text.len) break :blk 0xFFFD;
+            const c = std.unicode.utf8Decode(text[i .. i + n]) catch break :blk 0xFFFD;
+            i += n - 1;
+            break :blk c;
+        };
+        i += 1;
         var tmp: [12]u8 = undefined;
         const piece: []const u8 = if (cp < 0x20 or (cp >= 0x7F and cp <= 0x9F) or (cp >= 0x202A and cp <= 0x202E) or
             (cp >= 0x2066 and cp <= 0x2069) or cp == 0x2028 or cp == 0x2029)
@@ -253,4 +262,5 @@ test "quoteText cuts at 40 characters" {
     // 39 'a', the cut mark, and the quotes.
     try std.testing.expectEqual(@as(usize, 39 + "…".len + 2), q.len);
     try std.testing.expectEqualStrings("'a\\u{1B}b'", quoteText(&buf, "a\x1bb"));
+    try std.testing.expectEqualStrings("'A\u{FFFD}\u{FFFD}é'", quoteText(&buf, "A\xff\xc3é"));
 }

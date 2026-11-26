@@ -4,15 +4,19 @@
 open Cst
 
 type style = Pretty | Compact | Minimised
-type options = { indent : int; width : int }
+(* [stream]: the file is a stream (spec §11, "Streams"), so a single
+   top-level item has a comma after it too, in every layout; a file of none
+   or several is written as without it. [write] writes one value and
+   ignores it. *)
+type options = { indent : int; width : int; stream : bool }
 
-let default_options = { indent = 2; width = 80 }
+let default_options = { indent = 2; width = 80; stream = false }
 
-let options ?indent ?width () =
+let options ?indent ?width ?(stream = false) () =
   let indent = Option.value indent ~default:2 and width = Option.value width ~default:80 in
   if indent < 0 then invalid_arg "Layout.options: a negative indent";
   if width < 0 then invalid_arg "Layout.options: a negative width";
-  { indent; width }
+  { indent; width; stream }
 
 (* ── Tag({ … }) is written Tag { … }, the comments in its parentheses moved
    into the braces (spec §11) ── *)
@@ -212,7 +216,7 @@ and body o b ~ind ~top lead entries =
     Buffer.add_char b '\n'
   in
   let n = List.length entries in
-  let comma = (not top) || n > 1 in
+  let comma = (not top) || n > 1 || o.stream in
   let force = ref false in
   let pre = ref lead in
   List.iteri
@@ -274,7 +278,7 @@ let format_items ?(options = default_options) style (doc : items) =
       body options b ~ind:0 ~top:true doc.lead
         (List.map (fun (x, g) -> { ekey = None; moved = []; node = x; gap = g }) doc.items)
   | Compact | Minimised ->
-      let many = List.length doc.items > 1 in
+      let many = List.length doc.items > 1 || options.stream in
       List.iter
         (fun (x, _) ->
           add_inline ~min:(style = Minimised) b x;
@@ -341,7 +345,8 @@ let write ?limits ?(options = default_options) style (v : Value.t) =
   | Minimised -> add_inline ~min:true b n);
   Buffer.contents b
 
-(* Writes values as a file: one value alone, several each with a comma. *)
+(* Writes values as a file: one value alone, several each with a comma
+   (with [options.stream], a single one too). *)
 let write_all ?limits ?options style (vs : Value.t list) =
   List.iteri (fun i v -> check_limits ?limits (Printf.sprintf "$[%d]" i) v) vs;
   format_items ?options style

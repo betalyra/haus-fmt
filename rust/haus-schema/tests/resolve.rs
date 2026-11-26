@@ -382,6 +382,10 @@ fn comments_whitespace_and_strings_are_those_of_data_files() {
     for (schema, code, at) in [
         ("type A = { \"x: Int }", "unterminated-string", (1, 12)),
         ("type A = Int /* never closed", "unterminated-comment", (1, 14)),
+        // Read left to right: a character a comment can't hold comes before its missing `*/`.
+        ("type A = Int /* a\rb *", "lone-carriage-return", (1, 18)),
+        ("type A = Int /* a /* b \u{1} */", "control-character", (1, 24)),
+        ("type A = Int /* \u{202e} x", "bidi-control", (1, 17)),
         ("type A = Int\rtype B = Int", "lone-carriage-return", (1, 13)),
         ("// a\rb\ntype A = Int", "lone-carriage-return", (1, 5)),
         ("// a\u{7}b\ntype A = Int", "control-character", (1, 5)),

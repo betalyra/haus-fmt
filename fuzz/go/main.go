@@ -2,8 +2,8 @@
 // for every fuzzer, the mode first.
 //
 //	go-runner [--stream | --canonical] DIR N        the parser, stream reader, canonical form
-//	go-runner --format STYLE [--indent N] [--width N] DIR N   haus.Format
-//	go-runner --write STYLE [--indent N] [--width N] DIR N    the value writers, haus.FormatValue and FormatValues
+//	go-runner --format STYLE [--indent N] [--width N] [--stream] DIR N   haus.Format
+//	go-runner --write STYLE [--indent N] [--width N] [--stream] DIR N    the value writers, haus.FormatValue and FormatValues
 //	go-runner --time FILE                            schema.CheckTime
 //	go-runner --profile FILE                         the codecs of ext/money and ext/geo
 //	go-runner --schema FILE                          decoding with a schema (package schema)
@@ -30,7 +30,7 @@ import (
 	haus "github.com/betalyra/haus-fmt/go"
 )
 
-const usage = "usage: go-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N" +
+const usage = "usage: go-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] [--stream] | --write STYLE [--indent N] [--width N] [--stream]] DIR N" +
 	" | --time FILE | --profile FILE | --schema FILE | --json MODE FILE | --schema-check FILE | --build FILE | --imports FILE"
 
 // root is the checkout this program was built from: the schema files and

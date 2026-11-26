@@ -1,0 +1,8 @@
+// Formatted as a stream, a file of several items is written as without the option.
+{
+  id: 1,
+},
+
+{
+  id: 2,
+},

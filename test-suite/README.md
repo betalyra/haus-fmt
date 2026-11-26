@@ -129,8 +129,10 @@ case: `text`, with one mistake at one character, and the `code`, `line` and
 single document (as `parse`; `not-one-value` is at the end of the input).
 The cases of the file's last section have two mistakes each, where the spec
 fixes which is reported: a duplicate key at its name, before its colon and
-value (§8), and a block string's closing quotes, then its lines in order,
-each line's indent before its characters (§4). Lines and columns are 1-based; columns count code points (an
+value (§8); a block string's closing quotes, then its lines in order,
+each line's indent before its characters (§4); and a comment read left to
+right, a control or bidi character or a lone carriage return in it before
+its missing `*/` (§4). Lines and columns are 1-based; columns count code points (an
 emoji is one column, and so is each combining mark), a byte order mark at the
 start is column 1, and only a line feed (or CR LF) ends a line: U+2028 and
 U+2029 don't. An error inside a block string is at the offending character,
@@ -170,7 +172,7 @@ Warnings and issues are compared as multisets of (code, place): the order
 doesn't matter (spec §14 fixes none), and an entry listed twice must be
 reported twice (two `missing-field` at one record). The place is the line and
 column of a warning or a `Syntax` issue, and the path of the others; every
-runner compares it.
+runner compares it, except for `invalid-utf8` (below).
 
 A binding without a data checker runs the `Schema` cases only, and says so.
 
@@ -204,8 +206,9 @@ the paths of spec §15 (`$.shape.values[1]`, `$.counts["pt-BR"]`,
 ## Package suite
 
 `packages/cases.haus` tests how schema imports find packages and files (spec
-§13.3). Each `Case` is a file tree, the schema file to load, how packages are
-found, and the result:
+§13.3 and the package layer, [`../spec/packages.md`](../spec/packages.md)).
+Each `Case` is a file tree, the schema file to load, how packages are found,
+and the result:
 
 ```haus
 Case {
@@ -283,6 +286,18 @@ packages"):
 There are 136 cases: 90 `"core"` and 46 `"npm"`; 6 of them have
 `os: "unix"` (4 core, 2 npm), and 3 `unmodelled` (below).
 
+**The 1.0 core and the package layer.** The specification freezes its core
+at 1.0, and the package layer has a version of its own (spec §10,
+[`../spec/packages.md`](../spec/packages.md)). The cases are told apart by
+their `mode`, without a field of their own: the 41 cases with
+`mode: Explicit {}` (all `"core"`) give the build no package, so they test
+only what the core defines (relative imports, the root, the files a build
+reads, the import rules); the other 95 give it packages, explicitly or from
+`node_modules`, and test the package layer as well. A binding that
+implements the core but finds no packages runs the 41 and says so: "haus
+1.0" for those, "packages 0.x" when it passes the others too. (The
+`ecosystem` `"core"` is another thing: every ecosystem runs those cases.)
+
 The Lean reference (`haus-ref --packages`) runs every case of every
 ecosystem: it has one resolver, with the npm lookup as an option.
 
@@ -315,3 +330,8 @@ Where a case is rejected, the suite gives the code it must be rejected with:
 case. A file or case has one mistake, so the code doesn't depend on which
 error a binding finds first. A binding that doesn't report codes yet can
 ignore them; one that does must report exactly these.
+
+The place of `invalid-utf8` is informative (spec §8): a binding SHOULD give
+the first byte of the maximal ill-formed subsequence and MAY give none.
+Wherever a case gives a line and column with this code (a `Syntax` issue of
+the checker suite, a stream case), runners compare its code only.

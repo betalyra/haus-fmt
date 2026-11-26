@@ -8,7 +8,9 @@ It is also the project's check of its specification. It is written from the
 specification ([`../spec`](../spec)) and the conformance suite
 ([`../test-suite`](../test-suite)) only, never from another binding's code:
 where the spec wasn't complete or clear, the choice made is noted (and checked
-against the Lean reference, `haus-ref`, as a black box). For the shape of its
+against the Lean reference, `haus-ref`, as a black box). It implements the
+specification's core and its package layer ([`../spec/packages.md`](../spec/packages.md),
+draft 0.1) without the npm and Cargo ecosystems. For the shape of its
 public API, it looked at the other bindings' READMEs and examples, nothing else.
 
 ## Install
@@ -49,7 +51,7 @@ it; it needs no libc.
 | Parser (§1–§8, §17) | `parseAll` (a file), `parse` (one document, `not-one-value`), `parseDocument` (with positions and comments); every error with its code, line and column |
 | Streams (§6, §7) | `StreamReader`: chunks of bytes in, values out once their comma arrives; the value limit and strict mode; the same results for every way of cutting the input |
 | Limits (§7) | `Limits`, the spec's defaults, all configurable; the depth this binding supports is 256 (`unsupported-depth` above): the parser, writers, formatter, decoder and JSON readers recurse once per level, and at 256 all of them run on a thread with a 512 KiB stack in ReleaseSafe and ReleaseFast (tested; decoding with codecs needs 1 MiB there, also tested); ReleaseSmall needs more than 512 KiB, and a Debug build about 2 MiB. `canonical`, `hash`, `equals` and `compare` take any depth |
-| Layouts (§11) | `format` (a document's text, spellings as written, comments in pretty), `stringify`, `stringifyAll` (values); pretty with `indent` and `width`, compact, minimised |
+| Layouts (§11) | `format` (a document's text, spellings as written, comments in pretty), `stringify`, `stringifyAll` (values); pretty with `indent` and `width`, compact, minimised; `.stream = true` for `format` and `stringifyAll`: the file is a stream, so a single item has a comma after it too (a file of none or several is written as without it) |
 | Canonical form and hashes (§12) | `canonical`, `hash`, `hashAll` (SHA-256 of `std.crypto`) |
 | std/time (§13.2) | `time.check(kind, text)`: the std/time profile |
 | Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads, `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column; every type's id (`Def.id`, §13.3 "Identity") |
@@ -62,8 +64,9 @@ it; it needs no libc.
 A decoded `Secret` (`Decoded.secret`, a `Decoded.Hidden`) shows nothing of its
 value (spec §15, "Hiding"): `{f}` prints `<redacted>`, `{any}` an opaque
 pointer, `std.json` `"<redacted>"`, and `decoding.toValue` (the value without
-its schema, for the canonical form, the hash and the writers) refuses it with
-`cannot-encode`. `reveal()` and `decoding.toValueRevealed` are the explicit
+its schema, for the canonical form, the hash, the writers, `equals` and
+`compare`, which take `Value`s only) refuses it with `cannot-encode` at the
+secret's place. `reveal()` and `decoding.toValueRevealed` are the explicit
 calls that give it out; `decoding.encode` and `json.toJson` write it in full,
 with its schema.
 
@@ -202,10 +205,10 @@ as `examples/order.zig` does.
 
 | | |
 |---|---|
-| Text in, text out | `haus_canonical`, `haus_hash_all`, `haus_format` |
+| Text in, text out | `haus_canonical`, `haus_hash_all`, `haus_format` (a layout, `HAUS_STREAM` or'ed in for a stream) |
 | Docs and values | `haus_parse`, `haus_parse_all`, `haus_doc_count`, `haus_doc_value`; `haus_kind`, `haus_number` (the normalized literal), `haus_string`, `haus_bytes`, `haus_len`, `haus_array_get`, `haus_record_key`, `haus_record_value`, `haus_record_get`, `haus_variant_tag`, `haus_variant_arg`, `haus_secret_reveal`, `haus_number_int64`, `haus_number_double` |
 | Building | `haus_doc_new`; `haus_new_number` (any spelling, `invalid-number`), `haus_new_string` (`cannot-encode`), `haus_new_bytes`, `haus_new_array`, `haus_new_record` (`duplicate-key`), `haus_new_variant` (`invalid-tag`) |
-| Writing, comparing | `haus_stringify` (layout, indent, width), `haus_stringify_doc`, `haus_value_canonical`, `haus_value_hash`, `haus_value_equals`, `haus_value_compare` |
+| Writing, comparing | `haus_stringify` (layout, indent, width), `haus_stringify_doc` (`HAUS_STREAM` as for `haus_format`), `haus_value_canonical`, `haus_value_hash`, `haus_value_equals`, `haus_value_compare` |
 | JSON | `haus_import_json`, `haus_to_haus_json`, `haus_from_haus_json`; with a type `haus_type_to_json`, `haus_type_from_json` |
 | Schemas | `haus_schema_load` (text), `haus_schema_build` (a file, with packages by directory, folder or in-memory trees, and a root), `haus_schema_warning_count`/`_warning`, `haus_schema_type`, `haus_type_id`, `haus_type_is_stream`; `haus_decode`, `haus_decode_text`, `haus_encode`, `haus_check_text` (all hints and every error, at most `HAUS_CHECK_MAX_ERRORS` (200) in the whole check, `haus_issues_stopped` when it stopped there; a syntax or limit error has an empty path, and its line and column), `haus_check_text_first` (the hints before the first error, and that error), and the one-call `haus_check`, `haus_to_json`, `haus_from_json` |
 | Streams | `haus_stream_new` (strict or not), `haus_typed_stream_new` (a `Stream` type), `haus_stream_push`, `haus_stream_end` |
@@ -234,7 +237,9 @@ a time. Codecs are a Zig API only.
 In what `haus_decode`, `haus_decode_text`, `haus_type_from_json` and typed
 streams give, a `Secret` is a value of its own kind, `HAUS_SECRET` (spec §15):
 the accessors see nothing in it, every writer, the canonical form, the hash,
-equality and order reject it (`cannot-encode`), and `haus_secret_reveal` is the one call that gives
+equality and order reject it (`cannot-encode`, with the secret's place in
+`path`: `$.pin`, `$[0].pin` for a doc's values; for equality and order the
+message says which operand), and `haus_secret_reveal` is the one call that gives
 out its value. `haus_encode` gives the data to write, in full. The C ABI is tested
 from C, every function and status ([`test/c_api_test.c`](test/c_api_test.c)),
 and from Zig.
@@ -288,7 +293,8 @@ a subdirectory of a repository) with its hash in the release notes, and attaches
 
 `zig-out/bin/zig-runner` speaks the protocol of [`../fuzz`](../fuzz): the parser,
 the stream reader, the canonical form, the formatter (`--format`), the value
-writers (`--write`), and the schema modes `--schema FILE`, `--schema-check FILE`,
+writers (`--write`; both with `--stream`, the stream option of spec §11, which
+`--write` applies to its `"file"`), and the schema modes `--schema FILE`, `--schema-check FILE`,
 `--time FILE` and `--json MODE FILE`. It is registered as `zig` and
 `zig-stream` in `fuzz/src/runners.ts` and `fuzz/src/format.ts`, and as `zig` in
 `schema.ts`, `schema-check.ts`, `time.ts` and `json.ts`.

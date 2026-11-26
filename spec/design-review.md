@@ -173,7 +173,7 @@ An audit compared the Lean definitions with `grammar.ebnf`, §1–§16 and `std/
 
 | | Item |
 |---|---|
-| ✅ | **B1.** `-0x0` and `-0b0` normalize to `0`, decimal `-0` stays `-0` (only in a comment at `Haus/Lexical.lean` `normalizeBody`). Changes canonical forms and hashes. State it in §2 and add a conformance case with its `.canonical`. |
+| ✅ | **B1.** Found: `-0x0` and `-0b0` normalized to `0` while decimal `-0` stayed `-0` (only in a comment at `Haus/Lexical.lean` `normalizeBody`). Changes canonical forms and hashes. Resolved the other way (2026-11-16): the sign is kept, so `-0x0` and `-0b0` are `-0`, as decimal `-0` is. Stated in §2; Lean's `normalizeNumber` and the suite case `valid/negative-zero-hex` with its `.canonical` agree. |
 | ✅ | **B2.** Block strings have no prose section; the EBNF comment (`grammar.ebnf` 74–81) is wrong: a whitespace-only line starting with the indent keeps the rest (indent 2, line of 6 spaces → 4 spaces), not "empty". Trailing whitespace is significant, so an editor that trims it changes the value and hash. Write the rules in prose, fix the comment, decide whether the formatter (§11) escapes trailing blanks or whitespace-only lines. |
 | ✅ | **B3.** ✅ 2026-11-17: wording; `Z` and `+00:00` are both offset zero (std/time "Values"). `std/time.md` "every other value has exactly one spelling" is false for offsets: `Z` and `+00:00` both accepted. Add the caveat or reject one spelling. (`instant_same_iff` is stated correctly.) |
 | ✅ | **B4.** ✅ 2026-11-17: §8 says it. §8 doesn't say a BOM counts as column 1, nor what a line break is for line numbers (only in §1.2 S18 and the bindings). |

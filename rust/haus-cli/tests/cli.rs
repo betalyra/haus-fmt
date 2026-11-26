@@ -112,7 +112,9 @@ fn usage_errors_exit_with_2() {
     haus().arg("fmt").assert().code(2);
     haus().args(["check", "--schema", "x.schema.haus", "--no-schema", "a.haus"]).assert().code(2);
     haus().args(["check", "--max-depth", "257", "adjacent"]).assert().code(2).stderr(predicate::str::contains("256"));
-    haus().args(["fmt", "--indent", "0", "fmt"]).assert().code(2);
+    haus().args(["fmt", "--indent", "17", "fmt"]).assert().code(2);
+    haus().args(["fmt", "--indent", "-1", "fmt"]).assert().code(2);
+    haus().args(["fmt", "--width", "-1", "fmt"]).assert().code(2);
     haus().args(["fmt", "--layout", "fancy", "fmt"]).assert().code(2);
     haus().args(["fmt", "--style", "fancy", "fmt"]).assert().code(2);
 }
@@ -1091,9 +1093,51 @@ fn fmt_stdin_to_stdout() {
         .write_stdin("Money(7.90, EUR)")
         .assert()
         .stdout("Money(\n  7.90,\n  EUR,\n)\n");
+    // Spec §11: 0 means what it says, never "the default".
+    haus()
+        .args(["fmt", "--indent", "0", "-"])
+        .write_stdin("{ a: [1], b: \"one\\ntwo\" }")
+        .assert()
+        .success()
+        .stdout("{\na: [\n1,\n],\nb: \"\"\"\none\ntwo\n\"\"\",\n}\n");
+    haus()
+        .args(["fmt", "--width", "0", "-"])
+        .write_stdin("[Some(1), None]")
+        .assert()
+        .success()
+        .stdout("[\n  Some(\n    1,\n  ),\n  None,\n]\n");
     haus().args(["fmt", "--check", "-"]).write_stdin("[1]").assert().code(1).stdout("<stdin>\n");
     haus().args(["fmt", "--check", "-"]).write_stdin("[\n  1,\n]\n").assert().success().stdout("");
     haus().args(["fmt", "-"]).write_stdin("[1 2]").assert().code(1).stdout("");
+}
+
+#[test]
+fn fmt_stream_puts_a_comma_after_a_single_value() {
+    // Spec §11: a stream with one item so far is written as a stream, in every layout.
+    let one = "// log\nPaged { n: 1 } // first";
+    haus()
+        .args(["fmt", "--stream", "-"])
+        .write_stdin(one)
+        .assert()
+        .success()
+        .stdout("// log\nPaged {\n  n: 1,\n}, // first\n");
+    haus().args(["fmt", "-"]).write_stdin(one).assert().success().stdout("// log\nPaged {\n  n: 1,\n} // first\n");
+    for (layout, out) in [("compact", "Paged { n: 1 },\n"), ("minimised", "Paged{n:1},\n")] {
+        haus().args(["fmt", "--stream", "--layout", layout, "-"]).write_stdin(one).assert().success().stdout(out);
+        // Value by value from a pipe too: the lone value gets its comma.
+        haus().args(["fmt", "--stream", "--layout", layout, "-"]).write_stdin("Paged { n: 1 }\n").assert().stdout(out);
+    }
+    // More than one value, or none: as without the option.
+    haus().args(["fmt", "--stream", "-"]).write_stdin("1, 2").assert().success().stdout("1,\n2,\n");
+    haus().args(["fmt", "--stream", "-"]).write_stdin("// only\n").assert().success().stdout("// only\n");
+    haus().args(["fmt", "--stream", "--check", "-"]).write_stdin("1\n").assert().code(1).stdout("<stdin>\n");
+    haus().args(["fmt", "--stream", "--check", "-"]).write_stdin("1,\n").assert().success().stdout("");
+    // In place.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.haus");
+    fs::write(&log, "Paged { n: 1 }\n").unwrap();
+    haus().current_dir(dir.path()).args(["fmt", "--stream", "log.haus"]).assert().success().stdout("log.haus\n");
+    assert_eq!(fs::read_to_string(&log).unwrap(), "Paged {\n  n: 1,\n},\n");
 }
 
 #[test]

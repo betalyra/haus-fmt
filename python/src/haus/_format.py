@@ -556,25 +556,26 @@ def _spelling(text: str) -> str:
 class _Printer:
     """Writes a tree in a layout."""
 
-    __slots__ = ("indent", "indents", "minimised", "out", "width")
+    __slots__ = ("indent", "indents", "minimised", "out", "stream", "width")
 
-    def __init__(self, style: Style, indent: int, width: int) -> None:
+    def __init__(self, style: Style, indent: int, width: int, stream: bool) -> None:
         self.out: list[str] = []
         self.indent = indent
         self.width = width
+        self.stream = stream
         self.minimised = style == "minimised"
         self.indents: list[str] = []
 
     def lines(self, items: list[_Item]) -> str:
         """Compact and minimised: each top-level item on its line, with a comma after each in a stream."""
-        end = ",\n" if len(items) > 1 else "\n"
+        end = ",\n" if self.stream or len(items) > 1 else "\n"
         for item in items:
             self.compact(item.node)
             self.out.append(end)
         return "".join(self.out)
 
     def pretty(self, items: list[_Item], dangling: list[_Comment]) -> str:
-        stream = len(items) > 1
+        stream = self.stream or len(items) > 1
         first = True
         multiline = False
         for i, item in enumerate(items):
@@ -768,12 +769,14 @@ class _Printer:
 # ── entry points ─────────────────────────────────────────────
 
 
-def _options(style: object, indent: object, width: object) -> None:
+def _options(style: object, indent: object, width: object, stream: object) -> None:
     if style not in _STYLES:
         raise ValueError(f"style must be 'pretty', 'compact' or 'minimised', not {style!r}")
     for name, n in (("indent", indent), ("width", width)):
         if isinstance(n, bool) or not isinstance(n, int) or n < 0:
             raise ValueError(f"{name} must be a whole number of at least 0, not {n!r}")
+    if not isinstance(stream, bool):
+        raise ValueError(f"stream must be True or False, not {stream!r}")
 
 
 def _text(text: str | bytes) -> str:
@@ -802,6 +805,7 @@ def format(
     style: Style = "pretty",
     indent: int = 2,
     width: int = 80,
+    stream: bool = False,
     limits: Limits = DEFAULT_LIMITS,
 ) -> str:
     """Reformat haus text in a standard layout (spec §11): one value, or a stream with a comma after each.
@@ -817,15 +821,22 @@ def format(
     `Money(7.90, EUR)` stays on one line. Both are taken as given: an indent of 0 doesn't indent, and
     with a width of 0 every payload is broken over lines.
 
+    `stream=True` says the file is a stream, in every layout: every top-level item is followed by a
+    comma, a single one too, so a log with one entry so far keeps the comma the next one is appended
+    after (in pretty the comma counts toward the width). Without it a single item has no comma;
+    a file of several items, or of none, is written the same either way.
+
         >>> format('{ "a": 0xFF, b: [1, 2] } // ok', style="compact")
         '{ a: 0xFF, b: [1, 2] }\\n'
+        >>> format("Entry { at: 1 }", style="compact", stream=True)
+        'Entry { at: 1 },\\n'
 
     Raises `HausSyntaxError` if `text` isn't valid haus within `limits` (the parser's error, with its
     code and position), and `ValueError` for an unknown style or a negative indent or width.
     """
-    _options(style, indent, width)
+    _options(style, indent, width, stream)
     _, items, dangling = _scan(text, limits)
-    printer = _Printer(style, indent, width)
+    printer = _Printer(style, indent, width, stream)
     return printer.pretty(items, dangling) if style == "pretty" else printer.lines(items)
 
 
@@ -847,10 +858,12 @@ def stringify_all(
     style: Style = "pretty",
     indent: int = 2,
     width: int = 80,
+    stream: bool = False,
     limits: Limits = DEFAULT_LIMITS,
 ) -> str:
     """Write values as a file (spec §6, §11): one value alone, two or more as a stream with a comma after
-    each, and a line break after each; no values, an empty file.
+    each, and a line break after each; no values, an empty file. With `stream=True`, a single value
+    has a comma after it too.
 
     With no source text, numbers are written normalized and in decimal, byte strings in lowercase hex
     without spaces, and strings with the fewest escapes (in pretty, a string with a line feed as a
@@ -859,6 +872,8 @@ def stringify_all(
         >>> from haus import Number, Variant
         >>> stringify_all([Variant("Ping"), Number("1E+05")], style="compact")
         'Ping,\\n1e5,\\n'
+        >>> stringify_all([Variant("Ping")], style="compact", stream=True)
+        'Ping,\\n'
 
     Every value is a haus value (its constructors check it, spec §11), so the only errors are the
     limits of `limits` (spec §7), `haus.HausEncodeError` (a `ValueError`, with the `path` of the value):
@@ -870,12 +885,14 @@ def stringify_all(
     each other, and each place writes them again). The node limit applies to each value on its own. An
     error in the i-th value is at `$[i]`, also when there is one value (`$[0]`, spec §11).
     """
-    return _written(values, style, indent, width, limits, indexed=True)
+    return _written(values, style, indent, width, stream, limits, indexed=True)
 
 
-def _written(values: Iterable[Value], style: Style, indent: int, width: int, limits: Limits, *, indexed: bool) -> str:
+def _written(
+    values: Iterable[Value], style: Style, indent: int, width: int, stream: bool, limits: Limits, *, indexed: bool
+) -> str:
     """`stringify_all`; its errors under `$[i]` if `indexed`, else (one value, `stringify`) under `$`."""
-    _options(style, indent, width)
+    _options(style, indent, width, stream)
     make_room(limits.max_depth)
     builder = _Builder(limits)
     items: list[_Item] = []
@@ -883,7 +900,7 @@ def _written(values: Iterable[Value], style: Style, indent: int, width: int, lim
         item = _Item(False, [])
         item.node = builder.value(v, (i,) if indexed else ())
         items.append(item)
-    printer = _Printer(style, indent, width)
+    printer = _Printer(style, indent, width, stream)
     return printer.pretty(items, []) if style == "pretty" else printer.lines(items)
 
 
@@ -909,4 +926,4 @@ def stringify(
 
     See `stringify_all` for the options and errors.
     """
-    return _written((value,), style, indent, width, limits, indexed=False)[:-1]
+    return _written((value,), style, indent, width, False, limits, indexed=False)[:-1]

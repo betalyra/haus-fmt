@@ -43,6 +43,10 @@ pub const HAUS_SECRET: c_int = 7;
 pub const HAUS_PRETTY: c_int = 0;
 pub const HAUS_COMPACT: c_int = 1;
 pub const HAUS_MINIMISED: c_int = 2;
+/// Or'ed into the layout of `haus_format` and `haus_stringify_doc`: the
+/// file is a stream (spec §11, "Streams"), so a single item has a comma
+/// after it too. Not taken by `haus_stringify`, which writes one value.
+pub const HAUS_STREAM: c_int = 0x100;
 
 pub const haus_error = extern struct {
     /// The code of spec §17, NUL-terminated; empty for statuses other than
@@ -207,15 +211,18 @@ fn give(bytes: []u8, out: ?*?[*]u8, out_len: ?*usize) c_int {
     return HAUS_OK;
 }
 
-fn layoutOf(layout: c_int, indent: c_int, width: c_int) ?haus.FormatOptions {
+/// The options of a layout argument: a layout, with `HAUS_STREAM` or'ed in
+/// where the call writes a file (`files`).
+fn layoutOf(layout: c_int, indent: c_int, width: c_int, files: bool) ?haus.FormatOptions {
     if (indent < 0 or width < 0) return null;
-    const l: haus.Layout = switch (layout) {
+    const stream = files and layout & HAUS_STREAM != 0;
+    const l: haus.Layout = switch (if (stream) layout & ~HAUS_STREAM else layout) {
         HAUS_PRETTY => .pretty,
         HAUS_COMPACT => .compact,
         HAUS_MINIMISED => .minimised,
         else => return null,
     };
-    return .{ .layout = l, .indent = @intCast(indent), .width = @intCast(width) };
+    return .{ .layout = l, .indent = @intCast(indent), .width = @intCast(width), .stream = stream };
 }
 
 // ── text in, text out ────────────────────────────────────────
@@ -261,12 +268,13 @@ pub export fn haus_hash_all(text: ?[*]const u8, len: usize, out: ?*[65]u8, err: 
 
 /// Formats a file in a layout of spec §11, keeping comments in pretty.
 /// `indent` and `width` are pretty's options (2 and 80 by default, taken
-/// literally: 0 is 0); a negative one is HAUS_INVALID_ARGUMENT.
+/// literally: 0 is 0); a negative one is HAUS_INVALID_ARGUMENT. `layout`
+/// may have HAUS_STREAM or'ed in: the file is a stream.
 pub export fn haus_format(text: ?[*]const u8, len: usize, layout: c_int, indent: c_int, width: c_int, out: ?*?[*]u8, out_len: ?*usize, err: ?*haus_error) c_int {
     clear(err);
     const t = input(text, len) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
-    var options = layoutOf(layout, indent, width) orelse return HAUS_INVALID_ARGUMENT;
+    var options = layoutOf(layout, indent, width, true) orelse return HAUS_INVALID_ARGUMENT;
     var d: Diagnostic = .{};
     options.write = .{ .diagnostic = &d };
     const formatted = haus.format(allocator, t, options) catch |e| return report(err, e, &d);
@@ -617,33 +625,102 @@ pub export fn haus_new_variant(doc: ?*haus_doc, tag: ?[*]const u8, tag_len: usiz
 
 // ── writing and comparing values ─────────────────────────────
 
-/// Every writer refuses a decoded `Secret` (spec §15, "Hiding"):
-/// `cannot-encode`, without the value. HAUS_OK when `vs` hold none. The
-/// walk keeps its own stack (a value may be as deep as it likes here) and
-/// looks at each shared part once (builders share their arguments).
-fn refuseSecrets(vs: []const Value, err: ?*haus_error) c_int {
-    var stack: std.ArrayList(*const Value) = .empty;
-    defer stack.deinit(allocator);
+/// How `refuseSecrets` names the values it is given in a secret's place.
+const Operands = enum {
+    /// One value: its place is `$…`.
+    one,
+    /// A file's or stream's values: the i-th is `$[i]…` (spec §11).
+    items,
+    /// The two operands of `equals` or `compare`: `$…`, and the message
+    /// says which.
+    pair,
+};
+
+/// Every writer, the canonical form, the hash, equality and order refuse a
+/// decoded `Secret` (spec §15, "Hiding"): `cannot-encode` at the secret,
+/// without the value. HAUS_OK when `vs` hold none. The walk keeps its own
+/// stack (a value may be as deep as it likes here), looks at each shared
+/// part once (builders share their arguments), and the place it gives is
+/// that of the first way it reached the secret.
+fn refuseSecrets(vs: []const Value, operands: Operands, err: ?*haus_error) c_int {
+    const Step = union(enum) { root: usize, key: []const u8, index: usize, same };
+    const Node = struct { value: *const Value, parent: u32, step: Step };
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var nodes: std.ArrayList(Node) = .empty;
+    var stack: std.ArrayList(u32) = .empty;
     var seen: std.AutoHashMapUnmanaged(*const Value, void) = .empty;
-    defer seen.deinit(allocator);
-    for (vs) |*x| stack.append(allocator, x) catch return HAUS_OUT_OF_MEMORY;
-    while (stack.pop()) |x| {
-        const gop = seen.getOrPut(allocator, x) catch return HAUS_OUT_OF_MEMORY;
+    for (vs, 0..) |*x, i| {
+        nodes.append(a, .{ .value = x, .parent = 0, .step = .{ .root = i } }) catch return HAUS_OUT_OF_MEMORY;
+        stack.append(a, @intCast(i)) catch return HAUS_OUT_OF_MEMORY;
+    }
+    std.mem.reverse(u32, stack.items);
+    while (stack.pop()) |n| {
+        const x = nodes.items[n].value;
+        const gop = seen.getOrPut(a, x) catch return HAUS_OUT_OF_MEMORY;
         if (gop.found_existing) continue;
-        if (isSecret(x)) return failWith(err, .@"cannot-encode", "a Secret is not written without its schema (haus_encode writes it, haus_secret_reveal gives its value)", .{});
+        if (isSecret(x)) {
+            // The place, from the secret up to its root, written top down.
+            var steps: std.ArrayList(Step) = .empty;
+            var at = n;
+            while (true) {
+                const s = nodes.items[at].step;
+                steps.append(a, s) catch return HAUS_OUT_OF_MEMORY;
+                if (s == .root) break;
+                at = nodes.items[at].parent;
+            }
+            std.mem.reverse(Step, steps.items);
+            var path: std.ArrayList(u8) = .empty;
+            var which: []const u8 = "";
+            for (steps.items) |s| switch (s) {
+                .root => |i| {
+                    path.append(a, '$') catch return HAUS_OUT_OF_MEMORY;
+                    switch (operands) {
+                        .one => {},
+                        .items => path.print(a, "[{d}]", .{i}) catch return HAUS_OUT_OF_MEMORY,
+                        .pair => which = if (i == 0) " (in the first value)" else " (in the second value)",
+                    }
+                },
+                .index => |i| path.print(a, "[{d}]", .{i}) catch return HAUS_OUT_OF_MEMORY,
+                .same => {},
+                .key => |k| if (haus.value.isBareKey(k)) {
+                    path.print(a, ".{s}", .{k}) catch return HAUS_OUT_OF_MEMORY;
+                } else {
+                    path.append(a, '[') catch return HAUS_OUT_OF_MEMORY;
+                    haus.canonical_form.appendQuoted(a, &path, k) catch return HAUS_OUT_OF_MEMORY;
+                    path.append(a, ']') catch return HAUS_OUT_OF_MEMORY;
+                },
+            };
+            var d: Diagnostic = .{};
+            d.set(.@"cannot-encode", "a Secret is not written or compared without its schema{s} (haus_encode writes it, haus_secret_reveal gives its value)", .{which});
+            d.setPath(path.items);
+            return report(err, error.Haus, &d);
+        }
+        // Pushed in reverse, so that the first part is looked at first.
+        const first: u32 = @intCast(nodes.items.len);
         switch (x.*) {
-            .array => |items| for (items) |*y| stack.append(allocator, y) catch return HAUS_OUT_OF_MEMORY,
-            .record => |fields| for (fields) |*f| stack.append(allocator, &f.value) catch return HAUS_OUT_OF_MEMORY,
-            .variant => |t| for (t.args) |*y| stack.append(allocator, y) catch return HAUS_OUT_OF_MEMORY,
+            .array => |items| for (items, 0..) |*y, i| nodes.append(a, .{ .value = y, .parent = n, .step = .{ .index = i } }) catch return HAUS_OUT_OF_MEMORY,
+            .record => |fields| for (fields) |*f| nodes.append(a, .{ .value = &f.value, .parent = n, .step = .{ .key = f.key } }) catch return HAUS_OUT_OF_MEMORY,
+            .variant => |t| for (t.args, 0..) |*y, i| {
+                // A record payload is at the variant's place (spec §15).
+                const step: Step = if (t.args.len == 1 and y.* == .record) .same else .{ .index = i };
+                nodes.append(a, .{ .value = y, .parent = n, .step = step }) catch return HAUS_OUT_OF_MEMORY;
+            },
             else => {},
+        }
+        var k: u32 = @intCast(nodes.items.len);
+        while (k > first) {
+            k -= 1;
+            stack.append(a, k) catch return HAUS_OUT_OF_MEMORY;
         }
     }
     return HAUS_OK;
 }
 
 /// `refuseSecrets`' status when it isn't HAUS_OK.
-fn noSecrets(vs: []const Value, err: ?*haus_error) ?c_int {
-    const status = refuseSecrets(vs, err);
+fn noSecrets(vs: []const Value, operands: Operands, err: ?*haus_error) ?c_int {
+    const status = refuseSecrets(vs, operands, err);
     return if (status == HAUS_OK) null else status;
 }
 
@@ -653,21 +730,23 @@ pub export fn haus_stringify(value: ?*const haus_value, layout: c_int, indent: c
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
-    var options = layoutOf(layout, indent, width) orelse return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(v[0..1], err)) |status| return status;
+    var options = layoutOf(layout, indent, width, false) orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(v[0..1], .one, err)) |status| return status;
     var d: Diagnostic = .{};
     options.write = .{ .diagnostic = &d };
     const text = haus.stringify(allocator, v.*, options) catch |e| return report(err, e, &d);
     return give(text, out, out_len);
 }
 
-/// The top-level values of a doc as a file (spec §6, §11).
+/// The top-level values of a doc as a file (spec §6, §11); with HAUS_STREAM
+/// or'ed into `layout`, as a stream: a comma after every value, a single
+/// one too.
 pub export fn haus_stringify_doc(doc: ?*const haus_doc, layout: c_int, indent: c_int, width: c_int, out: ?*?[*]u8, out_len: ?*usize, err: ?*haus_error) c_int {
     clear(err);
     const dc: *const Doc = @ptrCast(@alignCast(doc orelse return HAUS_INVALID_ARGUMENT));
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
-    var options = layoutOf(layout, indent, width) orelse return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(dc.values, err)) |status| return status;
+    var options = layoutOf(layout, indent, width, true) orelse return HAUS_INVALID_ARGUMENT;
+    if (noSecrets(dc.values, .items, err)) |status| return status;
     var d: Diagnostic = .{};
     options.write = .{ .diagnostic = &d };
     const text = haus.stringifyAll(allocator, dc.values, options) catch |e| return report(err, e, &d);
@@ -679,7 +758,7 @@ pub export fn haus_value_canonical(value: ?*const haus_value, out: ?*?[*]u8, out
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(v[0..1], err)) |status| return status;
+    if (noSecrets(v[0..1], .one, err)) |status| return status;
     var d: Diagnostic = .{};
     const text = haus.canonical(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     return give(text, out, out_len);
@@ -690,7 +769,7 @@ pub export fn haus_value_hash(value: ?*const haus_value, out: ?*[65]u8, err: ?*h
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(v[0..1], err)) |status| return status;
+    if (noSecrets(v[0..1], .one, err)) |status| return status;
     var d: Diagnostic = .{};
     const h = haus.hash(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     @memcpy(o[0..64], &h);
@@ -704,7 +783,7 @@ pub export fn haus_value_equals(a: ?*const haus_value, b: ?*const haus_value, ou
     const x = valueOf(a) orelse return HAUS_INVALID_ARGUMENT;
     const y = valueOf(b) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(&.{ x.*, y.* }, err)) |status| return status;
+    if (noSecrets(&.{ x.*, y.* }, .pair, err)) |status| return status;
     var d: Diagnostic = .{};
     o.* = @intFromBool(haus.equals(allocator, x.*, y.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d));
     return HAUS_OK;
@@ -717,7 +796,7 @@ pub export fn haus_value_compare(a: ?*const haus_value, b: ?*const haus_value, o
     const x = valueOf(a) orelse return HAUS_INVALID_ARGUMENT;
     const y = valueOf(b) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(&.{ x.*, y.* }, err)) |status| return status;
+    if (noSecrets(&.{ x.*, y.* }, .pair, err)) |status| return status;
     var d: Diagnostic = .{};
     o.* = switch (haus.compare(allocator, x.*, y.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d)) {
         .lt => -1,
@@ -773,7 +852,7 @@ pub export fn haus_to_haus_json(value: ?*const haus_value, out: ?*?[*]u8, out_le
     clear(err);
     const v = valueOf(value) orelse return HAUS_INVALID_ARGUMENT;
     if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
-    if (noSecrets(v[0..1], err)) |status| return status;
+    if (noSecrets(v[0..1], .one, err)) |status| return status;
     var d: Diagnostic = .{};
     const text = haus.json.toHausJson(allocator, v.*, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
     return give(text, out, out_len);
@@ -1427,6 +1506,28 @@ test "format through the C ABI" {
     try std.testing.expectEqual(HAUS_OK, haus_format(text, text.len, HAUS_MINIMISED, 0, 0, &min, &out_len, &err));
     defer haus_free(min, out_len);
     try std.testing.expectEqualStrings("{a:Point(1,2)}\n", min.?[0..out_len]);
+}
+
+test "a secret is refused at its place" {
+    var err: haus_error = undefined;
+    clear(&err);
+    const hidden = [_]Value{.{ .string = "1234" }};
+    const secret: Value = .{ .variant = .{ .tag = secret_tag, .args = &hidden } };
+    const fields = [_]haus.Field{ .{ .key = "a", .value = .{ .number = "1" } }, .{ .key = "x-y", .value = secret } };
+    const rec: Value = .{ .record = &fields };
+    const payload: Value = .{ .variant = .{ .tag = "P", .args = &.{rec} } };
+    const positional: Value = .{ .variant = .{ .tag = "Q", .args = &.{ .{ .number = "1" }, payload } } };
+    try std.testing.expectEqual(HAUS_ERROR, refuseSecrets(&.{ .{ .number = "0" }, positional }, .items, &err));
+    try std.testing.expectEqualStrings("cannot-encode", std.mem.sliceTo(&err.code, 0));
+    // A record payload is at its variant's place (spec §15).
+    try std.testing.expectEqualStrings("$[1][1][\"x-y\"]", std.mem.sliceTo(&err.path, 0));
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(&err.message, 0), "1234") == null);
+    try std.testing.expectEqual(HAUS_ERROR, refuseSecrets(&.{ rec, secret }, .pair, &err));
+    try std.testing.expectEqualStrings("$[\"x-y\"]", std.mem.sliceTo(&err.path, 0));
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(&err.message, 0), "first value") != null);
+    try std.testing.expectEqual(HAUS_ERROR, refuseSecrets(&.{secret}, .one, &err));
+    try std.testing.expectEqualStrings("$", std.mem.sliceTo(&err.path, 0));
+    try std.testing.expectEqual(HAUS_OK, refuseSecrets(&.{rec.record[0].value}, .one, &err));
 }
 
 test "schemas through the C ABI" {

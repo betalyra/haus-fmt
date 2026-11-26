@@ -53,6 +53,13 @@ type FormatOptions struct {
 	// nothing fits, and every positional payload is written one argument per
 	// line. The compact and minimised layouts ignore it.
 	Width int
+	// Stream says that the file is a stream (spec §11), in every layout:
+	// [Format] and [FormatValues] write a comma after every top-level value, a
+	// single one too, so that the next can be appended. Without it (the
+	// default) a single value has no comma; more than one, or none, are
+	// written the same either way. [FormatValue] writes one value and ignores
+	// it.
+	Stream bool
 	// Limits are the limits of the text read (Format), or of the reader the
 	// text is written for (FormatValue, FormatValues). Zero fields take their
 	// defaults.
@@ -175,7 +182,8 @@ func FormatValue(v Value, opts FormatOptions) ([]byte, error) {
 }
 
 // FormatValues writes values as a file (spec §6): one value alone, two or
-// more as a stream with a comma after each. See [FormatValue]. A value that
+// more as a stream with a comma after each; with opts.Stream, a single value
+// with a comma too. See [FormatValue]. A value that
 // contains itself fails with the code cyclic-value. An error in the i-th
 // value is at $[i], also when there is one value ($[0]); [FormatValue]'s
 // are at $.
@@ -193,9 +201,12 @@ func formatValues(vs []Value, opts FormatOptions, indexed bool) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	if !indexed {
+		opts.Stream = false // one value, not a file of them
+	}
 	if opts.Layout != Pretty {
 		// No layout decisions to make: written as the values are checked.
-		return writeLines(vs, lim, opts.Layout == Minimised, indexed)
+		return writeLines(vs, lim, opts.Layout == Minimised, indexed, opts.Stream)
 	}
 	b := builder{writeCheck: writeCheck{lim: lim}}
 	f := &fileNode{items: make([]*item, len(vs))}
@@ -496,7 +507,7 @@ type printer struct {
 
 func printFile(f *fileNode, opts FormatOptions) []byte {
 	pr := &printer{indent: opts.Indent, width: opts.Width, layout: opts.Layout}
-	stream := len(f.items) > 1
+	stream := opts.Stream || len(f.items) > 1
 	if opts.Layout != Pretty {
 		for _, it := range f.items {
 			pr.compact(it.val)

@@ -119,7 +119,7 @@ schema.unusedCodecs(codecs);  // unused-codec warnings for codecs whose id no ty
 
 - **Time.** std/time values are a `String`, their exact text. `LocalDate`, `Instant`, `OffsetDateTime`, `ZoneId` and the other `java.time` types work too, keeping the meaning but not the spelling.
 - **Decimals.** `Decimal` is a `BigDecimal`, or a `Value.Number` to keep `-0` and exponents as written.
-- **Streams.** `new StreamReader(in, StreamOptions.DEFAULT.withStrict(true))` reads one value at a time; it is an `Iterator<Value>` with `stream()`. In Kotlin, `input.hausValues()` is a `Sequence`. [Logs and streams](/docs/tours/streams)
+- **Streams.** `new StreamReader(in, StreamOptions.DEFAULT.withStrict(true))` reads one value at a time; it is an `Iterator<Value>` with `stream()`. In Kotlin, `input.hausValues()` is a `Sequence`. For a log that may hold one entry so far, `FormatOptions.withStream(true)` makes `Haus.format` and `Haus.writeAll` keep the comma after it (Kotlin: `stream = true`). [Logs and streams](/docs/tours/streams)
 - **JSON.** `orders.toJson(o)` writes schema-based JSON; `HausJson.importJson` reads any JSON as haus. [Coming from JSON](/docs/from-json)
 - **Secrets.** `Secret a` is a `Secret<A>` in a typed codec, and a `Value.Secret` from `decode`; both show `<redacted>`, `Haus.write`, `canonical` and `hash` refuse a `Value.Secret`, encoding with the schema writes it in full, and errors inside never show the value. `Secret<A>` hides it from `toString` only: don't give it to a JSON library that reads fields by reflection. [Config and secrets](/docs/tours/secrets)
 - **Threads.** Values, schemas and codecs are immutable and safe to share.

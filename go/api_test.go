@@ -705,6 +705,34 @@ func TestEqualsCompare(t *testing.T) {
 	}
 }
 
+// TestFormatStream: FormatOptions.Stream writes a comma after a single value
+// too, in every layout (spec §11); FormatValue writes one value and ignores it.
+func TestFormatStream(t *testing.T) {
+	v := Variant{Tag: MustTag("Paged"), Args: []Value{mustRecord(t, Field{"n", NumberFromInt(1)})}}
+	want := map[Layout]string{Pretty: "Paged {\n  n: 1,\n},\n", Compact: "Paged { n: 1 },\n", Minimised: "Paged{n:1},\n"}
+	for l, w := range want {
+		o := inLayout(l)
+		o.Stream = true
+		if got, err := FormatValues([]Value{v}, o); err != nil || string(got) != w {
+			t.Errorf("%s FormatValues: %q %v", l, got, err)
+		}
+		if got, err := Format([]byte("Paged { n: 1 }"), o); err != nil || string(got) != w {
+			t.Errorf("%s Format: %q %v", l, got, err)
+		}
+		if got, _ := FormatValue(v, o); strings.HasSuffix(strings.TrimSuffix(string(got), "\n"), ",") {
+			t.Errorf("%s FormatValue: %q", l, got)
+		}
+		// Two values, or none: as without it.
+		two, _ := FormatValues([]Value{v, v}, o)
+		if plain, _ := FormatValues([]Value{v, v}, inLayout(l)); string(two) != string(plain) {
+			t.Errorf("%s: two values %q, %q", l, two, plain)
+		}
+		if none, err := FormatValues(nil, o); err != nil || len(none) != 0 {
+			t.Errorf("%s: no values %q %v", l, none, err)
+		}
+	}
+}
+
 func compare(t *testing.T, a, b Value) int {
 	t.Helper()
 	c, err := Compare(a, b)

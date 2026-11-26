@@ -19,7 +19,9 @@ is the minimised layout of the value in canonical order
 
 A file or stream (`compactAll`, `minimisedAll`) is one value per line: a
 single value without a comma, more than one each followed by `,`, every
-line ending with a line feed; no values give the empty text.
+line ending with a line feed; no values give the empty text. Told that the
+values are a stream (`stream`, §11), the writers put a comma after a single
+value too (`streamLines`).
 
 The round trip is proven in `Haus.Layout.CompactRoundTrip`.
 -/
@@ -90,11 +92,22 @@ def lines (write : Value → Text) : List Value → Text
   | [v] => write v ++ ['\n']
   | v :: w :: ws => (v :: w :: ws).flatMap fun x => write x ++ [',', '\n']
 
-/-- **A file or stream in the compact layout.** -/
-def compactAll (vs : List Value) : Text := lines compact vs
+/--
+Values written as a stream (§11, a writer told that they are one): every
+value on its line followed by `,`, a single value too; nothing for no values.
+-/
+def streamLines (write : Value → Text) (vs : List Value) : Text :=
+  vs.flatMap fun x => write x ++ [',', '\n']
 
-/-- **A file or stream in the minimised layout.** -/
-def minimisedAll (vs : List Value) : Text := lines minimised vs
+/-- A file (`lines`), or with `stream` a stream (`streamLines`). -/
+def linesAs (stream : Bool) (write : Value → Text) (vs : List Value) : Text :=
+  if stream then streamLines write vs else lines write vs
+
+/-- **A file or stream in the compact layout**; with `stream`, a comma after a single value too (§11). -/
+def compactAll (vs : List Value) (stream : Bool := false) : Text := linesAs stream compact vs
+
+/-- **A file or stream in the minimised layout**; with `stream`, a comma after a single value too (§11). -/
+def minimisedAll (vs : List Value) (stream : Bool := false) : Text := linesAs stream minimised vs
 
 /-! ## Minimised is the canonical writer -/
 
@@ -188,5 +201,10 @@ private def minimisedOf (src : String) : Option String :=
   some "A,\nB { x: 1 },\nC,\n[1, 2],\n\"s\",\nD(1, 2),\n{ y: [] },\nE,\n"
 #guard compactOf "1," == some "1\n"
 #guard compactOf "// nothing\n" == some ""
+-- Told that the values are a stream: a comma after a single value too; no values, still no text.
+#guard String.ofList (compactAll [.variant "Paged" [.record [("n", .num "1")]]] true) == "Paged { n: 1 },\n"
+#guard String.ofList (minimisedAll [.variant "Paged" [.record [("n", .num "1")]]] true) == "Paged{n:1},\n"
+#guard String.ofList (compactAll [.num "1", .num "2"] true) == String.ofList (compactAll [.num "1", .num "2"])
+#guard compactAll [] true = []
 
 end Haus.Layout

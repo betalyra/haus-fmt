@@ -27,7 +27,7 @@ haus.parse("19.90").to_decimal()  # Decimal('19.90'): numbers are exact, never f
 haus.stringify(order, style="compact")  # '{ id: 7, total: Money(44.40, EUR), status: Shipped { tracking: "DE-4711" } }'
 ```
 
-`haus.parse_all` reads a file of several values (a stream); `haus.format` reformats text and keeps its comments.
+`haus.parse_all` reads a file of several values (a stream); `haus.format` reformats text and keeps its comments. For a log that may hold one entry so far, `stream=True` (on `format` and `stringify_all`) keeps the comma after it.
 
 ## With a schema
 

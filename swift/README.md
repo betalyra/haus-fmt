@@ -87,9 +87,9 @@ while let value = try reader.next() { handle(value) } // stream-truncated if the
 
 ## Formatting
 
-`format(text, FormatOptions(layout: .pretty))` rewrites text in one of the three layouts of spec §11: `.pretty` keeps comments and blank lines, `.compact` writes one item per line, and `.minimised` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. `indent` (default 2) and `width` (default 80) are the only options. `hasComments(text)` tells a tool that rewrites files in place in the compact or minimised layout whether it would drop comments.
+`format(text, FormatOptions(layout: .pretty))` rewrites text in one of the three layouts of spec §11: `.pretty` keeps comments and blank lines, `.compact` writes one item per line, and `.minimised` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. `indent` (default 2) and `width` (default 80) are the options of the pretty layout. `stream` (default `false`) says the file is a stream, in every layout: a single item gets a comma after it too, so a log with one entry so far keeps the comma the next one is appended after; a file of several items, or of none, is written the same either way. `hasComments(text)` tells a tool that rewrites files in place in the compact or minimised layout whether it would drop comments.
 
-`stringify(value, options)` and `stringifyAll(values, options)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value. A value's `description` is its compact layout.
+`stringify(value, options)` and `stringifyAll(values, options)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes. `stringifyAll` writes a file: one value alone, more as a stream with a comma after every value, and with `FormatOptions(stream: true)` a comma after a single value too (`stringify` writes one value and ignores the option). A value's `description` is its compact layout.
 
 ## JSON
 

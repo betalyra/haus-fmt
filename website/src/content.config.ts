@@ -28,6 +28,12 @@ const specs = [
     description: "The precise rules of haus: data model, numbers, strings, variants, streams, limits, the standard format and schemas.",
   },
   {
+    id: "docs/spec/packages",
+    file: "spec/packages.md",
+    title: "haus packages",
+    description: "The package layer, versioned on its own: where packages are found, manifests, profiles and how codecs are wired.",
+  },
+  {
     id: "docs/spec/time",
     file: "spec/std/time.md",
     title: "The std/time profile",

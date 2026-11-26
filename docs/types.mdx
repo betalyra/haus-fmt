@@ -94,7 +94,7 @@ A package is one schema file. It imports other packages by name, never files.
 - `package.haus` and `schema.haus` are plain files, not symbolic links (the package's folder may be one).
 - A package imports only the packages it declares as dependencies. On npm, declare them as `peerDependencies`: npm then installs one copy for the whole application. A build that reaches two versions of one package stops with `duplicate-package` and names both, rather than picking one.
 
-There is no haus registry. Publish wherever your users install dependencies from: npm, crates.io, PyPI, a private registry or a git repository. Name the package after something you own (`@your-domain/…`, `@your-github-org/…`), and give it no install scripts: a schema package is data. Names, resolution and versions are in [spec §13.3](/docs/spec#133-schema-packages).
+There is no haus registry. Publish wherever your users install dependencies from: npm, crates.io, PyPI, a private registry or a git repository. Name the package after something you own (`@your-domain/…`, `@your-github-org/…`), and give it no install scripts: a schema package is data. Names, relative imports and versions are in [spec §13.3](/docs/spec#133-schema-packages); where packages are found and how they are published, in [haus packages](/docs/spec/packages).
 
 For types shared within one project, you don't need a package: `import ./common (Address)` imports `common.schema.haus` from the same folder. Relative imports are for your own files: a package is imported by its name, never by a path into its folder.
 

@@ -170,13 +170,21 @@ pub struct FmtArgs {
     #[arg(long)]
     pub drop_comments: bool,
 
-    /// Spaces per indentation level.
-    #[arg(long, value_name = "N", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..=16))]
+    /// Spaces per indentation level, 0 to 16 (pretty only). 0 writes every
+    /// line without indentation.
+    #[arg(long, value_name = "N", default_value_t = 2, value_parser = clap::value_parser!(u16).range(0..=16))]
     pub indent: u16,
 
-    /// Line width for positional payloads to stay inline.
-    #[arg(long, value_name = "N", default_value_t = 80, value_parser = clap::value_parser!(u32).range(1..))]
+    /// Line width for positional payloads to stay inline (pretty only). 0 is
+    /// a width nothing fits in: one argument per line.
+    #[arg(long, value_name = "N", default_value_t = 80)]
     pub width: u32,
+
+    /// The files are streams (spec §11), in every layout: a comma after
+    /// every top-level value, a single one too, so that the next can be
+    /// appended. Without it, a file with one value has no comma after it.
+    #[arg(long)]
+    pub stream: bool,
 
     #[command(flatten)]
     pub limits: LimitArgs,

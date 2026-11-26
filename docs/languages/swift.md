@@ -67,7 +67,7 @@ All the mappings: [host types](/docs/types#host-types-in-each-language).
 - **Packages.** Give them with a `PackageLocator`: `.explicit(folders:)` for directories, `.explicit(in: Bundle.module, …)` for packages a Swift package ships as resources.
 - **Codecs.** A type that conforms to `HausCodec` chooses its own host type for a haus type, by its id: Foundation's `Date` for `std/time#Date`, integer cents for `@haus-fmt/money@1#Money`.
 - **No profile codecs yet.** Swift ships no codecs for `@haus-fmt/money/iso` or `@haus-fmt/geo/wgs84`, and doesn't warn about them: `Money(1, Eur)` decodes unless your own codec rejects it. [What haus checks](/docs/checks)
-- **Streams.** `StreamReader` takes chunks and gives values as they complete; `HausValues(chunks)` is the same as an `AsyncSequence`. [Logs and streams](/docs/tours/streams)
+- **Streams.** `StreamReader` takes chunks and gives values as they complete; `HausValues(chunks)` is the same as an `AsyncSequence`. For a log that may hold one entry so far, `FormatOptions(stream: true)` makes `format` and `stringifyAll` keep the comma after it. [Logs and streams](/docs/tours/streams)
 - **JSON.** `orderType.toJSON(order)` writes schema-based JSON, `decode(_:fromJSON:)` reads it. `importJSON` reads any JSON as haus. [Coming from JSON](/docs/from-json)
 - **Hashes.** `hash` uses CryptoKit, so it exists on Apple platforms; on Linux, hash `canonical(value)` with a SHA-256 of your choice.
 - **Secrets.** `Secret<T>` holds a value that is never printed, and that only the schema's encoder writes (`JSONEncoder` fails on it). Decoding into a `HausValue` hides a secret as `.secret(…)`, which `stringify` and `canonical` refuse. [Config and secrets](/docs/tours/secrets)

@@ -25,6 +25,7 @@ pub fn run(args: &FmtArgs, color: Color) -> Status {
         },
         indent: usize::from(args.indent),
         width: usize::try_from(args.width).unwrap_or(usize::MAX),
+        stream: args.stream,
         limits: args.limits.limits(),
     };
     let renderer = output::renderer(output::colored(color, &stderr()));
@@ -99,7 +100,8 @@ fn drops_comments(text: &str, options: &FormatOptions, drop_comments: bool) -> b
 
 /// Standard input in the compact or minimised layout, value by value: each
 /// is written as soon as its comma arrives, followed by a comma. Only a lone
-/// value that the input ends without a comma is written without one.
+/// value that the input ends without a comma is written without one, unless
+/// the input is a stream (`--stream`).
 fn stream(options: &FormatOptions, renderer: &Renderer, colored: bool) -> Status {
     let stream_options = haus::stream::Options { limits: options.limits, ..Default::default() };
     let mut pieces = Pieces::new(io::stdin().lock(), stream_options);

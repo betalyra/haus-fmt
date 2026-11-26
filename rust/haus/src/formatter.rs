@@ -42,18 +42,24 @@ pub struct FormatOptions {
     /// inline (default 80). Counted in code points (as error columns are,
     /// spec §8), including the comma after the entry.
     pub width: usize,
+    /// The file is a stream (spec §11), in every layout: a comma after every
+    /// top-level item, a single one too, so that the next can be appended
+    /// (default false: a single item has none; more than one, or none, are
+    /// written the same either way).
+    pub stream: bool,
     /// The limits the text is parsed with (spec §7; default: the spec's).
     pub limits: Limits,
 }
 
 impl Default for FormatOptions {
     fn default() -> Self {
-        FormatOptions { style: Style::Pretty, indent: 2, width: 80, limits: Limits::default() }
+        FormatOptions { style: Style::Pretty, indent: 2, width: 80, stream: false, limits: Limits::default() }
     }
 }
 
 /// Format a whole file in the standard layout (spec §11): one value, or a
-/// stream with a comma after each value. The pretty layout keeps comments,
+/// stream with a comma after each value (with [`FormatOptions::stream`], a
+/// single value too). The pretty layout keeps comments,
 /// blank lines (at most one in a row) and the source spelling of numbers,
 /// single-line strings and byte strings (`0xFF` stays `0xFF`); the compact
 /// and minimised layouts drop comments. Formatting the output again changes
@@ -81,6 +87,7 @@ pub fn format(text: &str, options: &FormatOptions) -> Result<String, SyntaxError
         step: options.indent,
         width: i64::try_from(options.width).unwrap_or(i64::MAX),
         gaps: if options.style == Style::Minimised { Gaps::NONE } else { Gaps::SPACED },
+        stream: options.stream,
     };
     Ok(match options.style {
         Style::Pretty => f.pretty(),
@@ -404,6 +411,8 @@ struct Formatter<'a> {
     width: i64,
     /// What goes between tokens on one line.
     gaps: Gaps,
+    /// The file is a stream: a comma after a single item too.
+    stream: bool,
 }
 
 /// The whitespace between tokens on one line: the minimised layout has none.
@@ -507,7 +516,7 @@ impl<'a> Formatter<'a> {
 
     fn pretty(&self) -> String {
         let roots: Vec<Entry<'a>> = self.doc.roots.iter().map(|&i| self.entry_of(i)).collect();
-        let stream = roots.len() > 1;
+        let stream = self.stream || roots.len() > 1;
         let mut w = Writer { out: String::new(), lists: Vec::new(), tasks: Vec::new() };
         let list = self.entry_list(0, self.src.len(), roots, 0, if stream { "," } else { "" }, stream);
         w.lists.push(list);
@@ -528,7 +537,7 @@ impl<'a> Formatter<'a> {
         let line = |&i: &usize| self.inline(self.node(i), false, i64::MAX).unwrap_or_default();
         match self.doc.roots.as_slice() {
             [] => String::new(),
-            [one] => line(one) + "\n",
+            [one] if !self.stream => line(one) + "\n",
             roots => roots.iter().map(|i| line(i) + ",\n").collect(),
         }
     }

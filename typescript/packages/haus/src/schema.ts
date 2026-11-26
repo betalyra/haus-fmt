@@ -1577,12 +1577,16 @@ const lineCompiled = (schema: AnySchema, value: unknown, options: FormatOptions 
 export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions & Options = {}): string =>
   lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), { ...options, limits: options })
 
-/** Encode several values as a stream file: a comma after every value. */
+/**
+ * Encode several values as a file, as `format` writes it: a single value
+ * without a comma (with `stream`, with one), more than one each followed by
+ * a comma.
+ */
 export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Options = {}): string => {
   checkLimits(options)
   const all = [...values]
   const lines = all.map((v) => lineCompiled(schema, v, options, options.style))
-  if (lines.every((l) => l !== undefined)) return lines.length === 0 ? "" : lines.length === 1 ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
+  if (lines.every((l) => l !== undefined)) return lines.length === 1 && options.stream !== true ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
   return format(all.map((v, i) => encodeFrom(schema, v, encodeAt(options, i))), { ...options, limits: options })
 }
 

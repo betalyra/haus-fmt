@@ -97,7 +97,8 @@ function optionsOf(text: string): Options {
     const x = v?.kind === "record" ? v.fields.get(k) : undefined
     return x?.kind === "number" ? Number(x.text) : d
   }
-  return { indent: int("indent", 2), width: int("width", 80) }
+  const stream = v?.kind === "record" ? v.fields.get("stream") : undefined
+  return { indent: int("indent", 2), width: int("width", 80), stream: stream?.kind === "variant" && stream.tag === "True" }
 }
 
 test("the checks catch what breaks the rules", () => {
@@ -110,6 +111,13 @@ test("the checks catch what breaks the rules", () => {
   assert.deepEqual(rules("pretty", '{\n  "a": 1,\n}\n'), ["keys"])
   assert.deepEqual(rules("pretty", "[\n  1,\n],\n2,\n"), ["stream"])
   assert.deepEqual(rules("pretty", "1,\n"), ["stream"])
+  // Formatted as a stream (spec §11): a single item has a comma after it.
+  const asStream = { ...DEFAULT, stream: true }
+  assert.deepEqual(rules("pretty", "1,\n", asStream), [])
+  assert.deepEqual(rules("pretty", "1\n", asStream), ["stream"])
+  assert.deepEqual(rules("pretty", "1,\n2,\n", asStream), [])
+  assert.deepEqual(layoutFailures("compact", "1", "1,\n", asStream).map((f) => f.check), [])
+  assert.deepEqual(layoutFailures("compact", "1", "1\n", asStream).map((f) => f.check), ["lines: compact"])
   assert.deepEqual(rules("pretty", '"\u2028"\n'), ["separators"])
   assert.deepEqual(rules("compact", "Tag (1)\n"), ["spacing"])
   assert.deepEqual(rules("compact", "{a: 1}\n"), ["spacing"])

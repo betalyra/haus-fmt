@@ -50,17 +50,26 @@ const cases: Case[] = [
 // The parser skips a byte order mark itself: the decoder must keep it.
 const decode = (bytes: Uint8Array) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
 
-/** NAME.options: a record `{ indent: 4, width: 40 }`, applied to every layout. */
+/** The options a case record gives: `indent` and `width` (numbers) and `stream` (`True` or `False`); unset ones are left out. */
+const givenOptions = (fields: ReadonlyMap<string, Value>): FormatOptions => {
+  const int = (k: string) => {
+    const v = fields.get(k)
+    return v?.kind === "number" ? { [k]: Number(v.text) } : {}
+  }
+  const stream = fields.get("stream")
+  if (stream !== undefined && !(stream.kind === "variant" && stream.args.length === 0 && (stream.tag === "True" || stream.tag === "False"))) {
+    throw new Error("stream: expected True or False")
+  }
+  return { ...int("indent"), ...int("width"), ...(stream === undefined ? {} : { stream: stream.tag === "True" }) }
+}
+
+/** NAME.options: a record `{ indent: 4, width: 40 }` or `{ stream: True }`, applied to every layout. */
 const optionsOf = (c: Case): FormatOptions => {
   const file = `${c.expected}.options`
   if (!existsSync(file)) return {}
   const [options] = parseAll(readFileSync(file, "utf8"))
   if (options?.kind !== "record") throw new Error(`${file}: expected a record`)
-  const int = (k: string) => {
-    const v = options.fields.get(k)
-    return v?.kind === "number" ? { [k]: Number(v.text) } : {}
-  }
-  return { ...int("indent"), ...int("width") }
+  return givenOptions(options.fields)
 }
 
 /** Reformat a document in `style`, keeping comments where the layout does. */
@@ -158,24 +167,24 @@ describe("format suite", () => {
   })
 })
 
-/** options.cases.haus: the pretty layout's indent and width, 0 and negative (spec §11). */
+/** options.cases.haus: the pretty layout's indent and width, 0 and negative, and the stream option (spec §11). */
 describe("format options", () => {
   const options = parseAll(readFileSync(join(FORMAT, "options.cases.haus"), "utf8")).map((v) => {
     if (v.kind !== "record") throw new Error("expected a record")
-    const f = (k: string) => v.fields.get(k)
-    const input = f("input")
-    const result = f("result")
-    const int = (k: string) => {
-      const n = f(k)
-      return n?.kind === "number" ? { [k]: Number(n.text) } : {}
-    }
+    const input = v.fields.get("input")
+    const result = v.fields.get("result")
     if (input?.kind !== "string" || result?.kind !== "variant") throw new Error("not a case")
     const ok = result.tag === "Ok" && result.args[0]?.kind === "string" ? result.args[0].value : undefined
-    return { input: input.value, options: { ...int("indent"), ...int("width") } as FormatOptions, ok, name: `${input.value} ${JSON.stringify({ ...int("indent"), ...int("width") })}` }
+    const options = givenOptions(v.fields)
+    return { input: input.value, options, ok, name: `${JSON.stringify(input.value)} ${JSON.stringify(options)}` }
   })
   it.each(options)("$name", ({ input, options, ok }) => {
     const out = () => run(input, options, "pretty")
     if (ok === undefined) expect(out).toThrow()
-    else expect(out()).toBe(ok)
+    else {
+      expect(out()).toBe(ok)
+      // The inputs have no comments: the writer of values gives the same text.
+      expect(format(parseAll(input), options)).toBe(ok)
+    }
   })
 })

@@ -8,6 +8,8 @@ roc/**/build/
 .claude/worktrees/
 # Rust build output
 rust/target/
+# Zig cache when zig runs from the repository root (zig/ has its own .gitignore)
+/.zig-cache/
 # Swift build output
 swift/.build/
 swift/.swiftpm/

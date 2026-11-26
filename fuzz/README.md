@@ -38,7 +38,7 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 | Step | |
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
-| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go, Swift, the JVM and Zig run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
+| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding with its keys written without `_`, or `err <line> <column> <code> <reason>` ("The line formats", below). The stream readers of Rust, Roc, TypeScript, Python, Go, Swift, the JVM and Zig run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
 | Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
@@ -70,6 +70,34 @@ A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`
 and prints those lines (with `--stream`: through its stream reader, chunk k
 of case i being `[1, 2, 3, 5, 8, 13, 64][(i + k) % 7]` bytes), plus an entry
 in `runners.ts`.
+
+**The line formats.** A runner is called `program [MODE …] DIR N` and prints
+exactly one line per case, in order, and nothing else on standard output:
+
+| Mode | A case that is accepted | A case that is rejected |
+|---|---|---|
+| (none), `--stream` | `ok ` and a JSON array with one element per top-level value, each in the suite's JSON encoding of `test-suite/README.md` but with its keys written without `_`: `{"num": "19.90"}`, `{"bytes": "0b34"}`, `{"rec": {…}}`, `{"tag": "Some", "args": […]}` (`{"tag": "None"}` without arguments) | `err LINE COLUMN CODE REASON` |
+| `--canonical` | `ok ` and a JSON array of strings, the canonical form (spec §12) of each top-level value | `err LINE COLUMN CODE REASON` |
+| `--format STYLE --indent N --width N [--stream]` | `ok ` and the formatted text as a JSON string; with `--stream`, formatted as a stream (spec §11: a comma after a single item too) | `err LINE COLUMN CODE REASON` |
+| `--write STYLE --indent N --width N [--stream]` | `ok ` and a JSON object: `"values"`, the array of each value written alone, and `"file"` (the whole file; with `--stream`, written as a stream, a comma after a single value too) or `"stream"` (a writer that always writes a stream: every value with a comma, `--stream` or not), or `null` where the binding has no such writer | `err LINE COLUMN CODE REASON` (an encoding error `0 0`) |
+
+`LINE` and `COLUMN` are the error's place (spec §8), 1-based; `0 0` where
+the binding gives none, as for `invalid-utf8`, whose place is informative
+(spec §8) and never compared. `CODE` is the code of spec §17, and `REASON`
+the rest of the line, free text. JSON key order and whitespace don't
+matter: lines are compared as parsed JSON. The parser and stream runners
+are registered in `runners` and `canonicalRunners` of
+[`src/runners.ts`](src/runners.ts); the formatter runners (`--format`) in
+`FORMATTERS`, and the value writers (`--write`) in `WRITERS`, of
+[`src/format.ts`](src/format.ts).
+
+`--stream` with `--format` or `--write` is the stream option of spec §11; it
+comes after the mode's other arguments, before `DIR N` (a runner may take it
+anywhere before them; `--stream` alone is still the stream reader). It
+changes only the file: `"values"` are each value alone, never followed by a
+comma, and the key stays `"file"`. A runner that takes it says so with
+`stream: true` in its entry of `FORMATTERS` and `WRITERS`: a batch formatted
+as streams runs Lean, TypeScript and those runners only.
 
 ## Found so far
 
@@ -387,6 +415,13 @@ inputs come from the parser fuzzer's generator or are files of the suites,
 some get whitespace and comments inserted at random places (inside tokens
 that mostly makes them invalid), and a few are mutated. Most batches use the
 default options; some use another indentation and width (down to 0 and 0).
+Every fourth batch, the second first, is formatted and written as streams
+(`--stream`, spec §11: a comma after a single item too), by Lean, TypeScript
+and the runners that take the flag: all but Roc (its writers always write a stream). Every check below
+holds for them too, a single item then with its comma. To add a runner, make
+its `--format` and `--write` take `--stream` after their other arguments and
+set `stream: true` in its entry of `FORMATTERS` and `WRITERS` in
+[`src/format.ts`](src/format.ts); until then it sits those batches out.
 
 For every input, and each layout:
 
@@ -413,11 +448,11 @@ checks.
 
 | Writer | Each value | The file (one value alone, more each with a comma) or a stream (a comma after every value) |
 |---|---|---|
-| Lean (the reference) | `haus-ref --write-batch LAYOUT DIR N`: `Layout.compact`, `minimised`, `pretty o [] 0` | the file: `compactAll`, `minimisedAll`, `prettyAll o` |
-| TypeScript | `stringify(v, { style, indent, width })`, in this process | the file: `format(values, { style, indent, width })` |
-| Rust | `haus::to_string`, `to_string_minimised` (no pretty writer from values) | a stream: `haus::to_string_all` (compact) |
+| Lean (the reference) | `haus-ref --write-batch LAYOUT [--stream] DIR N`: `Layout.compact`, `minimised`, `pretty o [] 0` | the file: `compactAll`, `minimisedAll`, `prettyAll o` (with `--stream`, `stream` set) |
+| TypeScript | `stringify(v, { style, indent, width })`, in this process | the file: `format(values, { style, indent, width, stream })` |
+| Rust | `haus::to_string`, `to_string_minimised` (no pretty writer from values) | a stream: `haus::to_string_all` (compact), `--stream` or not |
 | Roc | `Encode.to_str`, `Encode.minimised` (no pretty writer from values) | a stream: `Encode.stream`, `Encode.stream_minimised` |
-| Go | `haus.FormatValue` in every layout, with every option | the file: `haus.FormatValues` |
+| Go | `haus.FormatValue` in every layout, with every option | the file: `haus.FormatValues` (`FormatOptions.Stream` with `--stream`) |
 | Swift | `stringify` in every layout | the file: `stringifyAll` |
 | JVM | `Haus.write` in every layout, every option | the file: `Haus.writeAll` |
 | Python | `haus.stringify` in every layout, every option (0 included) | the file: `haus.stringify_all` |
@@ -429,11 +464,11 @@ the check, what was seen, and every formatter's output in every layout.
 
 | Formatter / writer | Runner (`DIR N`, as for the parsers; prints `ok` and the output as a JSON string, or `err …`) |
 |---|---|
-| TypeScript | in this process: `parseDocument`, `format(values, { style, indent, width, source, comments })`, `stringify` |
-| Lean | `haus-ref --write-batch LAYOUT DIR N` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `ok {"values": […], "file": …}` |
-| Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `ok {"values": […], "stream": …}` |
+| TypeScript | in this process: `parseDocument`, `format(values, { style, indent, width, stream, source, comments })`, `stringify` |
+| Lean | `haus-ref --format-batch STYLE INDENT WIDTH [--stream] DIR N`; `haus-ref --write-batch LAYOUT [--stream] DIR N` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `ok {"values": […], "file": …}` |
+| Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N [--stream]`: `haus::format`; `--write STYLE [--stream]`: `ok {"values": […], "stream": …}` |
 | Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `ok {"values": […], "stream": …}` |
-| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
+| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N [--stream]`: `haus.Format`; `--write STYLE --indent N --width N [--stream]`: `ok {"values": […], "file": …}`, every option, 0 included |
 | Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 | JVM | [`jvm-runner`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java) `--format STYLE --indent N --width N`: `Haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) `--format STYLE --indent N --width N`: `haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |

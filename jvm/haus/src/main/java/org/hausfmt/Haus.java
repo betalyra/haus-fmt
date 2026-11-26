@@ -165,13 +165,14 @@ public final class Haus {
    *     key with an unpaired surrogate ({@code cannot-encode}); the error's path says where
    */
   public static String write(Value value, FormatOptions options) {
-    return write(Collections.singletonList(value), options, false);
+    return write(Collections.singletonList(value), options.withStream(false), false);
   }
 
   /**
    * Writes values as a file (spec §6): one value alone, two or more as a stream with a comma after
-   * each. See {@link #write(Value, FormatOptions)}; an error's path starts with the value's index,
-   * {@code $[3]}, also when there is one value ({@code $[0]}, spec §11).
+   * each; with {@link FormatOptions#stream()}, a single value has a comma after it too. See {@link
+   * #write(Value, FormatOptions)}; an error's path starts with the value's index, {@code $[3]},
+   * also when there is one value ({@code $[0]}, spec §11).
    */
   public static String writeAll(List<Value> values, FormatOptions options) {
     return write(values, options, true);
@@ -182,7 +183,8 @@ public final class Haus {
     if (options.layout() == Layout.PRETTY) {
       return Printer.print(TreeBuilder.file(values, options.limits(), indexed), options);
     }
-    return LineWriter.file(values, options.limits(), options.layout() == Layout.MINIMISED, indexed);
+    return LineWriter.file(
+        values, options.limits(), options.layout() == Layout.MINIMISED, options.stream(), indexed);
   }
 
   /**

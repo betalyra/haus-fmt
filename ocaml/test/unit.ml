@@ -111,6 +111,16 @@ let () =
     (Layout.write Layout.Pretty v = "{\n  b: 255,\n  a: x\"0aff\",\n  s: \"\"\"\n    x\n    y\n    \"\"\",\n  p: P(1, 2),\n}");
   ok "write_all stream" (Layout.write_all Layout.Compact [ n; n ] = "1,\n1,\n");
   ok "write_all empty" (Layout.write_all Layout.Pretty [] = "");
+  (* the stream option (spec §11): a comma after a single value too *)
+  let stream = Layout.options ~stream:true () in
+  ok "write_all one value" (Layout.write_all Layout.Compact [ n ] = "1\n");
+  List.iter
+    (fun (style, name) ->
+      ok ("write_all stream, one value, " ^ name) (Layout.write_all ~options:stream style [ n ] = "1,\n");
+      ok ("write_all stream, none, " ^ name) (Layout.write_all ~options:stream style [] = "");
+      ok ("format stream, one item, " ^ name) (Layout.format ~options:stream style "1 // c" = (if style = Layout.Pretty then "1, // c\n" else "1,\n")))
+    [ (Layout.Pretty, "pretty"); (Layout.Compact, "compact"); (Layout.Minimised, "minimised") ];
+  ok "hex limit 0 for a number limit of 0" (Limits.hex_digits (Limits.make ~max_number_length:0 ()) = 0);
 
   Printf.printf "unit: %d passed, %d failed\n" !passed !failures;
   if !failures > 0 then exit 1

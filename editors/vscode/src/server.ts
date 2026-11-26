@@ -506,6 +506,23 @@ connection.onCodeAction(({ textDocument, context }): CodeAction[] => {
 
 // ── formatting ───────────────────────────────────────────────
 
+/**
+ * Whether the data file's schema (the `Root` of the `.schema.haus` file next
+ * to it) is a `Stream`: then it is formatted as a stream, with a comma after
+ * a single item too (spec §11). False without a schema, or one that doesn't
+ * compile (its errors are shown as diagnostics).
+ */
+function isStream(document: TextDocument): boolean {
+  const link = schemaLink(document)
+  const text = link && schemaText(link.path)
+  if (!link || text === undefined) return false
+  try {
+    return compileSchema(text, link.path).definition(link.type)?.template.stream === true
+  } catch {
+    return false
+  }
+}
+
 connection.onDocumentFormatting(({ textDocument }): TextEdit[] => {
   const doc = documents.get(textDocument.uri)
   if (!doc || doc.languageId === "haus-schema") return []
@@ -516,7 +533,7 @@ connection.onDocumentFormatting(({ textDocument }): TextEdit[] => {
   } catch {
     return [] // syntax errors are already shown as diagnostics
   }
-  const formatted = format(state.values, { source: text, comments: state.comments })
+  const formatted = format(state.values, { source: text, comments: state.comments, stream: isStream(doc) })
   if (formatted === text) return []
   return [{ range: { start: doc.positionAt(0), end: doc.positionAt(text.length) }, newText: formatted }]
 })
@@ -528,7 +545,7 @@ connection.onRequest("haus/print", ({ uri, style }: { uri: string; style: "prett
   const text = doc.getText()
   try {
     const { values, comments } = parseDocument(text)
-    return format(values, { style, source: text, comments })
+    return format(values, { style, source: text, comments, stream: isStream(doc) })
   } catch {
     return null
   }

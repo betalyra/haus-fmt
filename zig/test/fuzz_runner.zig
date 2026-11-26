@@ -3,8 +3,10 @@
 //!   zig-runner DIR N                 parse each DIR/00000.haus …: `ok <values>` or `err LINE COLUMN CODE REASON`
 //!   zig-runner --stream DIR N        the same through the stream reader, in chunks of 1, 2, 3, 5, 8, 13, 64 bytes
 //!   zig-runner --canonical DIR N     `ok ["<canonical form>", …]`
-//!   zig-runner --format STYLE --indent N --width N DIR N   `ok "<formatted text>"` or `err REASON`
-//!   zig-runner --write STYLE --indent N --width N DIR N    `ok {"values": […], "file": "…"}` or `err REASON`
+//!   zig-runner --format STYLE --indent N --width N DIR N   `ok "<formatted text>"` or `err LINE COLUMN CODE REASON`
+//!   zig-runner --write STYLE --indent N --width N DIR N    `ok {"values": […], "file": "…"}` or `err LINE COLUMN CODE REASON`
+//!   (with `--stream` too: formatted and written with the stream option of spec §11; `"file"` stays the key)
+//!   A writer's error has no place in text: `err 0 0 CODE REASON`.
 //!   zig-runner --schema FILE | --schema-check FILE | --time FILE | --json MODE FILE   (fuzz_schema.zig)
 //!
 //! Values are printed in the suite's JSON encoding with the keys the
@@ -137,11 +139,7 @@ fn runCase(arena: Allocator, gpa: Allocator, out: *std.Io.Writer, mode: Mode, by
             var o = options;
             o.write.diagnostic = &d;
             const text = haus.format(arena, bytes, o) catch |e| switch (e) {
-                error.Haus => {
-                    try out.print("err {s} ", .{d.code.name()});
-                    try reason(out, &d);
-                    return out.writeByte('\n');
-                },
+                error.Haus => return errLine(out, &d),
                 else => return e,
             };
             try out.writeAll("ok ");
@@ -152,11 +150,7 @@ fn runCase(arena: Allocator, gpa: Allocator, out: *std.Io.Writer, mode: Mode, by
             var o = options;
             o.write.diagnostic = &d;
             const vals = if (haus.parseAll(arena, bytes, .{ .diagnostic = &d })) |p| p.value else |e| switch (e) {
-                error.Haus => {
-                    try out.print("err {s} ", .{d.code.name()});
-                    try reason(out, &d);
-                    return out.writeByte('\n');
-                },
+                error.Haus => return errLine(out, &d),
                 else => return e,
             };
             var line: std.Io.Writer.Allocating = .init(arena);
@@ -164,23 +158,18 @@ fn runCase(arena: Allocator, gpa: Allocator, out: *std.Io.Writer, mode: Mode, by
             try lw.writeAll("ok {\"values\":[");
             for (vals, 0..) |val, i| {
                 if (i > 0) try lw.writeByte(',');
+                // A writer's error has no place in text: `0 0`.
                 const text = haus.stringify(arena, val, o) catch |e| switch (e) {
-                    error.Haus => {
-                        try out.print("err {s} ", .{d.code.name()});
-                        try reason(out, &d);
-                        return out.writeByte('\n');
-                    },
+                    error.Haus => return errLine(out, &d),
                     else => return e,
                 };
                 try jsonString(lw, text);
             }
+            // `"file"` is `stringifyAll`; with `--stream`, with the stream
+            // option (spec §11): a comma after every value, a single one too.
             try lw.writeAll("],\"file\":");
             const file = haus.stringifyAll(arena, vals, o) catch |e| switch (e) {
-                error.Haus => {
-                    try out.print("err {s} ", .{d.code.name()});
-                    try reason(out, &d);
-                    return out.writeByte('\n');
-                },
+                error.Haus => return errLine(out, &d),
                 else => return e,
             };
             try jsonString(lw, file);
@@ -202,12 +191,13 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 4 and std.mem.eql(u8, args[1], "--json")) return fuzz_schema.runJson(io, gpa, args[2], args[3]);
     var mode: Mode = .parse;
     var options: haus.FormatOptions = .{};
+    var stream = false;
     var positional: std.ArrayList([]const u8) = .empty;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
         if (std.mem.eql(u8, a, "--stream")) {
-            mode = .stream;
+            stream = true;
         } else if (std.mem.eql(u8, a, "--canonical")) {
             mode = .canonical;
         } else if (std.mem.eql(u8, a, "--format") or std.mem.eql(u8, a, "--write")) {
@@ -222,8 +212,15 @@ pub fn main(init: std.process.Init) !void {
             options.width = try std.fmt.parseInt(u32, args[i], 10);
         } else try positional.append(init.arena.allocator(), a);
     }
+    // `--stream` alone reads through the stream reader; with `--format` or
+    // `--write` it is the formatter's and the writer's stream option.
+    if (stream) switch (mode) {
+        .format, .write => options.stream = true,
+        .parse => mode = .stream,
+        else => {},
+    };
     if (positional.items.len != 2) {
-        std.debug.print("usage: zig-runner [--stream | --canonical | --format STYLE | --write STYLE] [--indent N] [--width N] DIR N\n", .{});
+        std.debug.print("usage: zig-runner [--stream] [--canonical | --format STYLE | --write STYLE] [--indent N] [--width N] DIR N\n", .{});
         std.process.exit(2);
     }
     const dir_path = positional.items[0];

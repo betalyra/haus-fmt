@@ -10,7 +10,9 @@
 ## goes through the value writer, `Encode.to_str` or `Encode.minimised`, and
 ## all of them through the stream writer, `Encode.stream` or
 ## `Encode.stream_minimised`: `ok {"values": [<line>, …], "stream": …}`, as
-## JSON strings; an encoding error is `err 0 0 <code> <reason>`.
+## JSON strings; an encoding error is `err 0 0 <code> <reason>`. `--write
+## STYLE --stream` (the file is a stream, spec §11) prints the same: the
+## stream writers put a comma after every value, a single one too.
 app [main!] {
 	haus: "../package/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t.tar.zst",
@@ -31,6 +33,9 @@ main! = |args| {
 		["--canonical", d, count] => (Canonical, d, U64.from_str(count) ?? 0)
 		["--write", "compact", d, count] => (WriteCompact, d, U64.from_str(count) ?? 0)
 		["--write", "minimised", d, count] => (WriteMinimised, d, U64.from_str(count) ?? 0)
+		# The file is a stream (spec §11): the stream writers already put a comma after every value.
+		["--write", "compact", "--stream", d, count] => (WriteCompact, d, U64.from_str(count) ?? 0)
+		["--write", "minimised", "--stream", d, count] => (WriteMinimised, d, U64.from_str(count) ?? 0)
 		[d, count] => (Parse, d, U64.from_str(count) ?? 0)
 		_ => (Parse, "", 0)
 	}

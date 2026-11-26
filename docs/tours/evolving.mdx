@@ -41,6 +41,18 @@ type Root = Array Person
 ]
 `,
 `
+[
+  {
+    name: "Ada",
+    contact: Email("ada@example.org"),
+  },
+  {
+    name: "Alan",
+    contact: Teams { tenant: "bletchley", user: "alan" },
+  },
+]
+`,
+`
 type Contact = <
   | Email String
   | Slack { workspace: String, user: String }
@@ -122,15 +134,27 @@ The old app doesn't know `Teams`. It doesn't crash: it reads it as **Unknown**, 
 
 </Step>
 
-<Step lang="haus-schema" label="team.schema.haus" code={steps[3]}>
+<Step label="team.haus" code={steps[3]}>
 
-### Catch the schema up
+### The old app saves the file
 
-Add the new tag, and the new field as optional. Both are **minor** changes: every file that was valid stays valid.
+Ada changes her email in the old app, and it writes the team back. It decoded the file with its schema, so what it writes is what that schema lists: Ada's `timezone` is **gone**. Alan's `Teams` contact survives, because an Unknown value is written back as it was read.
+
+A program that edits a file it doesn't fully know should change the values parsed without a schema, not the decoded ones, or keep the parts it doesn't own as `Any`. Where losing a field is worse than failing, a `closed` record makes an unknown field an error instead.
 
 </Step>
 
 <Step lang="haus-schema" label="team.schema.haus" code={steps[4]}>
+
+### Catch the schema up
+
+Add the new tag, and the new field as optional. Both are **minor** changes: a file that uses only the fields and tags the old schema listed reads the same under the new one.
+
+A field the schema doesn't list is kept free for its later versions. The server used `timezone` before the schema had it; that worked only because the schema then gave it the type the server wrote. Had it written `timezone: 2`, the old schema would have accepted that file, and the new one would reject it.
+
+</Step>
+
+<Step lang="haus-schema" label="team.schema.haus" code={steps[5]}>
 
 ### Some cases must not be guessed
 
@@ -140,7 +164,7 @@ The price: adding `Sick` later is a breaking change. That's the point.
 
 </Step>
 
-<Step lang="haus-schema" label="team.schema.haus" code={steps[5]}>
+<Step lang="haus-schema" label="team.schema.haus" code={steps[6]}>
 
 ### Renaming without breaking
 
@@ -148,13 +172,13 @@ Renaming `name` would break every reader. Instead, add `displayName` next to it,
 
 </Step>
 
-<Step lang="haus-schema" label="team.schema.haus" code={steps[6]}>
+<Step lang="haus-schema" label="team.schema.haus" code={steps[7]}>
 
 ### Say what's going away
 
 `@deprecated("use displayName")` tells everyone while they move. Editors mark `name` with a hint wherever the data uses it, and generated code carries the language's marker: `#[deprecated]` in Rust, `@deprecated` in TypeScript.
 
-Reading and writing don't change: an attribute never changes what a schema accepts.
+Reading and writing don't change: an attribute never changes what a schema accepts, so adding one is a **patch** change.
 
 </Step>
 
@@ -164,12 +188,14 @@ Reading and writing don't change: an attribute never changes what a schema accep
 
 | Change | Kind | Older readers |
 |---|---|---|
-| New optional field | minor | ignore it |
+| New optional field in an open record | minor | ignore it |
 | New tag in an open variant | minor | read it as Unknown |
 | New type | minor | don't see it |
 | Rename or remove a field or tag | major | break |
 | Change a field's type | major | break |
 | Make a type `closed` | major | break on anything new |
-| Mark a type, field or tag `@deprecated` | minor | read it as before |
+| Mark a type, field or tag `@deprecated` | patch | read it as before |
+
+An older reader that writes the data back drops the new fields: it writes what its schema lists. Unknown tags are written back as they were read.
 
 Next: [Logs and streams](/docs/tours/streams).

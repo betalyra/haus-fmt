@@ -29,7 +29,7 @@ struct PositionsSuiteTests {
     }()
 
     @Test func hasCases() {
-        #expect(Self.cases.count == 77)
+        #expect(Self.cases.count == 99)
         #expect(Self.cases.contains { $0.document })
     }
 

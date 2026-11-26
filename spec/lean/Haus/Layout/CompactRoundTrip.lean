@@ -173,6 +173,20 @@ theorem file_lines (write : Value → Text) :
   | v :: w :: ws, h => by
     simpa [lines] using File.values [] [] _ _ (.inl rfl) .nil (fileItems_lines write v (w :: ws) h)
 
+/-- Values written as a stream, each with `write` and a comma, are a file with exactly those values. -/
+theorem file_streamLines (write : Value → Text) :
+    ∀ {vs : List Value}, (∀ v ∈ vs, Val L L.maxDepth (write v) v) → File L (streamLines write vs) vs
+  | [], _ => by simpa [streamLines] using File.empty (L := L) [] [] (.inl rfl) (.ws [] .nil)
+  | v :: ws, h => by
+    simpa [streamLines] using File.values [] [] _ _ (.inl rfl) .nil (fileItems_lines write v ws h)
+
+/-- A file or a stream, as `linesAs` writes it, is a file with exactly those values. -/
+theorem file_linesAs (stream : Bool) (write : Value → Text) {vs : List Value}
+    (h : ∀ v ∈ vs, Val L L.maxDepth (write v) v) : File L (linesAs stream write vs) vs := by
+  cases stream
+  · exact file_lines write h
+  · exact file_streamLines write h
+
 /-- A value written alone, with no line break after it, is a file with that value. -/
 theorem file_single {t : Text} {v : Value} (h : Val L L.maxDepth t v) : File L t [v] := by
   simpa using File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ [] _ h (.ws [] .nil))
@@ -188,6 +202,12 @@ theorem parse_lines (sp : Spacing) (hsp : sp.Blank) {input : Text} {vs : List Va
   exact (parse_correct L _ _).mpr (file_lines _ fun v hv => by
     obtain ⟨s, hs⟩ := hvs v hv; exact hs.line sp hsp)
 
+theorem parse_linesAs (stream : Bool) (sp : Spacing) (hsp : sp.Blank) {input : Text} {vs : List Value}
+    (h : Parser.parse L input = .ok vs) : Parser.parse L (linesAs stream (line sp) vs) = .ok vs := by
+  have hvs := File.vals ((parse_correct L input vs).mp h)
+  exact (parse_correct L _ _).mpr (file_linesAs stream _ fun v hv => by
+    obtain ⟨s, hs⟩ := hvs v hv; exact hs.line sp hsp)
+
 /-- **L3. The compact layout of a parsed value parses back to it,** fields in the same order. -/
 theorem parse_compact {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) {v : Value}
     (hv : v ∈ vs) : Parser.parse L (compact v) = .ok [v] :=
@@ -198,15 +218,21 @@ theorem parse_minimised {input : Text} {vs : List Value} (h : Parser.parse L inp
     (hv : v ∈ vs) : Parser.parse L (minimised v) = .ok [v] :=
   parse_line _ Spacing.tight_blank h hv
 
-/-- **L3. A parsed file or stream in the compact layout parses back** to the same values, in order. -/
-theorem parse_compactAll {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) :
-    Parser.parse L (compactAll vs) = .ok vs :=
-  parse_lines _ Spacing.spaced_blank h
+/--
+**L3. A parsed file or stream in the compact layout parses back** to the same
+values, in order, also written as a stream (a comma after a single value too).
+-/
+theorem parse_compactAll {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
+    (stream : Bool := false) : Parser.parse L (compactAll vs stream) = .ok vs :=
+  parse_linesAs stream _ Spacing.spaced_blank h
 
-/-- **L3. A parsed file or stream in the minimised layout parses back** to the same values, in order. -/
-theorem parse_minimisedAll {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) :
-    Parser.parse L (minimisedAll vs) = .ok vs :=
-  parse_lines _ Spacing.tight_blank h
+/--
+**L3. A parsed file or stream in the minimised layout parses back** to the
+same values, in order, also written as a stream.
+-/
+theorem parse_minimisedAll {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
+    (stream : Bool := false) : Parser.parse L (minimisedAll vs stream) = .ok vs :=
+  parse_linesAs stream _ Spacing.tight_blank h
 
 /-! ## One line per value -/
 
@@ -433,14 +459,40 @@ theorem lines_split (sp : Spacing) (hsp : sp.Blank) {input : Text} {vs : List Va
     · obtain ⟨he, hm⟩ := mem_zip_map hp
       rw [he]; exact (parse_correct L _ _).mpr (file_comma (hval _ hm).1)
 
+/-- Values written as a stream (a comma after a single value too) split by lines the same way. -/
+theorem streamLines_split (sp : Spacing) (hsp : sp.Blank) {input : Text} {vs : List Value}
+    (h : Parser.parse L input = .ok vs) :
+    ∃ ls, Pretty.splitLF (streamLines (line sp) vs) = ls ++ [[]] ∧ LinesOf L ls vs := by
+  have hvs := File.vals ((parse_correct L input vs).mp h)
+  have hval : ∀ v ∈ vs, Val L L.maxDepth (line sp v) v ∧ '\n' ∉ line sp v := fun v hv => by
+    obtain ⟨s, hs⟩ := hvs v hv; exact ⟨hs.line sp hsp, hs.line_noLF sp hsp⟩
+  refine ⟨vs.map fun x => line sp x ++ [','], ?_, by simp, fun p hp => ?_⟩
+  · have := Pretty.splitLF_lines [] (ls := vs.map fun x => line sp x ++ [','])
+      (by
+        simp only [List.mem_map]
+        rintro l ⟨x, hx, rfl⟩
+        simpa using And.intro (hval x hx).2 (by decide : '\n' ∉ [',']))
+    simpa [streamLines, List.flatMap_map, Pretty.splitLF] using this
+  · obtain ⟨he, hm⟩ := mem_zip_map hp
+    rw [he]; exact (parse_correct L _ _).mpr (file_comma (hval _ hm).1)
+
+theorem linesAs_split (stream : Bool) (sp : Spacing) (hsp : sp.Blank) {input : Text} {vs : List Value}
+    (h : Parser.parse L input = .ok vs) :
+    ∃ ls, Pretty.splitLF (linesAs stream (line sp) vs) = ls ++ [[]] ∧ LinesOf L ls vs := by
+  cases stream
+  · exact lines_split sp hsp h
+  · exact streamLines_split sp hsp h
+
 /-- **L3. A compact stream splits by lines,** one value per line, each line parsing to its value. -/
-theorem compactAll_split {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) :
-    ∃ ls, Pretty.splitLF (compactAll vs) = ls ++ [[]] ∧ LinesOf L ls vs :=
-  lines_split _ Spacing.spaced_blank h
+theorem compactAll_split {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
+    (stream : Bool := false) :
+    ∃ ls, Pretty.splitLF (compactAll vs stream) = ls ++ [[]] ∧ LinesOf L ls vs :=
+  linesAs_split stream _ Spacing.spaced_blank h
 
 /-- **L3. A minimised stream splits by lines,** one value per line, each line parsing to its value. -/
-theorem minimisedAll_split {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) :
-    ∃ ls, Pretty.splitLF (minimisedAll vs) = ls ++ [[]] ∧ LinesOf L ls vs :=
-  lines_split _ Spacing.tight_blank h
+theorem minimisedAll_split {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
+    (stream : Bool := false) :
+    ∃ ls, Pretty.splitLF (minimisedAll vs stream) = ls ++ [[]] ∧ LinesOf L ls vs :=
+  linesAs_split stream _ Spacing.tight_blank h
 
 end Haus.Layout

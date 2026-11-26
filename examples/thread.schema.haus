@@ -5,8 +5,8 @@
 // variant payload. Here it's `replies: Array Comment`, so each level of
 // recursion consumes one level of the input, and decoding stays linear.
 //
-//   type Loop = Loop            // rejected: unguarded, never consumes input
-//   type Wrapped = Maybe Wrapped // rejected for encoding: applies itself to the same value
+//   type Loop = Loop             // rejected: unguarded, never consumes input
+//   type Wrapped = Maybe Wrapped // fine: guarded by Some's payload (None, Some(None), …)
 
 import std/time (Instant)
 

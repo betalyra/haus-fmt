@@ -44,7 +44,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 *Syntax.* The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
 
-**Reported at:** Where the decoder says, at the first byte that isn't UTF-8; nowhere when it doesn't say. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives. An unpaired surrogate in a string of the language: at it, one column.
+**Reported at:** Informative (§8): an implementation SHOULD give the first byte of the maximal ill-formed subsequence (Unicode §3.9), and MAY give no place. Text is checked before it is parsed (§4), a stream's chunk by chunk as it arrives; a `Stream` checked item by item, in the item it is in (§14). An unpaired surrogate in a string of the language: at it, one column.
 
 For example: the bytes 22 FF 22: a quote, a byte that never starts a character, a quote.
 
@@ -162,9 +162,9 @@ Heartbeat
 
 ## expected-key
 
-*Syntax.* Something that can't be a record key where a key should be, such as a number or a comma.
+*Syntax.* Something that can't be a record key where a key should be, such as a number or a comma. The end of the input where a key should be (`{`, `{ a: 1,`) is `unclosed-bracket`.
 
-**Reported at:** What stands where the key should be: the token, or the end of the input.
+**Reported at:** What stands where the key should be: the token.
 
 ```haus
 { 1: 1 }
@@ -371,7 +371,7 @@ For example: // access⟨U+202E⟩ denied: a comment with a raw right-to-left ov
 
 ## unterminated-bytes
 
-*Syntax.* A byte string `x"…` has no closing `"`.
+*Syntax.* A byte string `x"…` has no closing `"`, also when the input ends after a lone hex digit (`x"a`).
 
 **Reported at:** The `x` of `x"`.
 
@@ -395,7 +395,7 @@ x"zz"
 
 ## bytes-odd-digits
 
-*Syntax.* A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`).
+*Syntax.* A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`). The end of the input after it is `unterminated-bytes`.
 
 **Reported at:** The lone hex digit.
 
@@ -417,7 +417,7 @@ For example: 1,⟨CR⟩2: a carriage return on its own.
 
 ## unterminated-comment
 
-*Syntax.* A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`.
+*Syntax.* A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`. A comment is read left to right: a control or bidi character or a lone carriage return in an unclosed comment is reported first, at its place (§4).
 
 **Reported at:** The outermost `/*`.
 
@@ -475,7 +475,7 @@ For example: a number with 1001 digits.
 
 *Limits.* A string or byte string has more characters than the limit (default 16 Mi).
 
-**Reported at:** The opening quote.
+**Reported at:** The opening quote; for a byte string, its `x` (§8).
 
 For example: a string of 16,777,217 characters.
 
@@ -937,7 +937,7 @@ For example: a package.haus with { name: "@Acme/Orders", version: "1" }.
 
 ## package-version
 
-*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
+*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (packages.md §4), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
 
 **Reported at:** The import that reaches the package; the message names both versions. *(Informative, §8.)*
 
@@ -1202,9 +1202,9 @@ For example: Money(1, US) decoded with the codec of the profile @haus-fmt/money/
 
 ## cannot-encode
 
-*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
+*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. A decoded `Secret` given to a writer that doesn't apply its schema (haus or JSON from the binding's values, the canonical form, the hash; §15, "Hiding").
 
-**Reported at:** The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type. Building a value in code: informative (§11).
+**Reported at:** The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type; for a secret, the secret. Building a value in code: informative (§11).
 
 For example: encode(h.Int, 5): Int is a bigint, 5 is a number.
 
@@ -1326,7 +1326,7 @@ Read as self-describing JSON:
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11), a tag with an unpaired surrogate included.
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). The tag rule is checked first: a tag with an unpaired surrogate, or one that isn't UTF-8 in a binding whose strings are bytes, is this error, not `cannot-encode`.
 
 **Reported at:** The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
 
@@ -1459,7 +1459,7 @@ Gren
 
 ## missing-codec
 
-*Hints and warnings.* A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
+*Hints and warnings.* A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (packages.md §7). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
 
 **Reported at:** Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
 
@@ -1469,9 +1469,9 @@ For example: a schema with `import @haus-fmt/money (Money)`, compiled without th
 
 ## unused-codec
 
-*Hints and warnings.* A warning: a codec is set for an id that no type has (§13.4): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
+*Hints and warnings.* A warning: a codec is set for an id that no type has (packages.md §7): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged.
 
-**Reported at:** Nowhere: it is about the codecs the application set, reported once per id.
+**Reported at:** Nowhere: it is about the codecs the application set, reported once per id, where the binding learns which codecs are set or on request, through a function of the binding's.
 
 For example: a codec set for `@haus-fmt/money@2#Money`, with a schema that imports `@haus-fmt/money@1`.
 

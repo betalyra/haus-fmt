@@ -24,11 +24,14 @@ final class LineWriter extends WriteCheck {
     this.cutAt = cutAt;
   }
 
-  /** Values as a file in the compact or minimised layout; {@code indexed}: errors at {@code $[i]}. */
-  static String file(List<Value> values, Limits lim, boolean minimised, boolean indexed) {
+  /**
+   * Values as a file in the compact or minimised layout; {@code told}: a stream, so a comma after
+   * a single value too; {@code indexed}: errors at {@code $[i]}.
+   */
+  static String file(List<Value> values, Limits lim, boolean minimised, boolean told, boolean indexed) {
     StringBuilder b = new StringBuilder();
     LineWriter w = new LineWriter(b, lim, true, minimised);
-    boolean stream = values.size() > 1;
+    boolean stream = told || values.size() > 1;
     for (int i = 0; i < values.size(); i++) {
       w.start(i, indexed);
       w.value(values.get(i), 0);

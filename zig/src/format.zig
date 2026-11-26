@@ -252,6 +252,6 @@ pub fn format(gpa: Allocator, text: []const u8, options: w.FormatOptions) Error!
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var writer = w.Writer{ .gpa = gpa, .out = &out, .indent = options.indent, .width = options.width };
-    try writer.file(top, options.layout);
+    try writer.file(top, options.layout, options.stream);
     return out.toOwnedSlice(gpa);
 }

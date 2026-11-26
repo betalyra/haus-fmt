@@ -438,6 +438,10 @@ test "values built in code are checked" {
     try std.testing.expectEqual(Code.@"invalid-number", d.code);
     try std.testing.expectError(error.Haus, canonical(gpa, Value.tag("lower"), .{ .diagnostic = &d }));
     try std.testing.expectEqual(Code.@"invalid-tag", d.code);
+    // The tag rule first: a tag that isn't UTF-8 is `invalid-tag`, not
+    // `cannot-encode` (spec §11).
+    try std.testing.expectError(error.Haus, canonical(gpa, Value.tag("A\xff"), .{ .diagnostic = &d }));
+    try std.testing.expectEqual(Code.@"invalid-tag", d.code);
     try std.testing.expectError(error.Haus, canonical(gpa, .{ .string = "\xff" }, .{ .diagnostic = &d }));
     try std.testing.expectEqual(Code.@"cannot-encode", d.code);
     const dup = [_]Field{ .{ .key = "a", .value = .{ .number = "1" } }, .{ .key = "a", .value = .{ .number = "2" } } };

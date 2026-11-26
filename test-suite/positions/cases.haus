@@ -53,6 +53,8 @@
 { text: "\"\"\"\n  a\\q\n  \"\"\"", code: "invalid-escape", line: 2, column: 4 },
 { text: "\"\"\"\n  a\n b\n  \"\"\"", code: "block-string-indent", line: 3, column: 1 },
 { text: "\"\"\"\n  a\n  x\"\"\"", code: "block-string-closing", line: 3, column: 4 },
+// The closing quotes indented with a tab, a line indented with spaces: it doesn't start with the indent.
+{ text: "\"\"\"\n  a\n\t\"\"\"", code: "block-string-indent", line: 2, column: 1 },
 
 // ── where each error is (spec §8, errors.md "Reported at") ──
 // Something that isn't closed: at its opening.
@@ -62,6 +64,12 @@
 { text: "[ \"abc", code: "unterminated-string", line: 1, column: 3 },
 { text: "[ x\"ab", code: "unterminated-bytes", line: 1, column: 3 },
 { text: "[ \"\"\"\n  a", code: "unterminated-block-string", line: 1, column: 3 },
+// The end inside `{`, where a key would come: the bracket isn't closed.
+{ text: "{", code: "unclosed-bracket", line: 1, column: 1 },
+{ text: "{ a: 1,", code: "unclosed-bracket", line: 1, column: 1 },
+// The end of the input after a byte's first hex digit: the byte string isn't closed, at its `x`.
+{ text: "x\"a", code: "unterminated-bytes", line: 1, column: 1 },
+{ text: "x\"0", code: "unterminated-bytes", line: 1, column: 1 },
 // A block string's opening `"""` with nothing after it: at the end of the input.
 { text: "\"\"\"", code: "block-string-opening", line: 1, column: 4 },
 { text: "[\"\"\"", code: "block-string-opening", line: 1, column: 5 },
@@ -71,6 +79,7 @@
 { text: "[ 007 ]", code: "invalid-number", line: 1, column: 3 },
 { text: "[ +1 ]", code: "invalid-number", line: 1, column: 3 },
 { text: "[ .5 ]", code: "invalid-number", line: 1, column: 3 },
+{ text: "[.]", code: "invalid-number", line: 1, column: 2 },
 { text: "[ -1e6145 ]", code: "exponent-too-large", line: 1, column: 3 },
 { text: "[ -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 ]", code: "number-too-long", line: 1, column: 3 },
 // Nesting: at the opening bracket of the first level too deep.
@@ -85,6 +94,19 @@
 { text: "{ a:", code: "expected-value", line: 1, column: 5 },
 { text: "[1, }", code: "expected-value", line: 1, column: 5 },
 { text: "{ ] }", code: "expected-key", line: 1, column: 3 },
+// A `-` or `+` may follow a number (grammar.ebnf): `1-2` is `1` and then `-2`, without a comma.
+{ text: "[1-2]", code: "missing-comma", line: 1, column: 3 },
+{ text: "[1+2]", code: "missing-comma", line: 1, column: 3 },
+{ text: "[1 (2)]", code: "missing-comma", line: 1, column: 4 },
+{ text: "1 é", code: "missing-comma", line: 1, column: 3 },
+// A control or bidi character outside strings and comments is no token: the error of its place (§4).
+{ text: "[\u{1}]", code: "expected-value", line: 1, column: 2 },
+{ text: "{ \u{1}: 1 }", code: "expected-key", line: 1, column: 3 },
+{ text: "{ a\u{1}: 1 }", code: "missing-colon", line: 1, column: 4 },
+{ text: "{ a\u{202E}: 1 }", code: "missing-colon", line: 1, column: 4 },
+{ text: "[1\u{1}]", code: "missing-comma", line: 1, column: 3 },
+{ text: "[A\u{1}]", code: "missing-comma", line: 1, column: 3 },
+{ text: "[A\u{202E}]", code: "missing-comma", line: 1, column: 3 },
 // A token that doesn't fit: at its first character.
 { text: "[1}", code: "unexpected-closer", line: 1, column: 3 },
 { text: "A\n  (1)", code: "payload-newline", line: 2, column: 3 },
@@ -93,6 +115,7 @@
 { text: "1 /", code: "stray-slash", line: 1, column: 3 },
 { text: "\u{FEFF}#haus 2", code: "version-directive", line: 1, column: 2 },
 { text: "\"\\", code: "invalid-escape", line: 1, column: 2 },
+{ text: "\"\\u{12", code: "invalid-unicode-escape", line: 1, column: 2 },
 // In a byte string: a lone hex digit, or a character that can't be there.
 { text: "x\"abc\"", code: "bytes-odd-digits", line: 1, column: 5 },
 { text: "x\"a b\"", code: "bytes-odd-digits", line: 1, column: 3 },
@@ -116,3 +139,9 @@
 { text: "\"\"\"\n b\n  a\u{1}\n  \"\"\"", code: "block-string-indent", line: 2, column: 1 },
 { text: "\"\"\"\n  a\u{1}\n b\n  \"\"\"", code: "control-character", line: 2, column: 4 },
 { text: "\"\"\"\n\u{2066}\n \"\"\"", code: "block-string-indent", line: 2, column: 1 },
+// A comment is read left to right: a lone carriage return, a control or a bidi character in a
+// comment that is never closed is reported at its place, before the missing `*/` (§4).
+{ text: "/* a\rb *", code: "lone-carriage-return", line: 1, column: 5 },
+{ text: "/* a\u{1}b *", code: "control-character", line: 1, column: 5 },
+{ text: "/* a /* b\u{1} */", code: "control-character", line: 1, column: 10 },
+{ text: "1 /* a\n\u{1F600}\u{202E} *", code: "bidi-control", line: 2, column: 2 },

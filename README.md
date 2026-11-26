@@ -55,7 +55,7 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 - [A tour of haus](https://haus-fmt.org/docs/tour): model the data of a small tool, one problem at a time.
 - [Coming from JSON](https://haus-fmt.org/docs/from-json): the same data in JSON and in haus, and what changes.
 - Guided tours: [evolving your data](https://haus-fmt.org/docs/tours/evolving), [logs and streams](https://haus-fmt.org/docs/tours/streams), [from schema to code](https://haus-fmt.org/docs/tours/typed), [time and money](https://haus-fmt.org/docs/tours/time-money).
-- The [specification](spec/README.md), its [grammar](spec/grammar.ebnf), and the [Lean proofs](spec/lean) of the parser, the canonical form and std/time.
+- The [specification](spec/README.md), its [grammar](spec/grammar.ebnf), the [package layer](spec/packages.md) (versioned on its own), and the [Lean proofs](spec/lean) of the parser, the canonical form and std/time.
 
 ## Repository
 

@@ -12,11 +12,14 @@ final class Printer {
   private final int indent;
   private final int width;
   private final Layout layout;
+  /** Told that the file is a stream: a comma after a single item too. */
+  private final boolean told;
 
   private Printer(FormatOptions options) {
     this.indent = options.indent();
     this.width = options.width();
     this.layout = options.layout();
+    this.told = options.stream();
   }
 
   /** The file in the layout of {@code options}. */
@@ -25,7 +28,7 @@ final class Printer {
   }
 
   private String file(Syntax.File f) {
-    boolean stream = f.items.size() > 1;
+    boolean stream = told || f.items.size() > 1;
     if (layout != Layout.PRETTY) {
       for (Item it : f.items) {
         compact(it.node);
