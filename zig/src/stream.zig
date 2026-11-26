@@ -80,8 +80,9 @@ pub const StreamReader = struct {
     ident: bool = false,
     failed: bool = false,
     /// `item_by_item`: an error held back until the values before it are
-    /// read, with its diagnostic.
-    deferred: ?Diagnostic = null,
+    /// read, with its diagnostic (on the heap: a reader stays small, as
+    /// the frames of its callers do, spec §7).
+    deferred: ?*Diagnostic = null,
 
     pub fn init(gpa: Allocator, options: StreamOptions) Error!StreamReader {
         try @import("root.zig").checkLimits(options.limits, options.diagnostic);
@@ -90,6 +91,7 @@ pub const StreamReader = struct {
 
     pub fn deinit(r: *StreamReader) void {
         r.buf.deinit(r.gpa);
+        if (r.deferred) |saved| r.gpa.destroy(saved);
     }
 
     fn fail(r: *StreamReader, code: errors.Code, at: usize, comptime fmt: []const u8, args: anytype) Error {
@@ -126,7 +128,11 @@ pub const StreamReader = struct {
         r.pushInto(arena, chunk, &out) catch |e| {
             if (e == error.Haus and r.options.item_by_item and out.items.len > 0) {
                 // The values before the error first; the error next time.
-                if (r.options.diagnostic) |d| r.deferred = d.*;
+                if (r.options.diagnostic) |d| {
+                    const saved = try r.gpa.create(Diagnostic);
+                    saved.* = d.*;
+                    r.deferred = saved;
+                }
                 return out.toOwnedSlice(arena);
             }
             out.deinit(arena);
@@ -138,7 +144,7 @@ pub const StreamReader = struct {
     /// The error of a reader that failed: a held-back one with its diagnostic.
     fn failedAgain(r: *StreamReader) Error {
         if (r.deferred) |saved| if (r.options.diagnostic) |d| {
-            d.* = saved;
+            d.* = saved.*;
         };
         return error.Haus;
     }

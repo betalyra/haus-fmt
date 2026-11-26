@@ -1450,7 +1450,7 @@ pub fn checkReport(gpa: Allocator, arena: Allocator, def: *const Def, text: []co
         try appendDiag(arena, &issues, &d);
         return .{ .issues = issues.items };
     }
-    _ = try checkValue(arena, def, parsed.value[0], &Path.root, options, &all, &issues);
+    _ = try checkValue(arena, def, parsed.value[0], &Path.root, options, &all, &issues, &d);
     return .{ .issues = issues.items, .stopped = all.stopped };
 }
 
@@ -1459,8 +1459,11 @@ pub fn checkReport(gpa: Allocator, arena: Allocator, def: *const Def, text: []co
 /// is read. A syntax or limit error ends the check, after the errors of the
 /// items before it; stopping at the first error, an item's error before it
 /// is the one.
-fn checkStream(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue)) Error!void {
+/// Never inlined: its diagnostics stay off the document check's frame
+/// (spec §7, the stack needed at the supported depth).
+noinline fn checkStream(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue)) Error!void {
     var pd: Diagnostic = .{};
+    var d: Diagnostic = .{};
     var r = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = &pd, .item_by_item = true });
     defer r.deinit();
     var index: usize = 0;
@@ -1472,7 +1475,7 @@ fn checkStream(gpa: Allocator, arena: Allocator, def: *const Def, text: []const 
     for (items) |val| {
         const p = Path.root.index(index);
         index += 1;
-        if (try checkValue(arena, def, val, &p, options, all, issues)) return;
+        if (try checkValue(arena, def, val, &p, options, all, issues, &d)) return;
     }
     const last = r.end(arena) catch |e| switch (e) {
         error.Haus => return appendDiag(arena, issues, &pd),
@@ -1480,21 +1483,21 @@ fn checkStream(gpa: Allocator, arena: Allocator, def: *const Def, text: []const 
     };
     if (last) |val| {
         const p = Path.root.index(index);
-        _ = try checkValue(arena, def, val, &p, options, all, issues);
+        _ = try checkValue(arena, def, val, &p, options, all, issues, &d);
     }
 }
 
 /// Checks one value (a document's, or a stream's item at `path`), adding
 /// its hints and errors to `issues`. True when the check ends there: the
-/// first error in the first-error mode, or the cap.
-fn checkValue(arena: Allocator, def: *const Def, val: Value, path: *const Path, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue)) Error!bool {
-    var d: Diagnostic = .{};
+/// first error in the first-error mode, or the cap. `d` is the caller's
+/// diagnostic, so that no frame of the check holds one of its own.
+fn checkValue(arena: Allocator, def: *const Def, val: Value, path: *const Path, options: CheckOptions, all: *AllErrors, issues: *std.ArrayList(Issue), d: *Diagnostic) Error!bool {
     const before = all.count;
     const result = if (options.first) blk: {
-        var c: Ctx = .{ .arena = arena, .diag = &d, .hints = issues, .codecs = options.codecs };
+        var c: Ctx = .{ .arena = arena, .diag = d, .hints = issues, .codecs = options.codecs };
         break :blk checkOne(&c, def, val, path, options.limits);
     } else blk: {
-        var c: AllCtx = .{ .arena = arena, .diag = &d, .hints = issues, .codecs = options.codecs, .all = all };
+        var c: AllCtx = .{ .arena = arena, .diag = d, .hints = issues, .codecs = options.codecs, .all = all };
         break :blk checkOne(&c, def, val, path, options.limits);
     };
     result catch |e| switch (e) {
@@ -1502,7 +1505,7 @@ fn checkValue(arena: Allocator, def: *const Def, val: Value, path: *const Path, 
             // Collected where it was found, unless it is the first-error
             // mode (or an error that didn't come through `fail`).
             if (options.first or all.count == before) {
-                try appendDiag(arena, issues, &d);
+                try appendDiag(arena, issues, d);
                 all.count += 1;
                 if (all.max != 0 and all.count >= all.max) all.stopped = true;
             }
