@@ -70,7 +70,7 @@ pub use haus_schema::Error;
 /// `3:1: unknown attribute @since: this version of haus ignores it`. Build
 /// scripts report warnings to Cargo.
 pub use haus_schema::Warning;
-pub use haus_schema::{Explicit, Locator, Options, Packages};
+pub use haus_schema::{Explicit, Locator, Options, PackageRule, Packages};
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -78,6 +78,10 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     codecs: Vec<Codec>,
+    /// The program's implementations of package rules ([`Config::with_rule`]).
+    rules: Vec<Codec>,
+    /// The packages taken shape-only ([`Config::shape_only`]).
+    shape_only: Vec<String>,
     quiet: bool,
     without_attributes: bool,
     /// The build's root, relative to the crate's directory ([`Config::root`]).
@@ -91,8 +95,29 @@ impl Config {
 
     /// Use the codec at `path` (a type implementing `haus::Codec`) for the type
     /// with this id: `.codec("std/time#Date", "crate::codecs::JiffDate")`.
+    /// A codec chooses the type's Rust type; the type's package rule, if it
+    /// has one, is checked before it, whatever the codec (packages.md §6).
     pub fn codec(mut self, id: impl Into<String>, path: impl Into<String>) -> Config {
         self.codecs.push(Codec { id: id.into(), path: path.into() });
+        self
+    }
+
+    /// Use the implementation at `path` (a type implementing `haus::Rule`)
+    /// of the package rule of the type with this id (packages.md §7,
+    /// "Supplying a rule"): `.with_rule("@acme/ids@1#Id", "crate::rules::Ulid")`.
+    /// A package crate names the implementations of its own rules this way,
+    /// in its build script, and the crates that depend on it get them; an
+    /// application supplies one for a package whose crate has none.
+    pub fn with_rule(mut self, id: impl Into<String>, path: impl Into<String>) -> Config {
+        self.rules.push(Codec { id: id.into(), path: path.into() });
+        self
+    }
+
+    /// Take the package `name` (`@acme/ids`) shape-only (packages.md §7):
+    /// the rules of its types are not checked, and not required. Reviewing
+    /// the build script shows what goes unchecked.
+    pub fn shape_only(mut self, name: impl Into<String>) -> Config {
+        self.shape_only.push(name.into());
         self
     }
 
@@ -161,19 +186,37 @@ impl Config {
             Some(root) => Some(crate_dir.join(root)),
             None => path.starts_with(&crate_dir).then(|| crate_dir.clone()),
         };
+        let rules = self.rule_paths(&packages);
+        let (implemented, shape_only) = (implemented(&rules), self.shape_only_names());
         let options = Options {
             packages: &packages,
             id: Some(&id),
             project: Some((&krate, &crate_dir)),
             root: root.as_deref(),
+            rules: &implemented,
+            shape_only: &shape_only,
+            rule_documents: false,
             ..Options::default()
         };
-        let schema = self.emit(&path, &options, &packages, name, "")?;
-        if !self.quiet {
-            // An application's codecs (a package crate has none): spec §13.4, `missing-codec`.
-            self.missing_codecs(&schema).iter().for_each(|w| println!("cargo::warning={w}"));
-        }
+        self.emit(&path, &options, &packages, &rules, name, "")?;
         Ok(())
+    }
+
+    /// The implementations of package rules the generated code uses: those
+    /// the crates of the packages carry (`::haus_money::iso::Iso`), then the
+    /// program's own ([`Config::with_rule`]), which come first for an id.
+    fn rule_paths(&self, packages: &Packages) -> Vec<Codec> {
+        let carried = packages.iter().flat_map(|p| {
+            p.rules.iter().map(|(id, path)| Codec { id: id.clone(), path: format!("::{}::{path}", p.krate) })
+        });
+        let own: Vec<Codec> = self.rules.clone();
+        let carried: Vec<Codec> = carried.filter(|c| !own.iter().any(|o| o.id == c.id)).collect();
+        own.into_iter().chain(carried).collect()
+    }
+
+    /// The packages taken shape-only, as names.
+    fn shape_only_names(&self) -> Vec<&str> {
+        self.shape_only.iter().map(String::as_str).collect()
     }
 
     /// For a schema package crate: generate the types of its `schema.haus`
@@ -199,8 +242,23 @@ impl Config {
         let lib = crate_lib(&dir)?;
         let schema_path = manifest.schema_path(&dir)?;
         let packages = Packages::from_env()?;
-        let options = Options { packages: &packages, ..Options::default() };
-        let schema = self.emit(&schema_path, &options, &packages, "schema", &deps_module(&packages))?;
+        let rules = self.rule_paths(&packages);
+        let (implemented, shape_only) = (implemented(&rules), self.shape_only_names());
+        // The crate's own rules: its generated code checks them, and it passes them on.
+        let own: Vec<(&str, &str)> = self
+            .rules
+            .iter()
+            .filter(|r| r.id.starts_with(&format!("{}#", manifest.id())))
+            .map(|r| (r.id.as_str(), r.path.strip_prefix("crate::").unwrap_or(&r.path)))
+            .collect();
+        let options = Options {
+            packages: &packages,
+            rules: &implemented,
+            shape_only: &shape_only,
+            rule_documents: false,
+            ..Options::default()
+        };
+        let schema = self.emit(&schema_path, &options, &packages, &rules, "schema", &deps_module(&packages))?;
         // The packages its schema reaches, for the crates that depend on this one.
         let graph = PathBuf::from(var("OUT_DIR")?).join(packages::GRAPH);
         let used = schema.packages().iter().map(|p| p.name.as_str()).filter(|name| *name != manifest.name);
@@ -212,6 +270,7 @@ impl Config {
         println!("cargo::metadata=haus_crate={lib}");
         println!("cargo::metadata=haus_version={version}");
         println!("cargo::metadata=haus_graph={}", graph.display());
+        println!("cargo::metadata=haus_rules={}", packages::rules_metadata(own));
         Ok(())
     }
 
@@ -221,34 +280,46 @@ impl Config {
     /// [`Config::compile`]; this is for tests and tools.
     #[doc(hidden)]
     pub fn generate(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<String> {
-        self.load(path, options, krate).map(|(_, code)| code)
+        let rules = self.rules.clone();
+        let implemented = implemented(&rules);
+        let shape_only = self.shape_only_names();
+        let rules_given = options.rules.is_empty() && options.shape_only.is_empty();
+        let options = match rules_given {
+            true => Options { rules: &implemented, shape_only: &shape_only, ..*options },
+            false => *options,
+        };
+        self.load(path, &options, &rules, krate).map(|(_, code)| code)
     }
 
-    /// The `missing-codec` warnings (spec §13.4) of an application's schema
-    /// built with these codecs: one for each type that an official profile
-    /// has a rule for (`@haus-fmt/money@1#Currency`), that the types of its
-    /// files reach, not only inside a type with a codec, and that has no
-    /// codec, whose values are then checked for their shape only.
-    /// [`Config::compile`] reports them to Cargo, unless [`Config::quiet`].
-    pub fn missing_codecs(&self, schema: &Schema) -> Vec<Warning> {
-        schema.missing_codecs(codec_ids(&self.codecs))
-    }
-
-    /// The schema at `path`, and its code.
-    fn load(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<(Schema, String)> {
+    /// The schema at `path`, and its code, the package rules at `rules`.
+    fn load(
+        &self,
+        path: &Path,
+        options: &Options,
+        rules: &[Codec],
+        krate: &dyn Fn(&str) -> String,
+    ) -> Result<(Schema, String)> {
         let schema = Schema::load_with(path, &Options { without_attributes: self.without_attributes, ..*options })?;
         let units = graph::units_with(&schema, self.without_attributes, &codec_ids(&self.codecs), true)?;
-        let code = generate_units(&schema, &units, &self.codecs, krate)?;
+        let code = generate_units(&schema, &units, &self.codecs, rules, krate)?;
         Ok((schema, code))
     }
 
     /// Writes the code for the schema at `path`, then `more`, to `$OUT_DIR/<name>.rs`.
-    fn emit(&self, path: &Path, options: &Options, packages: &Packages, name: &str, more: &str) -> Result<Schema> {
+    fn emit(
+        &self,
+        path: &Path,
+        options: &Options,
+        packages: &Packages,
+        rules: &[Codec],
+        name: &str,
+        more: &str,
+    ) -> Result<Schema> {
         rerun_if_changed(path);
         // haus-fmt-schema never prints: the build script tells Cargo what it read.
         packages.files().iter().for_each(|f| rerun_if_changed(f));
         let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
-        let (schema, code) = self.load(path, options, &krate)?;
+        let (schema, code) = self.load(path, options, rules, &krate)?;
         schema.files().iter().filter_map(|f| f.path.as_deref()).for_each(rerun_if_changed);
         if !self.quiet {
             // The files code is generated for: the root and the application's files.
@@ -295,22 +366,38 @@ pub fn check(text: &str) -> Result<Vec<Warning>> {
 }
 
 /// The Rust code for a schema given as text, with the id `id`, without
-/// touching the environment. It imports std modules and `packages`, not files.
+/// touching the environment. It imports std modules and `packages`, not
+/// files; the rules their crates carry are applied, and required.
 pub fn generate(text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
-    let schema = Schema::parse_with(text, &Options { packages, id: Some(id), ..Options::default() })?;
+    let rules = Config::new().rule_paths(packages);
+    let implemented = implemented(&rules);
+    let options = Options { packages, id: Some(id), rules: &implemented, rule_documents: false, ..Options::default() };
+    let schema = Schema::parse_with(text, &options)?;
     let units = graph::units_with(&schema, false, &codec_ids(codecs), true)?;
     let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
-    generate_units(&schema, &units, codecs, &krate)
+    generate_units(&schema, &units, codecs, &rules, &krate)
 }
 
 fn codec_ids(codecs: &[Codec]) -> Vec<&str> {
     codecs.iter().map(|c| c.id.as_str()).collect()
 }
 
+/// The package rules at `rules`, as haus-fmt-schema counts them: which type
+/// ids have an implementation. The checks run in the generated code.
+fn implemented(rules: &[Codec]) -> Vec<PackageRule> {
+    rules.iter().map(|r| PackageRule { id: r.id.clone(), name: String::new(), check: |_| Ok(()) }).collect()
+}
+
 /// The code of a schema's files: the root's types, then a module for each
 /// file it imports, and one for each package whose types are copied so
 /// that the codecs apply inside them (the codec closure, spec §13.4).
-fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn Fn(&str) -> String) -> Result<String> {
+fn generate_units(
+    schema: &Schema,
+    units: &[Unit],
+    codecs: &[Codec],
+    rules: &[Codec],
+    krate: &dyn Fn(&str) -> String,
+) -> Result<String> {
     graph::check_codecs(units, codecs.iter().map(|c| c.id.as_str())).map_err(|e| in_root(e, units))?;
     let modules = graph::module_names(&units[1..], &[], "_", rust_module);
     let module = |u: usize| format_ident!("{}", modules[u - 1]);
@@ -334,7 +421,11 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                             (format!("{at}::{}::{name}", modules[to - 1]), *params)
                         }
                     };
-                    (key.clone(), Imported { id: origin.id(key), path, params, shape: origin.shape(schema), copy })
+                    let nominal = origin.nominal(schema);
+                    (
+                        key.clone(),
+                        Imported { id: origin.id(key), path, params, shape: origin.shape(schema), copy, nominal },
+                    )
                 })
                 .collect::<HashMap<_, _>>();
             let input = codegen::Input {
@@ -342,6 +433,7 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                 id: &unit.id,
                 imports: &imports,
                 codecs,
+                rules,
                 check_codecs: u == 0,
                 copy: unit.package.is_some(),
             };

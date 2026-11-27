@@ -18,7 +18,7 @@
  *
  * `renderReport` is pure; the step reads the results and writes the files.
  */
-import { arr, format, normalizeNumber, num, rec, str, variant, type Value } from "@haus-fmt/haus"
+import { arr, format, normalizeNumber, num, rec, str, variant, type Value } from "@haus-fmt/haus/internal"
 import { Console, Effect, Option } from "effect"
 import { COMPRESSION, CORPUS, LANGS, Results, speedFile, TOKENS, type CompressionOut, type CorpusOut, type Form, type Lang, type SpeedOut, type SpeedRow, type TokensOut } from "../results.ts"
 import { streamText, type CompressedForm } from "../compress.ts"

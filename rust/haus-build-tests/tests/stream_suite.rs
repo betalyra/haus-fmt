@@ -42,7 +42,7 @@ fn encoded<T: Encode>(x: &T) -> Result<Value, (String, String)> {
 /// A stream of `T`s, read with the binding's stream decoding, encoded again as an array.
 fn stream<T: Decode + Encode>(text: &str) -> Result<Value, (String, String)> {
     let items = haus::stream::decode::<T, _>(text.as_bytes()).collect::<Result<Vec<T>, _>>().map_err(failed)?;
-    items.iter().map(encoded).collect::<Result<_, _>>().map(Value::Array)
+    items.iter().map(encoded).collect::<Result<_, _>>().map(|items| Value::array(items).expect("a few values"))
 }
 
 /// One `T`, encoded again.

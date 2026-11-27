@@ -13,22 +13,23 @@
  * stays after that entry's comma. The output has LF line endings only, in
  * comments too.
  *
- * Every `Value` is a haus value (value.ts: the constructors check what they
- * build), and a value built in code is checked against the writer's limits
- * as it is written (spec §11, written.ts): its depth, the length of its
- * strings, keys and tags, its numbers, and the node limit. The writer's walk
- * only notices that a limit is broken; written.ts's `checkWritable` then
- * reports it, so the error (and which one, if several) is the same as if the
- * value had been checked before it was written, and nothing is returned. A
- * value forged past the constructors (with a cast) is not one, and what the
- * writers do with it is undefined (spec §11, "Values built in code").
+ * Every `Value` is a haus value within the limits it was built with
+ * (value.ts, spec §7, §11), so writing one can't fail and applies no limit
+ * (spec §11, "Writers apply no limits"). The one check is the safety net of
+ * written.ts: a value changed after it was built throws `value-changed`.
+ * Options are checked when they are made (`WriteOptions.make`); an option
+ * forged past that is a RangeError.
  */
 import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB, unpairedSurrogate } from "./chars.js"
 import { encodeTooDeep, guardStack, HausEncodeError, type Path } from "./errors.js"
 import { numberLimitIssue } from "./number.js"
-import { DEFAULT_LIMITS, longerThan } from "./reader.js"
+import { longerThan, type Limits } from "./reader.js"
 import type { HRecord, HVariant, Value } from "./value.js"
-import { checkWritable, nodesWithin, type WriteLimits } from "./written.js"
+import { checkUnchanged } from "./written.js"
+
+/** The limits the formatter's walk knows of: none (spec §11). Kept as a structure so the walk stays as it was written. */
+type WriteLimits = Pick<Limits, "maxDepth" | "maxNumberLength" | "maxExponent" | "maxStringLength" | "maxNodes">
+const UNLIMITED: WriteLimits = { maxDepth: Infinity, maxNumberLength: Infinity, maxExponent: Infinity, maxStringLength: Infinity, maxNodes: Infinity }
 
 /**
  * The layouts of spec §11:
@@ -65,18 +66,6 @@ export interface FormatOptions {
   readonly source?: string
   /** Comment spans from `parseDocument`; they are kept in the output. Needs `source`. */
   readonly comments?: readonly (readonly [number, number])[]
-  /**
-   * The limits (spec §7) a value must fit to be written, so that a parser
-   * with these limits reads it back (spec §11), each failing with its code
-   * (HausEncodeError): the nesting depth (`nesting-too-deep`, a record
-   * payload `Tag { … }` counted as one level), the length of each string,
-   * key and tag (`string-too-long`, `key-too-long`, `tag-too-long`), each
-   * number literal's length and exponent (`number-too-long`,
-   * `exponent-too-large`), and the values written for each top-level value
-   * (`too-many-nodes`, `maxNodes`: a value whose parts share each other
-   * expands when written). A limit not given is the default.
-   */
-  readonly limits?: Partial<WriteLimits>
 }
 
 /**
@@ -107,40 +96,25 @@ export const stringifyAt = (value: Value, options: FormatOptions, at: Path): str
 }
 
 /**
- * The formatter for `options`. An option that is a misuse of the API (a
- * `RangeError`) is reported after the values' own errors, as when the values
- * were checked before anything else.
+ * The formatter for `options`, once the values are known to be unchanged
+ * since they were built (the safety net, written.ts). An option that is a
+ * misuse of the API (a `RangeError`) is reported after that.
  */
 const formatter = (options: FormatOptions, values: readonly Value[], at: (i: number) => Path): Formatter => {
-  const limits = writeLimits(options)
-  try {
-    return new Formatter(options, limits)
-  } catch (e) {
-    values.forEach((v, i) => checkWritable(v, limits, at(i)))
-    throw e
-  }
+  values.forEach((v, i) => checkUnchanged(v, at(i)))
+  return new Formatter(options, UNLIMITED)
 }
 
-/**
- * The writer counts the values it writes for a top-level value: up to the
- * node limit, or up to this many, after which it counts the whole value once
- * (`nodesWithin`, without writing). A value whose parts share each other
- * (spec §7) is so rejected before much of its expansion is written.
- */
-const NODES_WRITTEN_BEFORE_COUNTING = 1 << 20
+/** Why an indent or width is not one (spec §11): a whole number of at least 0, taken literally (0 means 0). */
+export const wholeOptionIssue = (name: "indent" | "width", n: unknown): string | undefined =>
+  typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? undefined : `${name} must be a whole number of at least 0, not ${String(n)}`
 
-/**
- * An indent or width as given (spec §11): a whole number of at least 0,
- * taken literally (0 means 0). Anything else is a misuse of the API, not a
- * haus error: a `RangeError`.
- */
+/** An indent or width as given; anything else is a misuse of the API (options are checked when made): a `RangeError`. */
 const wholeOption = (name: "indent" | "width", n: number): number => {
-  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`${name} must be a whole number of at least 0, not ${String(n)}`)
+  const issue = wholeOptionIssue(name, n)
+  if (issue !== undefined) throw new RangeError(issue)
   return n
 }
-
-/** The limits a value is checked against before it is written: the options', the default for the others. */
-const writeLimits = (options: FormatOptions): WriteLimits => (options.limits === undefined ? DEFAULT_LIMITS : { ...DEFAULT_LIMITS, ...options.limits })
 
 /** Compact and minimised write every top-level item on one line. */
 const oneLine = (options: FormatOptions) => options.style === "compact" || options.style === "minimised"
@@ -220,8 +194,7 @@ class Formatter {
   private readonly spacing: Spacing
   private readonly limits: WriteLimits
 
-  // The writer's checks (spec §11): the top-level value being written, where its errors are, and the values written for it.
-  private root: Value | undefined
+  // Where the top-level value being written is (`$`, or `$[i]`), and the values written for it (counted, never limited, spec §11).
   private at: Path = []
   private nodes = 0
   /** Nodes written beyond which they are counted all (`overNodes`); Infinity once they have been. */
@@ -267,27 +240,20 @@ class Formatter {
 
   // ── checks ─────────────────────────────────────────────────
 
-  /** Start writing the top-level value `root`, its errors under `at`. */
-  private begin(root: Value, at: Path): void {
-    this.root = root
+  /** Start writing a top-level value, its place `at`. */
+  private begin(_root: Value, at: Path): void {
     this.at = at
     this.nodes = 0
-    this.nodeLimit = Math.min(this.limits.maxNodes, NODES_WRITTEN_BEFORE_COUNTING)
+    this.nodeLimit = Infinity
   }
 
-  /**
-   * A limit is broken (or more values are written than `nodeLimit`, and
-   * they are over the node limit): report it as written.ts finds it, with
-   * nothing written.
-   */
+  /** Unreachable without limits: the walk checks none (spec §11). */
   private fail(): never {
-    checkWritable(this.root!, this.limits, this.at)
-    throw new Error("haus: the writer found a limit broken that written.ts does not")
+    throw new HausEncodeError("haus: the writer found a limit broken, but writers have none", this.at, "value-changed")
   }
 
-  /** More values written than `nodeLimit`: count them all, once; the next limit to check against (Infinity). */
+  /** Unreachable without limits. */
   private overNodes(): number {
-    if (!nodesWithin(this.root!, this.limits.maxNodes)) this.fail()
     return (this.nodeLimit = Infinity)
   }
 

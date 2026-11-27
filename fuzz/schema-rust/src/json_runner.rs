@@ -60,10 +60,8 @@ fn line(mode: &str, line: &str) -> Result<String, String> {
             Some(Ok(v)) => Ok(format!("ok {}", haus::canonical(&v))),
             Some(Err(e)) => Err(format!("err {}", one_line(&e))),
         },
-        ("haus-json-write", [hex]) => match haus::to_haus_json(&single(&unhex(hex))?) {
-            Ok(json) => Ok(format!("ok {json}")),
-            Err(e) => Err(format!("err {} {} {}", e.place(), e.code, one_line(&e.to_string()))),
-        },
+        // Writing a value never fails (spec §11): every value that exists has a haus-JSON form.
+        ("haus-json-write", [hex]) => Ok(format!("ok {}", haus::to_haus_json(&single(&unhex(hex))?))),
         ("haus-json-read", [hex]) => match haus::from_haus_json(text(&unhex(hex))?) {
             Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
             Err(e) => Err(err(&e)),

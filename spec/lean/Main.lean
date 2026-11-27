@@ -2,8 +2,8 @@ import Haus.Canonical
 import Haus.Layout.Pretty
 import Haus.Layout.Format
 import Haus.Json.SchemaBased
+import Haus.Schema.Secrets
 import Haus.Packages.Suite
-import Haus.Profiles.Vectors
 import Haus.Stream.Limited
 import Haus.SchemaFile.Instances
 import Lean.Data.Json
@@ -41,7 +41,8 @@ import Lean.Data.Json
     haus-ref --schema-batch TYPES FILE   for each line `SUITE TYPE HEX` of FILE (a value's haus
                                   text as hex-encoded UTF-8): `ok <canonical form of the
                                   encoded result>` or `err <place> <code> <reason>` (fuzz/;
-                                  `-` for an error without a code)
+                                  `-` for an error without a code). The batches encode and
+                                  write with revealSecrets (spec §15)
     haus-ref --json-suite DIR [TYPES]    run the JSON suite in DIR (spec §16) with the resolved
                                   types in TYPES (default json-suite.json); the
                                   self-describing cases include every DIR/../valid/NAME.jsonl
@@ -84,16 +85,10 @@ import Lean.Data.Json
     haus-ref --format-suite DIR          run the format suite DIR (test-suite/format) with
                                   `Format.format`: every check of its README, for cases/,
                                   examples/ and valid/, and options.cases.haus
-    haus-ref --profile NAME FILE         run the test vectors FILE of the official profile NAME
-                                  (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`,
-                                  `@haus-fmt/uuid/rfc9562`; spec §13.3)
-                                  with its reference checker (Haus/Profiles/)
-    haus-ref --profile-batch NAME FILE   for each line `TYPE HEX` of FILE (a value's haus text
-                                  as hex-encoded UTF-8): decode with the type of the profile's
-                                  package and its codec (schema, then checker): `ok <canonical
-                                  form of the encoded result>`, `err <place> <code> <reason>`
-                                  when the schema rejects it, or `err $ codec-rejected <reason>`
-                                  when the profile does (fuzz/)
+
+The official packages' rules and their test vectors are run by the second
+executable, `haus-rules` (`Rules.lean`; the models live in
+`extensions/<name>/lean/`).
 -/
 
 open Haus Lean
@@ -374,16 +369,25 @@ def readSuites (file : System.FilePath) (prelude : Bool := false) :
     let defs := if prelude then defs ++ made ++ [("Bool", Schema.Ty.bool)] else defs
     return (name, .ok ⟨defs⟩)
 
-/-- Decode with a named type, then encode: the canonical form of the result (spec §12). -/
+/--
+Decode with a named type, then encode with `revealSecrets` (spec §15,
+"Encoding a secret"): the canonical form of the result (spec §12).
+-/
 def decodeCanonical (env : Schema.Env) (type : String) (v : Value) : Except Schema.Error String :=
   (Schema.decode env (.ref type) v).map fun x => String.ofList (Canonical.canonical (Schema.encode x))
 
+/-- The strings of a case's field `secrets`: the places of its secrets (§15). -/
+def secretsField (fs : List (String × Value)) : List String :=
+  match fs.lookup "secrets" with
+  | some (.arr xs) => xs.filterMap fun | .str s => some s | _ => none
+  | _ => []
+
 /--
-A case of `NAME.cases.haus`: `Ok { type, input, output? }` or
+A case of `NAME.cases.haus`: `Ok { type, input, output?, secrets? }` or
 `Err { type, input, code, path }`; for `Err`, the code (spec §17) and the
-place (spec §15) as the last part.
+place (spec §15); for `Ok`, the places of the secrets.
 -/
-def schemaCase : Value → Option (Bool × String × Value × Value × String × String)
+def schemaCase : Value → Option (Bool × String × Value × Value × String × String × List String)
   | .variant tag [.record fs] => do
     let ok ← if tag == "Ok" then some true else if tag == "Err" then some false else none
     let .str type ← fs.lookup "type" | none
@@ -392,13 +396,32 @@ def schemaCase : Value → Option (Bool × String × Value × Value × String ×
       | true, _, _ => some ("", "")
       | false, some (.str c), some (.str p) => some (c, p)
       | false, _, _ => none
-    return (ok, type, input, (fs.lookup "output").getD input, code, path)
+    return (ok, type, input, (fs.lookup "output").getD input, code, path, secretsField fs)
   | _ => none
 
 /-- An error's code as the batch runners print it: `-` for none. -/
 def codeText : Option Code → String
   | some c => c.name
   | none => "-"
+
+/--
+Encoding without `revealSecrets` (spec §15, "Encoding a secret"): with
+`secrets`, the places of the case's secrets, it must fail with
+`cannot-encode` at one of them; without, it must succeed. `none` when it
+does as the case says. `write` encodes the decoded value without the option.
+-/
+def secretVerdict (secrets : List String) : Except Schema.Error α → Option String
+  | .ok _ => if secrets.isEmpty then none else some s!"written without revealSecrets, expected cannot-encode at one of {secrets}"
+  | .error e =>
+    if secrets.isEmpty then some s!"without revealSecrets: {e.place}: {e.reason} [{codeText e.code}]"
+    else if e.code == some .cannotEncode && secrets.contains e.place then none
+    else some s!"without revealSecrets: {codeText e.code} at {e.place}, expected cannot-encode at one of {secrets}"
+
+/-- `secretVerdict` for encoding to a haus value. -/
+def secretCheck (env : Schema.Env) (type : String) (v : Value) (secrets : List String) : Option String :=
+  match Schema.decode env (.ref type) v with
+  | .error _ => none
+  | .ok x => secretVerdict secrets (Schema.encodeWith env (.ref type) false x)
 
 /-- The cases of a suite with an environment: the failures. -/
 def schemaCases (name : String) (env : Schema.Env) (cases : List Value) : Array String := Id.run do
@@ -407,13 +430,14 @@ def schemaCases (name : String) (env : Schema.Env) (cases : List Value) : Array 
     let shown := String.ofList (Canonical.canonical c)
     match schemaCase c with
     | none => failures := failures.push s!"{name}: not a case: {shown}"
-    | some (true, type, input, output, _, _) =>
+    | some (true, type, input, output, _, _, secrets) =>
       match decodeCanonical env type input with
       | .ok got =>
         let want := String.ofList (Canonical.canonical output)
         if got != want then failures := failures.push s!"{name}: {shown}: got {got}"
       | .error e => failures := failures.push s!"{name}: {shown}: {e.place}: {e.reason}"
-    | some (false, type, input, _, code, path) =>
+      if let some f := secretCheck env type input secrets then failures := failures.push s!"{name}: {shown}: {f}"
+    | some (false, type, input, _, code, path, _) =>
       match decodeCanonical env type input with
       | .ok got => failures := failures.push s!"{name}: {shown}: accepted as {got}"
       | .error e =>
@@ -544,10 +568,17 @@ def strField (fs : List (String × Value)) (k : String) : Option String :=
 def readJsonCanonical (env : Schema.Env) (type : String) (json : String) : Except Schema.Error String :=
   (Schema.readJson {} env (.ref type) json.toList).map fun x => canonicalText (Schema.encode x)
 
-/-- Decode a haus value with a type and write it as schema-based JSON. -/
+/-- Decode a haus value with a type and write it as schema-based JSON, with `revealSecrets` (spec §15). -/
 def writeSchemaBased (env : Schema.Env) (type : String) (v : Value) : Except String Haus.JSON := do
   let x ← (Schema.decode env (.ref type) v).mapError schemaErrorText
   (Schema.toJson env (.ref type) x).mapError schemaErrorText
+
+/-- The same without `revealSecrets`: a secret is refused, `cannot-encode` at its place (spec §15, §16.3). -/
+def writeSchemaBasedHiding (env : Schema.Env) (type : String) (v : Value) : Except Schema.Error Haus.JSON := do
+  let x ← Schema.decode env (.ref type) v
+  match Schema.secretAt env (.ref type) x with
+  | some p => .error (Schema.secretRefused p)
+  | none => Schema.toJson env (.ref type) x
 
 def runSchemaBasedCases (env : Schema.Env) (cases : List Value) : Array String := Id.run do
   let mut failures : Array String := #[]
@@ -565,6 +596,8 @@ def runSchemaBasedCases (env : Schema.Env) (cases : List Value) : Array String :
         if !Haus.JSON.equiv got exp then failures := failures.push s!"schema-based: {shown}: wrote {jsonText got}"
       | .error e, _ => failures := failures.push s!"schema-based: {shown}: writing failed: {e}"
       | _, .error e => failures := failures.push s!"schema-based: {shown}: the case's JSON: {e}"
+      if let some f := secretVerdict (secretsField fs) (writeSchemaBasedHiding env type input) then
+        failures := failures.push s!"schema-based: {shown}: {f}"
       match readJsonCanonical env type json with
       | .ok got => if got != want then failures := failures.push s!"schema-based: {shown}: read {got}"
       | .error e => failures := failures.push s!"schema-based: {shown}: reading failed: {schemaErrorText e}"
@@ -784,11 +817,13 @@ def schemaCheckLine (line : String) : String :=
 
 /--
 `--packages FILE [NAME]`: every case of the package suite in FILE
-(`test-suite/packages/cases.haus`), or only the case NAME, with its message
-and the files read. Cases marked `should` are run: the reference makes the
-version check. Every ecosystem's cases are run (the npm lookup is an option of
-the one resolver); a case marked `unmodelled` (permissions, which the model's
-file tree doesn't have) is skipped and named.
+(`test-suite/packages/cases.haus` or `rules.haus`), or only the case NAME,
+with its message and the files read, compiled with the built-in official
+packages and the case's `shapeOnly` and `withRule` (`Packages.compile`).
+Cases marked `should` are run: the reference makes the version check. Every
+case is run (all give packages explicitly: no case turns on the resolver's
+npm lookup, which stays in the model for its proofs); a case marked `unmodelled` (permissions, which the model's file tree doesn't
+have) is skipped and named.
 -/
 def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := do
   let vs ← match parseBytes (← IO.FS.readBinFile file) with
@@ -832,47 +867,10 @@ def runPackagesBatch (file : System.FilePath) : IO UInt32 := do
     | .error e => out.putStrLn s!"bad {(e.replace "\n" " ")}"
     | .ok c =>
       if let some why := c.unmodelled then out.putStrLn s!"skip {why}"
-      else match (Packages.resolveIn c.tree { mode := c.mode, root := c.rootDir } c.root).result with
+      else match (Packages.compile c.tree { mode := c.mode, root := c.rootDir } c.root c.program).result with
         | .ok ps => out.putStrLn s!"ok {ps}"
         | .error e => out.putStrLn s!"err {e.code.name}"
   return 0
-
-/-! ## Profiles (spec §13.3) -/
-
-/-- `--profile NAME FILE`: every vector of FILE, with the reference checker of the profile NAME. -/
-def runProfile (name : String) (file : System.FilePath) : IO UInt32 := do
-  let some p := Profiles.find? name
-    | IO.eprintln s!"unknown profile {name} ({(Profiles.all.map (·.name))})"; return 2
-  let vs ← match parseBytes (← IO.FS.readBinFile file) with
-    | .ok vs => pure vs
-    | .error e => IO.eprintln s!"{file}: {e}"; return 2
-  let mut failed := 0
-  for v in vs do
-    let shown := oneLine (String.ofList (Canonical.canonical v))
-    match Profiles.Vector.ofValue v >>= fun vec => (vec.run p).map (vec, ·) with
-    | .ok (vec, what) => IO.println s!"ok   {if vec.accept then "Accept" else "Reject"} {vec.type} {vec.value}: {what}"
-    | .error why => failed := failed + 1; IO.println s!"FAIL {shown}: {why}"
-  IO.println s!"{vs.length - failed}/{vs.length} passed"
-  return if failed == 0 then 0 else 1
-
-/-- One line of `--profile-batch`: `TYPE HEX`. -/
-def profileLine (p : Profiles.Profile) (line : String) : String :=
-  match line.splitOn " " with
-  | [type, hex] =>
-    match p.check? type, parseBytes (unhex hex) with
-    | none, _ => s!"err $ - {type} is not a type of {p.name}"
-    | some _, .error e => s!"err $ - {oneLine e}"
-    | some check, .ok [v] =>
-      match Schema.decode p.env (.ref type) v, p.decode type check v with
-      | _, .ok x => s!"ok {canonicalText (Schema.encode x)}"
-      | .error e, _ => errLine e
-      | .ok _, .error _ => s!"err $ {Code.codecRejected.name} not accepted by {p.name}"
-    | some _, .ok _ => "err $ - not a single value"
-  | _ => "err $ - bad line"
-
-def runProfileBatch (name : String) (file : System.FilePath) : IO UInt32 := do
-  let some p := Profiles.find? name | IO.eprintln s!"unknown profile {name}"; return 2
-  runLineBatch (profileLine p) file
 
 /-! ## Streams (spec §6, §7) -/
 
@@ -1427,8 +1425,6 @@ def main : List String → IO UInt32
       | some style, some indent, some width, [dir, n] => runBatch (formatLine style { indent, width, stream }) dir n.toNat!
       | _, _, _, _ => do IO.eprintln formatUsage; return 2
   | ["--stream-suite", dir] => runStreamSuite dir
-  | ["--profile", name, file] => runProfile name file
-  | ["--profile-batch", name, file] => runProfileBatch name file
   | ["--packages", file] => runPackages file none
   | ["--packages", file, name] => runPackages file (some name)
   | ["--packages-batch", file] => runPackagesBatch file
@@ -1484,4 +1480,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --packages-batch FILE | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE | --format-suite DIR | --format-batch STYLE INDENT WIDTH DIR N"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --packages-batch FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE | --format-suite DIR | --format-batch STYLE INDENT WIDTH DIR N"; return 2

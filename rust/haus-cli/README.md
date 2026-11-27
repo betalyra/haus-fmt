@@ -76,19 +76,23 @@ A relative import stays inside the build's root, the real directory of the
 schema file loaded: `..` names that go above it are `import-outside-root`,
 before anything is looked at. A relative import follows no symbolic link: a
 link anywhere on its path is `import-not-found` (the message doesn't say
-where it points), and nothing behind it is read. Schema packages
-are given explicitly; this tool never looks in `node_modules` (only
-JavaScript runtimes, the npm ecosystem, do), nor anywhere else: not
-`NODE_PATH`, not npm's global folder. Packages given count as declared:
+where it points), and nothing behind it is read. The official packages
+(`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) are built in, with
+their rules (packages.md §2, "Tools"); other schema packages are given
+explicitly. This tool searches for none: not in `node_modules`, `NODE_PATH`,
+npm's global folder or any other ecosystem's. Packages given count as
+declared:
 
 ```sh
-haus check --package vendor/money order.haus             # a package's directory
-haus check --package @acme/money=vendor/money order.haus # the same, its manifest must say @acme/money
-haus check --packages schemas/ order.haus                # every subdirectory with a package.haus
+haus check --package vendor/acme-ids order.haus            # a package's directory
+haus check --package @acme/ids=vendor/acme-ids order.haus  # the same, its manifest must say @acme/ids
+haus check --packages schemas/ order.haus                  # every subdirectory with a package.haus
 ```
 
 Both options can be repeated. Their manifests name the packages, not the
-directory names. A package given that can't be used (a directory without `package.haus`, an
+directory names. A package given by its directory wins over one with the
+same name in a folder; a copy of an official package must be byte for byte
+the built-in one (`duplicate-package`). A package given that can't be used (a directory without `package.haus`, an
 invalid manifest, two packages with one name, a folder that doesn't exist or
 has more than 4096 entries) stops the check before anything is checked, with
 exit code 2. A subdirectory of a folder whose manifest is invalid is left
@@ -112,10 +116,11 @@ A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
 define, uses of deprecated types, record cases with a field named `_tag` or
 `_args`, which have no schema-based JSON form), which don't fail the check.
-An import of an official package with profiles (`@haus-fmt/money`,
-`@haus-fmt/geo`, `@haus-fmt/uuid`) gets a hint (`missing-codec`): `haus check` has no codecs,
-so it checks the package's types for their shape only, not its profiles'
-rules (spec §13.4).
+The official packages' rules are checked (`Money(19.90, Bitcoin)` is
+`codec-rejected`). An import of a package whose manifest gives a type the
+schema reaches a rule this tool doesn't have (any but the official ones)
+gets a hint (`missing-codec`, packages.md §7): its values are checked for
+their shape only (`the rules of @acme/ids (Id: ulid) are not checked here`).
 
 ```text
 error[type-mismatch]: expected Int, found the string "7"
@@ -200,7 +205,7 @@ value by value.
 | `files[].error` | why the file couldn't be read (then the exit code is 2) |
 | `files[].diagnostics[]` | the error form of spec §17, with `severity` first |
 | `files[].stopped` | `true` when the check stopped after 200 errors: the file may have more; absent otherwise |
-| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose profiles aren't checked, in schema files) |
+| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose rules aren't checked, in schema files) |
 | `code`, `message`, `hint`, `docs` | always: the [error code](https://haus-fmt.org/docs/errors), the message, a fix, its documentation |
 | `file` | when the place is in another file than the one checked: the data file's schema, when that schema is broken |
 | `line`, `column` | the place in the text, when there is one |

@@ -29,8 +29,9 @@ const { parentPort, workerData } = require("node:worker_threads")
   const nestedArray = (n) => Array.from({ length: n - 1 }).reduce((inner) => [inner], [])
   const Tree = h.Recursive("Tree", (self) => h.Variant({ Node: h.Record({ kids: h.Array(self) }) }))
   const tree = (n) => Array.from({ length: n - 1 }).reduce((inner) => ({ _tag: "Node", kids: [inner] }), { _tag: "Node", kids: [] })
-  // Built in code, not parsed: on a stack too small for parsing, the writers still get their value.
-  const value = Array.from({ length: N }).reduce((inner) => H.variant("T", [H.rec({ a: inner })]), H.num("1"))
+  // Made as a reader with larger limits makes it, not parsed: on a stack too small for parsing, the writers still
+  // get their value (constructors stop at the default depth, 256, spec §7).
+  const value = Array.from({ length: N }).reduce((inner) => H.uncheckedVariant("T", [H.uncheckedRec(new Map([["a", inner]]))]), H.uncheckedNum("1"))
   const paths = {
     "parse": () => H.parse(nested(N), limits),
     "parse a record payload": () => H.parse(tagged(N), limits),

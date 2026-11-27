@@ -1,5 +1,10 @@
 /**
- * Decode haus data with Effect schemas.
+ * haus with Effect, the recommended way to use haus in TypeScript: decode
+ * and encode with Effect schemas, hand-written or from `.schema.haus` files
+ * (`Haus.readSources`, `Haus.compile`: packages built in or given, their
+ * rules checks of their types, on by default). Everything haus decides comes
+ * from `@haus-fmt/haus`; this module makes Effect schemas, Effects and
+ * Streams of it.
  *
  *   const Event = Haus.OpenUnion([
  *     Schema.TaggedStruct("UserCreated", { id: Schema.Number, email: Schema.String }),
@@ -32,13 +37,14 @@
  * `Haus.zonedDateTimeAsDateTime` for schema files (`Schema.BigDecimal`,
  * `Schema.DateTimeUtc` and `Schema.DateTimeZoned` work as well, with the same losses).
  */
-import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Path, type Value } from "@haus-fmt/haus"
-import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
+import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Path, type Value } from "@haus-fmt/haus/internal"
+import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus/internal"
 import {
   fromHausJson as valueOfHausJson, fromSchemaBasedJson, HausDecodeError, HausEncodeError, importJson as importedValue, jsonDepth, JsonPlaces, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH,
   parseJson, parseJsonLines, stringifyJson, toHausJson as hausJsonOf, toSchemaBasedJson, type Json, type JsonType,
-} from "@haus-fmt/haus"
-import type { Limits } from "@haus-fmt/haus/schema"
+} from "@haus-fmt/haus/internal"
+import type { h } from "@haus-fmt/haus/internal"
+type Limits = h.Limits
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
 import { codec, entries, isCodec, setId, type AnyCodec, type Checked, type Decoded, type Named } from "./codec.js"
 import {
@@ -90,7 +96,7 @@ export { errorJson, HausLimitsError, HausParseError, HausSchemaError, type HausE
  *   base.pipe(Schema.refine(isCurrency, { message: "a currency: three letters A–Z", ...Haus.CODEC_REJECTED }))
  */
 export const CODEC_REJECTED = { [CODE]: "codec-rejected" } as const
-export type { ErrorCode, ErrorJson } from "@haus-fmt/haus"
+export type { ErrorCode, ErrorJson } from "@haus-fmt/haus/internal"
 
 /**
  * Where a decode error is in the haus value: the innermost value the error's
@@ -501,26 +507,45 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
   checkSchema(ast)
   const toValue = compileEncoder(ast)
   const encode = Schema.encodeUnknownEffect(s)
-  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
-    withLimits(
+  return (value: Decoded<S, C>, options: EncodeValueOptions = {}): Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]> => {
+    const { revealSecrets, ...limits } = options
+    return withLimits(
       limits,
       // Effect's encoder has no budget: the value is checked first (see `checkEncodable`).
       fromSync(() => checkEncodable(value, s.ast, limits), conversionErrorOf()).pipe(
         Effect.flatMap(() => withinStack(encode(value, { errors: "first" }))),
         Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
-        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), encodeErrorOf)),
+        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded), revealSecrets === true), encodeErrorOf)),
       ),
     ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>
+  }
 }
 
 /**
- * Options of the haus encoders: the format, and the limits the value is held
- * to (spec §7). Not `stream` (spec §11): `Haus.encode` writes one value, and
- * `Haus.encodeStream` always writes a stream, a comma after every value.
+ * Options of encoding a value (`Haus.encodeValue`, `Haus.toJsonValue`,
+ * `Haus.toJson`, `Haus.encodeJsonLines`): the limits the value is held to
+ * (spec §7), and `revealSecrets`.
+ */
+export interface EncodeValueOptions extends Limits {
+  /**
+   * Write every secret (`Secret a`, a `Redacted`) in full (spec §15,
+   * "Encoding a secret"). Off by default: a secret is refused, a
+   * HausSchemaError `cannot-encode` at its place.
+   */
+  readonly revealSecrets?: boolean
+}
+
+/**
+ * Options of the haus encoders: the format, the limits the value is held
+ * to (spec §7), and `revealSecrets`. Not `stream` (spec §11): `Haus.encode`
+ * writes one value, and `Haus.encodeStream` always writes a stream, a comma
+ * after every value.
  */
 export interface EncodeOptions extends Omit<FormatOptions, "stream"> {
   /** The limits of the reader the text is for: a value beyond them is an error (spec §7). */
   readonly limits?: Limits
+  /** Write every secret in full (spec §15); off by default, a secret is `cannot-encode`. */
+  readonly revealSecrets?: boolean
 }
 
 /** Codecs, or options (the older form `encode(schema, options)`). */
@@ -530,16 +555,17 @@ const splitArgs = (args: ReadonlyArray<AnyCodec | EncodeOptions | undefined>): [
   return [codecs, options]
 }
 
-/** Options given when building an encoder, then with the value: the format, and the limits merged field by field. */
-const withOptions = (defaults: EncodeOptions, options: EncodeOptions = {}): [FormatOptions, Limits] => {
-  const { limits: baseLimits, ...baseFormat } = defaults
-  const { limits: ownLimits, ...format } = options
-  return [{ ...baseFormat, ...format }, { ...baseLimits, ...ownLimits }]
+/** Options given when building an encoder, then with the value: the format, and the limits merged field by field, with `revealSecrets`. */
+const withOptions = (defaults: EncodeOptions, options: EncodeOptions = {}): [FormatOptions, EncodeValueOptions] => {
+  const { limits: baseLimits, revealSecrets: baseReveal, ...baseFormat } = defaults
+  const { limits: ownLimits, revealSecrets: ownReveal, ...format } = options
+  const revealSecrets = ownReveal ?? baseReveal
+  return [{ ...baseFormat, ...format }, { ...baseLimits, ...ownLimits, ...(revealSecrets === undefined ? {} : { revealSecrets }) }]
 }
 
 /** `encodeValue` for codecs already checked by the caller's signature. */
 const valueEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (encodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
+  (encodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, options?: EncodeValueOptions) => Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -559,8 +585,8 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
   return Effect.fn("Haus.encode")(function* (value: S["Type"], options?: EncodeOptions) {
     const [format, limits] = withOptions(defaults, options)
     const written = yield* toValue(value, limits)
-    // The writer's limits (spec §11): a value the codecs built can still break the node limit.
-    return yield* fromSync(() => stringify(written, { ...format, limits }), jsonErrorOf)
+    // Writers apply no limits (spec §11); the value was checked when it was built.
+    return yield* fromSync(() => stringify(written, format), jsonErrorOf)
   })
 }
 
@@ -582,7 +608,7 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
-          Effect.flatMap((v) => fromSync(() => stringify(v, { style: "compact", ...format, limits }) + ",\n", jsonErrorOf)),
+          Effect.flatMap((v) => fromSync(() => stringify(v, { style: "compact", ...format }) + ",\n", jsonErrorOf)),
           Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeStream"),
@@ -616,13 +642,15 @@ const jsonLimits = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth
 export const toJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const toValue = valueEncoder<S, C>(schema, codecs)
-  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
-    toValue(value, limits).pipe(Effect.flatMap((v) => fromSync(() => toSchemaBasedJson(type, v, limits), jsonErrorOf)))
+  return (value: Decoded<S, C>, options: EncodeValueOptions = {}): Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]> => {
+    const { revealSecrets: _, ...limits } = options
+    return toValue(value, options).pipe(Effect.flatMap((v) => fromSync(() => toSchemaBasedJson(type, v, limits), jsonErrorOf)))
+  }
 }
 
 /** `toJsonValue` for codecs already checked by the caller's signature. */
 const jsonEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
+  (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, options?: EncodeValueOptions) => Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -638,8 +666,8 @@ const jsonEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(sc
  */
 export const toJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const toJsonOf = jsonEncoder<S, C>(schema, codecs)
-  return Effect.fn("Haus.toJson")(function* (value: Decoded<S, C>, limits: Limits = {}) {
-    const json = yield* toJsonOf(value, limits)
+  return Effect.fn("Haus.toJson")(function* (value: Decoded<S, C>, options: EncodeValueOptions = {}) {
+    const json = yield* toJsonOf(value, options)
     return yield* fromSync(() => stringifyJson(json), jsonErrorOf)
   })
 }
@@ -704,13 +732,13 @@ export const decodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
 /** Encode a stream of values as JSON Lines of their schema-based JSON (spec §16): one line per value, each ending in a line feed. */
 export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const toJsonOf = jsonEncoder<S, C>(schema, codecs)
-  return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, limits: Limits = {}): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
-    const issue = limitsIssue(limits)
+  return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, options: EncodeValueOptions = {}): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
+    const issue = limitsIssue(options)
     if (issue !== undefined) return Stream.fail(limitsError(issue))
     return values.pipe(
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
-        toJsonOf(value, limits).pipe(
+        toJsonOf(value, options).pipe(
           Effect.flatMap((json) => fromSync(() => stringifyJson(json) + "\n", jsonErrorOf)),
           Effect.mapError(atIndex(index)),
         )),
@@ -735,14 +763,12 @@ export const importJson = Effect.fn("Haus.importJson")(function* (text: string, 
 /**
  * The self-describing JSON text of a haus `Value` (spec §16.2),
  * `{"_haus":1,"_value":…}`: every haus value exactly, without a schema. For a
- * typed value, encode it first (`Haus.encodeValue`).
+ * typed value, encode it first (`Haus.encodeValue`). Total (spec §11): a
+ * `Value` was checked against every limit when it was built or read.
  *
  *   yield* Haus.toHausJson(value)   // '{"_haus":1,"_value":{"_rec":{"total":{"_num":"19.90"}}}}'
  */
-export const toHausJson = Effect.fn("Haus.toHausJson")(function* (value: Value, limits: Limits = {}) {
-  yield* checkLimits(limits)
-  return yield* fromSync(() => hausJsonOf(value, limits), jsonErrorOf)
-})
+export const toHausJson = (value: Value): Effect.Effect<string> => Effect.sync(() => hausJsonOf(value)).pipe(Effect.withSpan("Haus.toHausJson"))
 
 /**
  * Read self-describing JSON text (spec §16.2) as a haus `Value`: the envelope
@@ -768,6 +794,11 @@ export {
 
 export { HausKey, key, ValueEquivalence, ValueOrder } from "./equal.js"
 
-// ── schema files ─────────────────────────────────────────────
+// ── schema files, packages and rules ─────────────────────────
 
-export { compileSchemaFile, definitionDoc, fromSchemaFile, prelude, schemaDeclarations, withCodecs, type CompiledSchemaFile, type DeclarationOptions, type FromSchemaFileOptions } from "./schema-file.js"
+export {
+  compile, fromSchema, Package, readPackage, readPackages, readSources, SchemaFiles, Sources, type CompiledSchema, type Folder, type PackageData, type PackageType, type ReadSourcesOptions,
+  type Rule, type SourcesType,
+} from "./compile.js"
+export { HausCompileError, HausConfigError } from "./errors.js"
+export { definitionDoc, prelude, schemaDeclarations, withCodecs, type CompiledSchemaFile, type DeclarationOptions } from "./schema-file.js"

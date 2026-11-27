@@ -19,6 +19,10 @@ path = "src/main.rs"
 [dependencies]
 haus = { package = "haus-fmt", path = "../haus", version = "0.2.0", features = ["hash"] }
 haus-schema = { package = "haus-fmt-schema", path = "../haus-schema", version = "0.2.0" }
+# The official packages, built in (packages.md §2, "Tools"): their files and rules.
+haus-fmt-money = { path = "../../extensions/money", version = "1.0.1" }
+haus-fmt-geo = { path = "../../extensions/geo", version = "1.0.1" }
+haus-fmt-uuid = { path = "../../extensions/uuid", version = "1.0.1" }
 annotate-snippets = "0.12.18"
 clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"

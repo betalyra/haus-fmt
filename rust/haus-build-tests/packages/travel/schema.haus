@@ -1,5 +1,5 @@
 // Uses the official packages: their types in fields, arrays and a variant's
-// payloads. The application has their profiles' codecs (tests/profiles.rs).
+// payloads. The application has their crates' codecs (tests/rules.rs).
 import @haus-fmt/money@1 (Money, Currency)
 import @haus-fmt/geo@1 (LatLng, BBox)
 

@@ -154,12 +154,13 @@ function tsOne(l: string): string {
 }
 
 async function effectRunner(): Promise<LineRunner> {
-  const Haus = await import(pathToFileURL(join(root, "typescript/packages/effect/dist/index.js")).href)
+  // Its schema builder: the module behind `Haus.compile`.
+  const SchemaFile = await import(pathToFileURL(join(root, "typescript/packages/effect/dist/schema-file.js")).href)
   return inProcess("effect", (l) => {
     const [kind, hex] = l.split(" ") as [string, string]
     if (kind !== "S") return "skip"
     try {
-      Haus.compileSchemaFile(fromUtf16Hex(hex ?? ""))
+      SchemaFile.compileSchemaFile(fromUtf16Hex(hex ?? ""))
       return "ok"
     } catch (e) {
       return placed(e)

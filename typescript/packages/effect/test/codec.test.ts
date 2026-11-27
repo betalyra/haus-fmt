@@ -1,13 +1,9 @@
-import { nodeResolver, schemaOptions } from "@haus-fmt/haus/node"
 import { describe, expect, expectTypeOf, it } from "@effect/vitest"
 import { BigDecimal, Effect, Exit, Schema, SchemaIssue, SchemaTransformation } from "effect"
-import { readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
+import { geo } from "../src/geo.js"
 import * as Haus from "../src/index.js"
-
-const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
-const packages = { "@haus-fmt/money": repo("extensions/money"), "@haus-fmt/geo": repo("extensions/geo") }
-const resolver = nodeResolver({ packages })
+import { money } from "../src/money.js"
+import { compileText } from "./support.js"
 
 // The schemas, typed as the content mapper declares them (see schemaDeclarations).
 type Currency<C = {}> = Haus.Lookup<C, "@haus-fmt/money@1#Currency", string | Haus.Unknown>
@@ -20,24 +16,18 @@ interface OrderF extends Haus.TypeLambda {
 }
 type OrderIds = "app/order#Order" | "@haus-fmt/money@1#Money" | "@haus-fmt/money@1#Currency" | "@haus-fmt/geo@1#LatLng" | "std/time#Date" | "prelude#Decimal"
 
-const order = Haus.compileSchemaFile(
-  `import std/time (Date)
+const orderText = `import std/time (Date)
    import @haus-fmt/money (Money)
    import @haus-fmt/geo (LatLng)
-   type Order = { total: Money, to: LatLng, day: Date }`,
-  { resolver, id: "app/order" },
-).schemas
+   type Order = { total: Money, to: LatLng, day: Date }`
+const order = compileText(orderText, { id: "app/order" }).schemas
 const Order = order.Order as unknown as Haus.Named<Schema.Codec<Order>, "app/order#Order", OrderF, OrderIds>
+// The same, with @haus-fmt/money taken shape-only (packages.md §7): its rule iso is not checked.
+const OrderShapeOnly = compileText(orderText, { id: "app/order", packages: [Haus.Package.shapeOnly(money)] }).schemas.Order as unknown as typeof Order
 
-// The packages' own schema modules: what `import * as money from "@haus-fmt/money/schema.haus"` gives.
-const moneyModule = Haus.compileSchemaFile(
-  readFileSync(repo("extensions/money/schema.haus"), "utf8"),
-  schemaOptions(repo("extensions/money/schema.haus")),
-).schemas
-const geoModule = Haus.compileSchemaFile(
-  readFileSync(repo("extensions/geo/schema.haus"), "utf8"),
-  schemaOptions(repo("extensions/geo/schema.haus")),
-).schemas
+// The packages' own schemas, compiled as their entry files (their ids are the packages').
+const moneyModule = compileText(money.schema, { id: "@haus-fmt/money@1" }).schemas
+const geoModule = compileText(geo.schema, { id: "@haus-fmt/geo@1" }).schemas
 const MoneySchema = moneyModule.Money as unknown as Haus.Named<Schema.Codec<Money>, "@haus-fmt/money@1#Money">
 const CurrencySchema = moneyModule.Currency as unknown as Haus.Named<Schema.Codec<Currency>, "@haus-fmt/money@1#Currency">
 const LatLngSchema = geoModule.LatLng as unknown as Haus.Named<Schema.Codec<LatLng>, "@haus-fmt/geo@1#LatLng">
@@ -107,9 +97,13 @@ describe("codecs", () => {
     expect(Effect.runSync(Haus.encode(Order, cents, geojson)(v, { style: "compact" }))).toBe(text)
   })
 
-  it("codecs add rules; the schema's rules stay", () => {
-    expect(Exit.isSuccess(Effect.runSyncExit(Haus.decode(Order)(text.replace("EUR", "Eur"))))).toBe(true)
-    expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, iso)(text.replace("EUR", "Eur"))))).toBe(true)
+  it("codecs add rules; the schema's rules and the packages' stay", () => {
+    // The rule iso of @haus-fmt/money is on by default (packages.md §6), whatever the codecs.
+    expect(Effect.runSync(Effect.flip(Haus.decode(Order)(text.replace("EUR", "Eur"))))).toMatchObject({ code: "codec-rejected", place: "$.total[1]" })
+    expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, cents)(text.replace("EUR", "Eur"))))).toBe(true)
+    // Shape-only, the codec's own check is what rejects it.
+    expect(Exit.isSuccess(Effect.runSyncExit(Haus.decode(OrderShapeOnly)(text.replace("EUR", "Eur"))))).toBe(true)
+    expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(OrderShapeOnly, iso)(text.replace("EUR", "Eur"))))).toBe(true)
     expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, cents)(text.replace("19.90", "19.999"))))).toBe(true)
     expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, cents)(text.replace("Money(19.90, EUR)", "Money(19.90)"))))).toBe(true)
     expect(Exit.isFailure(Effect.runSyncExit(Haus.decode(Order, jsDate)(text.replace("2026-11-09", "2026-02-30"))))).toBe(true)
@@ -163,7 +157,7 @@ describe("codecs", () => {
     expect(Haus.prelude("Decimal")).toBe(Haus.Decimal)
     const small = Haus.codec(Haus.prelude("Int"), (base) => base.pipe(Schema.check(Schema.makeFilter((n) => (n as bigint) <= 10n || "at most 10"))))
     type Counts = { readonly n: bigint; readonly all: ReadonlyArray<bigint> }
-    const counts = Haus.compileSchemaFile(`type Counts = { n: Int, all: Array Int }`, { id: "app/counts" }).schemas.Counts as unknown as Haus.Named<
+    const counts = compileText(`type Counts = { n: Int, all: Array Int }`, { id: "app/counts" }).schemas.Counts as unknown as Haus.Named<
       Schema.Codec<Counts>,
       "app/counts#Counts",
       never,

@@ -13,7 +13,7 @@
 //! `invalid/NAME.error`.
 
 use haus::{Value, canonical};
-use haus_schema::{Decoded, NoImports, Options, Schema, Severity};
+use haus_schema::{EncodeOptions, NoImports, Options, Schema, Severity};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +27,9 @@ struct Case {
     code: String,
     /// For an `Err`, where it fails: `$.items[2].price`.
     path: String,
+    /// For an `Ok`, the places of the secrets in the decoded value: encoding
+    /// without revealing secrets fails with `cannot-encode` at one of them.
+    secrets: Vec<String>,
 }
 
 impl Case {
@@ -43,18 +46,22 @@ impl Case {
         match (fields.get("type"), fields.get("input")) {
             (Some(Value::String(ty)), Some(input)) => Ok(Case {
                 ok,
-                ty: ty.clone(),
+                ty: ty.to_string(),
                 input: input.clone(),
                 output: fields.get("output").unwrap_or(input).clone(),
                 code: match fields.get("code") {
-                    Some(Value::String(code)) => code.clone(),
+                    Some(Value::String(code)) => code.to_string(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a code: {}", canonical(v))),
                 },
                 path: match fields.get("path") {
-                    Some(Value::String(path)) => path.clone(),
+                    Some(Value::String(path)) => path.to_string(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a path: {}", canonical(v))),
+                },
+                secrets: match fields.get("secrets") {
+                    Some(Value::Array(places)) => places.iter().filter_map(|p| p.as_str()).map(str::to_owned).collect(),
+                    _ => vec![],
                 },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
@@ -68,21 +75,31 @@ impl Case {
 
     /// Runs the case: None if it passes, what went wrong otherwise.
     fn failure(&self, schema: &Schema) -> Option<String> {
-        // The suite's outputs show secrets: the decoded value, revealed.
-        let decoded = schema.decode(&self.ty, &self.input).map(Decoded::reveal);
+        let decoded = schema.decode(&self.ty, &self.input);
         let errors = schema.check(&self.ty, std::slice::from_ref(&self.input));
         let errors: Vec<_> = errors.iter().filter(|i| i.severity == Severity::Error).collect();
-        match (self.ok, decoded) {
-            (true, Ok(out)) if canonical(&out) != canonical(&self.output) => {
-                Some(format!("decoded as {}, expected {}", canonical(&out), canonical(&self.output)))
+        // Encoded with revealSecrets, compared with the output; then without it (spec §15).
+        let reveal = EncodeOptions { reveal_secrets: true, ..EncodeOptions::default() };
+        match (self.ok, decoded.as_ref().map(|d| (d, schema.encode_with(&self.ty, d, &reveal)))) {
+            (true, Ok((_, Err(e)))) => Some(format!("decoded, but can't be encoded: {e}")),
+            (true, Ok((_, Ok(out)))) if canonical(&out) != canonical(&self.output) => {
+                Some(format!("encoded as {}, expected {}", canonical(&out), canonical(&self.output)))
             }
-            (true, Ok(out)) => match (haus::ser::write(&out), errors.first()) {
-                (Err(e), _) => Some(format!("decoded, but can't be written: {e}")),
+            (true, Ok((d, Ok(_)))) => match (schema.encode(&self.ty, d), errors.first()) {
                 (_, Some(e)) => Some(format!("decodes, but the check reports {e}")),
-                _ => None,
+                (Ok(_), None) if self.secrets.is_empty() => None,
+                (Ok(_), None) => Some(format!("encoded without revealing its secrets at {:?}", self.secrets)),
+                (Err(e), None) if self.secrets.is_empty() => Some(format!("can't be encoded: {e}")),
+                (Err(e), None) if e.code.as_str() == "cannot-encode" && self.secrets.contains(&e.path_string()) => None,
+                (Err(e), None) => Some(format!(
+                    "refused with {} at {}, expected a secret at {:?}",
+                    e.code,
+                    e.path_string(),
+                    self.secrets
+                )),
             },
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
-            (false, Ok(out)) => Some(format!("decoded, expected an error (as {})", canonical(&out))),
+            (false, Ok((d, _))) => Some(format!("decoded, expected an error (as {d})")),
             (false, Err(_)) if errors.is_empty() => Some("fails to decode, but the check finds no error".into()),
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))

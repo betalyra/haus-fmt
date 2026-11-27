@@ -18,11 +18,13 @@
 
 use crate::files::FileCache;
 use crate::packages::{Manifest, has_manifest, same_files};
+use crate::sources::{Package, PackageText};
 use crate::{Error, Result, quote, shown};
 use haus::ErrorCode;
 use haus::json::Json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The most entries a folder of packages may have ([`Explicit::folder`]).
 pub const MAX_FOLDER_ENTRIES: usize = 4096;
@@ -69,12 +71,15 @@ pub struct Location {
     /// `package.haus` and `schema.haus` must be the same as this one's, or
     /// the schema has two packages with one name (`duplicate-package`).
     pub same_as: Option<PathBuf>,
+    /// The package's texts, for a package given as a value (packages.md
+    /// §3): nothing is read for it, `dir` only names it.
+    pub value: Option<Arc<PackageText>>,
 }
 
 impl Location {
     /// The package in `dir`, without a version from a package manager.
     pub fn new(dir: impl Into<PathBuf>) -> Location {
-        Location { dir: dir.into(), version: None, scanned: false, same_as: None }
+        Location { dir: dir.into(), version: None, scanned: false, same_as: None, value: None }
     }
 }
 
@@ -152,6 +157,8 @@ pub struct Explicit {
     /// folder's last name and their own (`schemas/broken`), with why: named
     /// when an import isn't found.
     unreadable: Vec<(String, Error)>,
+    /// Packages given as values (packages.md §3).
+    values: Vec<Package>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,9 +230,68 @@ impl Explicit {
         Ok(self)
     }
 
+    /// With the package `package`, given as a value (packages.md §3): its
+    /// texts are used, nothing is read. Two packages with one name are
+    /// `duplicate-package`, unless they are copies (the same manifest and
+    /// schema texts), also when no schema imports them: an official package
+    /// given again must be byte for byte the built-in one.
+    pub fn value(mut self, package: Package) -> Result<Explicit> {
+        let name = package.name().to_owned();
+        if let Some(given) = self.packages.iter().find(|g| g.manifest.name == name) {
+            let place = package.place();
+            return Err(duplicate((&given.manifest, &shown(&given.dir)), (package.manifest(), &shown(&place))));
+        }
+        match self.values.iter_mut().find(|v| v.name() == name) {
+            // A copy: the program's choices for it come together.
+            Some(old) if old.same_as(&package) => {
+                *old = package.rules().iter().cloned().fold(old.clone(), Package::with);
+                if package.is_shape_only() {
+                    *old = old.clone().shape_only();
+                }
+            }
+            Some(old) => {
+                let (a, b) = (shown(&old.place()), shown(&package.place()));
+                return Err(duplicate((old.manifest(), &a), (package.manifest(), &b)));
+            }
+            None => self.values.push(package),
+        }
+        Ok(self)
+    }
+
+    /// The packages given as values.
+    pub fn values(&self) -> &[Package] {
+        &self.values
+    }
+
+    /// Every package given, read as values ([`Package::read`]): those given
+    /// as values, then those given by their directory and found in folders.
+    /// The ones that can't be read are left out and named, with why, as
+    /// the subdirectories of folders that couldn't be read are.
+    pub fn read_values(&self) -> (Vec<Package>, Vec<(String, Error)>) {
+        let mut unreadable = self.unreadable.clone();
+        let mut values = self.values.clone();
+        for given in &self.packages {
+            match Package::read(&given.dir) {
+                Ok(package) => values.push(package),
+                Err(e) => unreadable.push((shown(&given.dir), e)),
+            }
+        }
+        (values, unreadable)
+    }
+
     fn add(mut self, manifest: Manifest, dir: PathBuf, scanned: bool) -> Result<Explicit> {
+        // A copy of a package given as a value (an official one, built in) is that package.
+        if let Some(value) = self.values.iter().find(|v| v.name() == manifest.name) {
+            return match same_texts(&dir, &value.text) {
+                true => Ok(self),
+                false => Err(duplicate((value.manifest(), &shown(&value.place())), (&manifest, &shown(&dir)))),
+            };
+        }
         match self.packages.iter_mut().find(|g| g.manifest.name == manifest.name) {
             Some(given) if given.dir == dir || same_files(&given.dir, &dir) => given.scanned &= scanned,
+            // A package given by its directory is used instead of one found in a folder (packages.md §2).
+            Some(given) if given.scanned && !scanned => *given = Given { manifest, dir, scanned },
+            Some(given) if !given.scanned && scanned => {}
             Some(given) => {
                 return Err(duplicate((&given.manifest, &shown(&given.dir)), (&manifest, &shown(&dir))));
             }
@@ -237,6 +303,9 @@ impl Explicit {
 
 impl Locator for Explicit {
     fn locate_in(&self, name: &str, _from: Option<&Path>, files: &mut FileCache) -> Result<Location> {
+        if let Some(value) = self.values.iter().find(|v| v.name() == name) {
+            return Ok(Location { value: Some(value.text.clone()), ..Location::new(value.place()) });
+        }
         if let Some(given) = self.packages.iter().find(|g| g.manifest.name == name) {
             let version = explicit_version(&given.dir, files);
             return Ok(Location { version, scanned: given.scanned, ..Location::new(&given.dir) });
@@ -248,6 +317,19 @@ impl Locator for Explicit {
         }
         Err(Error::new(ErrorCode::ImportNotFound, reason))
     }
+}
+
+/// Whether the package in `dir` has the manifest and schema texts of `text`,
+/// byte for byte (regular files, read as a package's files are).
+fn same_texts(dir: &Path, text: &PackageText) -> bool {
+    use crate::files::{Kind, Opened, open};
+    let read = |file: &str, kind: Kind| match open(&dir.join(file), kind) {
+        Opened::Read(bytes) => Some(bytes),
+        _ => None,
+    };
+    let manifest = read(crate::packages::MANIFEST, Kind::Manifest);
+    let schema = read(crate::packages::SCHEMA, Kind::PackageSchema);
+    manifest.is_some_and(|m| *m == *text.manifest.as_bytes()) && schema.is_some_and(|s| *s == *text.schema.as_bytes())
 }
 
 /// `duplicate-package`: two packages with one name, with their directories as shown.
@@ -265,7 +347,7 @@ pub(crate) fn duplicate((a, a_dir): (&Manifest, &str), (b, b_dir): (&Manifest, &
 /// (in the directory `dir`). It only gives a version: one that can't be
 /// read (a symbolic link or not a regular file, too large, not JSON) is
 /// ignored (spec §13.3, "Package versions").
-fn explicit_version(dir: &Path, files: &mut FileCache) -> Option<String> {
+pub(crate) fn explicit_version(dir: &Path, files: &mut FileCache) -> Option<String> {
     let json = files.package_json(&dir.join("package.json")).ok().flatten()?;
     match member(&json, "version") {
         Some(Json::String(v)) => Some(v.clone()),

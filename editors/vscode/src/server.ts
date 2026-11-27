@@ -18,23 +18,27 @@ import {
   infer,
   inferSchema,
   MAX_ERRORS,
+  compileForTool,
+  HausPackageError,
+  isHausError,
   missingImports,
-  ModuleError,
   moduleOfType,
   parseDocument,
-  parseSchemaFile,
-  uncheckedProfiles,
+  schemaOutline,
+  sourcesOf,
+  type HausError,
   type ImportEdit,
-  type ProfileNote,
   type MissingImport,
   type SchemaFile,
   type SchemaWarning,
+  type Sources,
+  type UncheckedRules,
   type HRecord,
   type HoverContext,
   type Inference,
   type Value,
-} from "@haus-fmt/haus"
-import { MANIFEST, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
+} from "@haus-fmt/haus/internal"
+import { MANIFEST, readSourcesSync, type ReadSourcesOptions } from "@haus-fmt/haus/node"
 import {
   CodeActionKind,
   CompletionItemKind,
@@ -132,20 +136,31 @@ const settingsFor = (path: string): FolderSettings | undefined => {
 }
 
 /**
- * Parse options for the schema file at `path`: node_modules, plus the
- * packages of `haus.packages`. Its relative imports stay inside the build's
- * root (spec §13.3, "The root"): the workspace folder that has the file, or
- * `haus.root`; a file in no workspace folder has its own directory.
+ * Read options for the schema file at `path`: the packages of `haus.packages`
+ * (the official packages are built in; nothing is looked for, packages.md
+ * §2). Its relative imports stay inside the build's root (spec §13.3, "The
+ * root"): the workspace folder that has the file, or `haus.root`; a file in
+ * no workspace folder has its own directory.
  */
-function optionsFor(path: string) {
+function optionsFor(path: string, onOpen?: (path: string) => void): ReadSourcesOptions {
   const settings = settingsFor(path)
   const given = settings?.packages ?? []
-  const options: NodeResolverOptions = {
+  return {
     packages: given.filter((p) => existsSync(join(p, MANIFEST))),
     folders: given.filter((p) => !existsSync(join(p, MANIFEST))),
     ...(settings === undefined ? {} : { root: settings.root }),
+    ...(onOpen === undefined ? {} : { onOpen }),
   }
-  return schemaOptions(path, options)
+}
+
+/** An error reading the settings' packages or root, before any import (no place in the file). */
+class SettingsError extends Error {}
+
+/** The sources of the schema file at `path`, with the editor's `text` for it (unsaved changes count). Throws SettingsError. */
+function sourcesFor(text: string, path: string, onOpen?: (path: string) => void): Sources {
+  const read = readSourcesSync(path, optionsFor(path, onOpen))
+  if (read._tag === "Failure") throw new SettingsError(settingsMessage(read.failure))
+  return sourcesOf({ ...read.success, files: new Map([...read.success.files, [read.success.entry, text]]) })
 }
 
 /** The files a compiled schema was built from, with their modification times: it is stale when one changes. */
@@ -160,32 +175,39 @@ const stamp = (file: string): string => {
 }
 const fresh = (stamps: Stamps): boolean => [...stamps].every(([file, s]) => stamp(file) === s)
 
-const schemaCache = new Map<string, { readonly file: SchemaFile; readonly stamps: Stamps }>()
+/** A schema compiled for the editor: its file, and the packages whose rules it doesn't check. */
+interface Compiled {
+  readonly file: SchemaFile
+  readonly unchecked: readonly UncheckedRules[]
+}
+
+const schemaCache = new Map<string, { readonly compiled: Compiled; readonly stamps: Stamps }>()
 /**
- * A schema file and its imports (packages from node_modules or `haus.packages`,
- * files next to it), cached by path and text until a file it imports changes
- * (a reinstalled package, say).
+ * A schema file and its imports (the official packages, built in; packages
+ * of `haus.packages`; files next to it), compiled as tools compile
+ * (packages.md §7, "Tools": third-party rules unchecked), cached by path and
+ * text until a file it read changes. Throws SettingsError, or the compile's
+ * HausError.
  */
-function compileSchema(text: string, path: string): SchemaFile {
+function compileSchema(text: string, path: string): Compiled {
   const key = `${path}\0${text}`
   const hit = schemaCache.get(key)
-  if (hit && fresh(hit.stamps)) return hit.file
+  if (hit && fresh(hit.stamps)) return hit.compiled
   if (schemaCache.size > 32) schemaCache.clear()
-  const options = optionsFor(path)
   const stamps = new Map<string, string>()
-  const file = parseSchemaFile(text, {
-    ...options,
-    resolver: {
-      resolve(module, from) {
-        const r = options.resolver!.resolve(module, from)
-        stamps.set(r.key, stamp(r.key))
-        if (r.package !== undefined) stamps.set(join(dirname(r.key), MANIFEST), stamp(join(dirname(r.key), MANIFEST)))
-        return r
-      },
-    },
-  })
-  schemaCache.set(key, { file, stamps })
-  return file
+  const sources = sourcesFor(text, path, (file) => stamps.set(file, stamp(file)))
+  const result = compileForTool(sources)
+  if (result._tag === "Failure") throw result.failure
+  const compiled = { file: result.success.schema.file, unchecked: result.success.unchecked }
+  schemaCache.set(key, { compiled, stamps })
+  return compiled
+}
+
+/** A schema file that isn't on disk (an untitled document): its text alone, with the official packages. */
+function compileAlone(text: string): Compiled {
+  const result = compileForTool(sourcesOf({ entry: "untitled.schema.haus", files: new Map([["untitled.schema.haus", text]]), id: undefined, failures: new Map(), packages: [], folders: [] }))
+  if (result._tag === "Failure") throw result.failure
+  return { file: result.success.schema.file, unchecked: result.success.unchecked }
 }
 
 /** All open documents, checked again (after `haus.packages` or `haus.root` changed). */
@@ -199,7 +221,7 @@ const validateAll = () => {
  * or the workspace folder) that doesn't contain the file or isn't there, or
  * packages of `haus.packages` that can't be used.
  */
-const settingsMessage = (e: ModuleError): string =>
+const settingsMessage = (e: HausError): string =>
   `${e.code === "import-outside-root" || e.message.startsWith("the build's root") ? "haus.root" : "haus.packages"}: ${e.message}`
 
 /** A network path (`\\host\share`, `//host/share`): never used. */
@@ -229,10 +251,10 @@ function schemaDiagnostics(document: TextDocument): { diagnostics: Diagnostic[];
   if (text === undefined) return unchecked(`schema file not found: ${link.path}`)
   let file: SchemaFile
   try {
-    file = compileSchema(text, link.path)
+    file = compileSchema(text, link.path).file
   } catch (e) {
-    if (e instanceof ModuleError) return unchecked(settingsMessage(e))
-    if (!(e instanceof HausSyntaxError)) throw e
+    if (e instanceof SettingsError) return unchecked(e.message)
+    if (!isHausError(e)) throw e
     return unchecked(`${name}: ${e.message}`)
   }
   const report = checkText(file, link.type, document.getText())
@@ -263,7 +285,7 @@ connection.onCompletion(({ textDocument, position }): CompletionItem[] => {
   if (!link || text === undefined) return []
   let file: SchemaFile
   try {
-    file = compileSchema(text, link.path)
+    file = compileSchema(text, link.path).file
   } catch {
     return []
   }
@@ -289,14 +311,27 @@ const warningDiagnostic = (document: TextDocument) => (w: SchemaWarning): Diagno
   ...(w.kind === "deprecated" ? { tags: [DiagnosticTag.Deprecated] } : {}),
 })
 
-/** An import of an official package with profiles, whose rules the editor (it has no codecs) doesn't check (`missing-codec`, spec §13.4). */
-const profileDiagnostic = (document: TextDocument) => (n: ProfileNote): Diagnostic => ({
-  range: { start: document.positionAt(n.offset), end: document.positionAt(n.end) },
-  severity: DiagnosticSeverity.Information,
-  source: "haus",
-  code: n.code,
-  message: n.message,
-})
+/**
+ * At each import of a package whose rules the editor has no implementation
+ * of (not an official package: those are built in), a hint with the code
+ * `missing-codec` (packages.md §7, "Tools").
+ */
+const uncheckedDiagnostics = (document: TextDocument, unchecked: readonly UncheckedRules[]): Diagnostic[] => {
+  if (unchecked.length === 0) return []
+  const byName = new Map(unchecked.map((u) => [u.name, u.rules]))
+  return schemaOutline(document.getText()).imports.flatMap((imp) => {
+    const name = imp.module.replace(/@[0-9]+$/, "")
+    const rules = byName.get(name)
+    if (rules === undefined) return []
+    return [{
+      range: { start: document.positionAt(imp.pos), end: document.positionAt(imp.end) },
+      severity: DiagnosticSeverity.Hint,
+      source: "haus",
+      code: "missing-codec",
+      message: `the rules of ${name} (${rules}) are not checked here`,
+    }]
+  })
+}
 
 /** The code of a schema file's error for a known type used without its import; its data is the MissingImport. */
 const MISSING_IMPORT = "missing-import"
@@ -305,11 +340,11 @@ function validate(document: TextDocument): void {
   const diagnostics: Diagnostic[] = []
   try {
     if (document.languageId === "haus-schema") {
-      const options = document.uri.startsWith("file:") ? optionsFor(fileURLToPath(document.uri)) : {}
-      const file = parseSchemaFile(document.getText(), options)
-      schemas.set(document.uri, file)
-      diagnostics.push(...file.warnings.map(warningDiagnostic(document)))
-      diagnostics.push(...uncheckedProfiles(document.getText()).map(profileDiagnostic(document)))
+      const text = document.getText()
+      const compiled = document.uri.startsWith("file:") ? compileSchema(text, fileURLToPath(document.uri)) : compileAlone(text)
+      schemas.set(document.uri, compiled.file)
+      diagnostics.push(...compiled.file.warnings.map(warningDiagnostic(document)))
+      diagnostics.push(...uncheckedDiagnostics(document, compiled.unchecked))
     }
     else {
       const fromSchema = schemaDiagnostics(document)
@@ -323,9 +358,10 @@ function validate(document: TextDocument): void {
       diagnostics.push(...fromSchema.diagnostics)
     }
   } catch (e) {
-    // The packages or folders of haus.packages can't be used (one was removed, say), or the root doesn't contain the file.
-    if (e instanceof ModuleError) {
-      diagnostics.push({ range: { start: document.positionAt(0), end: document.positionAt(0) }, severity: DiagnosticSeverity.Error, source: "haus", message: settingsMessage(e) })
+    // The packages or folders of haus.packages can't be used (one was removed, say), the root doesn't contain the file,
+    // or an error of the package layer with no place in the file (a package's manifest, two packages with one name).
+    if (e instanceof SettingsError || e instanceof HausPackageError) {
+      diagnostics.push({ range: { start: document.positionAt(0), end: document.positionAt(0) }, severity: DiagnosticSeverity.Error, source: "haus", message: e.message })
       void connection.sendDiagnostics({ uri: document.uri, diagnostics })
       return
     }
@@ -464,9 +500,9 @@ function hoverState(doc: TextDocument, state: Parsed): HoverContext {
   const text = link && schemaText(link.path)
   if (!link || text === undefined) return { values: state.values, inference: state.inference }
   try {
-    return contextOf(state.values, { file: compileSchema(text, link.path), type: link.type })
+    return contextOf(state.values, { file: compileSchema(text, link.path).file, type: link.type })
   } catch (e) {
-    if (!(e instanceof HausSyntaxError)) throw e
+    if (!(e instanceof SettingsError) && !isHausError(e)) throw e
     return { values: state.values, inference: state.inference }
   }
 }
@@ -517,7 +553,7 @@ function isStream(document: TextDocument): boolean {
   const text = link && schemaText(link.path)
   if (!link || text === undefined) return false
   try {
-    return compileSchema(text, link.path).definition(link.type)?.template.stream === true
+    return compileSchema(text, link.path).file.definition(link.type)?.template.stream === true
   } catch {
     return false
   }

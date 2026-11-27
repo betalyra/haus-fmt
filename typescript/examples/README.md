@@ -4,9 +4,9 @@ The same examples as in [Rust](../../rust/examples), on the same files in [`../.
 
 | Example | Shows |
 |---|---|
-| [`quickstart`](quickstart) | `thread.haus`: data imported as a typed module, decoding and encoding with its schema, errors |
-| [`order`](order) | `order.haus`: schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) and codecs |
-| [`logs`](logs) | `logs.haus`: a stream, read and written entry by entry with Effect `Stream` |
+| [`quickstart`](quickstart) | `thread.haus`: data imported as a typed module, decoding and encoding with its schema, errors as Results (`@haus-fmt/haus`) |
+| [`order`](order) | `order.haus`: the official packages (`@haus-fmt/money`, `@haus-fmt/geo`, built in) with their rules on, and codecs as typed pairs (`@haus-fmt/haus`) |
+| [`logs`](logs) | `logs.haus`: a stream, read and written entry by entry with Effect `Stream` (`@haus-fmt/effect`) |
 
 ## Running them
 
@@ -22,10 +22,8 @@ pnpm typecheck                     # tsc 7.1 with the haus content mapper
 fails with `Unknown file extension ".haus"`:
 
 ```sh
-pnpm tsx --import @haus-fmt/import/register/effect src/main.ts
-# or once per shell:
-export NODE_OPTIONS="--import @haus-fmt/import/register/effect"
-pnpm tsx src/main.ts
+pnpm tsx --import @haus-fmt/import/register src/main.ts            # quickstart, order (plain target)
+pnpm tsx --import @haus-fmt/import/register/effect src/main.ts     # logs (Effect target)
 ```
 
 How `.haus` imports work: [`packages/import`](../packages/import).

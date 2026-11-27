@@ -388,12 +388,14 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// A value that can't be written, with where it is: `.data[3]: number literal
-/// longer than 100 characters`, and its code (spec §17). Every
-/// [`Value`](crate::Value) is a haus value (its constructors check that), so
-/// writing fails only for one beyond the writer's limits (spec §7, §9.8), or
-/// for a native value that has no haus form (a tag or number given as text
-/// that isn't one, a record payload with a reserved JSON key).
+/// A Rust value that can't be encoded, with where it is: `.data[3]: number
+/// literal longer than 100 characters`, and its code (spec §17): one beyond
+/// the encoder's limits (spec §7, §9.8), a secret encoded without
+/// [`Encoder::reveal_secrets`](crate::Encoder::reveal_secrets)
+/// (`cannot-encode`, spec §15), a value a package's rule rejects
+/// (`cannot-encode`), or a native value that has no haus form (a tag or
+/// number given as text that isn't one, a record payload with a reserved
+/// JSON key). Writing a [`Value`](crate::Value) never fails (spec §11).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodeError {
     /// Which mistake it is.
@@ -460,12 +462,15 @@ impl fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
-/// What isn't a haus value, rejected when a value is built in code (spec §11,
-/// "Values built in code"), with its code (spec §17): a number whose text
-/// isn't a number literal (`invalid-number`), a tag that isn't a tag name
-/// (`invalid-tag`), a record with a key twice (`duplicate-key`). Values
-/// built so are haus values: writing them fails only beyond the writer's
-/// limits, and their canonical form, hash, equality and order can't fail.
+/// What isn't a haus value within the limits, rejected when a value is built
+/// in code (spec §11, "Values built in code"), with its code (spec §17): a
+/// number whose text isn't a number literal (`invalid-number`), a tag that
+/// isn't a tag name (`invalid-tag`), a record with a key twice
+/// (`duplicate-key`), and anything beyond the default limits of spec §7
+/// (`string-too-long`, `key-too-long`, `tag-too-long`, `number-too-long`,
+/// `exponent-too-large`, `nesting-too-deep`). Values built so are haus
+/// values: writing them, their canonical form, hash, equality and order
+/// can't fail.
 ///
 /// ```
 /// use haus::{ErrorCode, Number, Record, Tag, Value};

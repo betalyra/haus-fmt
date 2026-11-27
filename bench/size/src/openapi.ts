@@ -44,8 +44,8 @@
 import {
   arr, checkStdTime, compileSchemaFile, importJsonValue, isJsonObject, JsonNumber, jsonObject, normalizeNumber, num, rec, str, variant,
   type Json, type JsonObject, type Value,
-} from "@haus-fmt/haus"
-import type * as h from "@haus-fmt/haus/schema"
+} from "@haus-fmt/haus/internal"
+import type { h } from "@haus-fmt/haus/internal"
 
 // ── types ────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 // An application with iso's codec for Money and a looser codec of its own
-// for Currency (build.rs): the money vectors' `looser` (tests/profiles.rs).
+// for Currency (build.rs): the money vectors' `looser` (tests/rules.rs).
 import @haus-fmt/money@1 (Money)
 
 type Root = { value: Money }

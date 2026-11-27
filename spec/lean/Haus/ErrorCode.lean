@@ -31,8 +31,9 @@ inductive Code
   -- decoding with a schema (§15)
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
   | wrongPayload | invalidTime | invalidSecret | codecRejected | unguardedRecursion | unknownType
-  -- encoding (§7, §11, §15): a value that expands beyond the node limit when written
-  | tooManyNodes
+  -- building values (§7, §11, §15): a value built in code over the node limit; a secret
+  -- encoded without `revealSecrets`
+  | tooManyNodes | cannotEncode
   -- JSON (§16)
   | jsonSyntax | unpairedSurrogate | hausJsonForm | hausJsonVersion | hausJsonNumber | hausJsonBytes | invalidTag
   | invalidBase64 | missingMember | unexpectedMember | noJsonForm
@@ -41,6 +42,8 @@ inductive Code
   | importNotFound | importVersion | importCycle | duplicatePackage | undeclaredPackage
   | packageManifest | packageVersion | packagePath | fileTooLarge | tooManyFiles
   | importOutsideRoot
+  -- the package layer's rules (packages.md §7): a package's rule the program doesn't implement
+  | missingCodec
   -- the static rules of schema files (§14), as the schema-file checker reports them
   | wrongArity | redefinePrelude | unknownParameter | invalidParameter | underscoreType
   | duplicateField | duplicateTag | closedEmptyVariant | invalidSpread | spreadCycle
@@ -108,6 +111,7 @@ def Code.name : Code → String
   | .unguardedRecursion => "unguarded-recursion"
   | .unknownType => "unknown-type"
   | .tooManyNodes => "too-many-nodes"
+  | .cannotEncode => "cannot-encode"
   | .jsonSyntax => "json-syntax"
   | .unpairedSurrogate => "unpaired-surrogate"
   | .hausJsonForm => "haus-json-form"
@@ -135,6 +139,7 @@ def Code.name : Code → String
   | .fileTooLarge => "file-too-large"
   | .tooManyFiles => "too-many-files"
   | .importOutsideRoot => "import-outside-root"
+  | .missingCodec => "missing-codec"
   | .wrongArity => "wrong-arity"
   | .redefinePrelude => "redefine-prelude"
   | .unknownParameter => "unknown-parameter"
@@ -169,12 +174,12 @@ def Code.all : List Code := [
   .loneCarriageReturn, .unterminatedComment, .straySlash, .nestingTooDeep, .numberTooLong,
   .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .streamTruncated, .notOneValue,
   .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag,
-  .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .unguardedRecursion, .unknownType, .tooManyNodes, .jsonSyntax,
+  .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .unguardedRecursion, .unknownType, .tooManyNodes, .cannotEncode, .jsonSyntax,
   .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes,
   .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm, .schemaSyntax,
   .unknownModule, .unknownImport, .duplicateImport, .duplicateType, .importNotFound,
   .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest,
-  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles, .importOutsideRoot, .wrongArity, .redefinePrelude,
+  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles, .importOutsideRoot, .missingCodec, .wrongArity, .redefinePrelude,
   .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag,
   .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream,
   .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace,

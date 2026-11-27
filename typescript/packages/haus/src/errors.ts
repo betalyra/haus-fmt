@@ -229,6 +229,63 @@ export class HausEncodeError extends Error {
 }
 
 /**
+ * An error of the package layer that has no place in a file (spec
+ * packages.md): a package's manifest or its `rules` field, two packages with
+ * one name, an official package replaced, a rule the program doesn't
+ * implement (`missing-codec`), a source given that breaks the limits.
+ */
+export class HausPackageError extends Error {
+  override readonly name = "HausPackageError"
+  readonly hint: string
+
+  constructor(
+    readonly reason: string,
+    /** The error's code (spec §17). */
+    readonly code: ErrorCode,
+  ) {
+    super(reason)
+    this.hint = errorHint(code)
+  }
+
+  get docs(): string {
+    return errorDocs(this.code)
+  }
+
+  /** The JSON form of spec §17: `{ code, message, hint, docs }`. */
+  toJSON(): ErrorJson {
+    return { code: this.code, message: this.reason, ...detailsJson(this.code, {}) }
+  }
+}
+
+/**
+ * A mistake in the program's configuration, not in the data (spec
+ * packages.md §7): two codecs for one id, a codec for a type that can't have
+ * one, a rule supplied for a type without one, a type handle the schema
+ * doesn't have. It has no code of the catalogue (spec §17).
+ */
+export class HausConfigError extends Error {
+  override readonly name = "HausConfigError"
+  readonly code = undefined
+
+  constructor(readonly reason: string) {
+    super(reason)
+  }
+}
+
+/**
+ * Every error a fallible step of this package gives, as the failure of its
+ * Result: syntax (HausSyntaxError, and HausSchemaFileError for schema files),
+ * decoding (HausDecodeError), encoding and values built in code
+ * (HausEncodeError), the package layer (HausPackageError), and the
+ * program's configuration (HausConfigError, without a code).
+ */
+export type HausError = HausSyntaxError | HausDecodeError | HausEncodeError | HausPackageError | HausConfigError
+
+/** Whether `e` is one of this package's errors (`HausError`). */
+export const isHausError = (e: unknown): e is HausError =>
+  e instanceof HausSyntaxError || e instanceof HausDecodeError || e instanceof HausEncodeError || e instanceof HausPackageError || e instanceof HausConfigError
+
+/**
  * Whether `e` is the engine's stack overflow: V8's and JavaScriptCore's
  * RangeError "Maximum call stack size exceeded", SpiderMonkey's InternalError
  * "too much recursion". This package's own RangeErrors have a code, and are not.
@@ -268,7 +325,7 @@ export const limitsError = (message: string): RangeError & { readonly code: Erro
 
 /** The code of an error thrown by this package (spec §17), or undefined for any other value. */
 export function errorCode(e: unknown): ErrorCode | undefined {
-  if (e instanceof HausSyntaxError || e instanceof HausDecodeError || e instanceof HausEncodeError) return e.code
+  if (e instanceof HausSyntaxError || e instanceof HausDecodeError || e instanceof HausEncodeError || e instanceof HausPackageError) return e.code
   const code = e instanceof RangeError ? (e as { code?: unknown }).code : undefined
   if (isErrorCode(code)) return code
   // The platform's UTF-8 decoder (TextDecoder with fatal: true), as used by parseStream.
@@ -287,7 +344,7 @@ export function errorCode(e: unknown): ErrorCode | undefined {
  * `invalid-utf8`, no position); undefined for anything else.
  */
 export function errorJson(e: unknown): ErrorJson | undefined {
-  if (e instanceof HausSyntaxError || e instanceof HausDecodeError || e instanceof HausEncodeError) return e.toJSON()
+  if (e instanceof HausSyntaxError || e instanceof HausDecodeError || e instanceof HausEncodeError || e instanceof HausPackageError) return e.toJSON()
   const code = errorCode(e)
   if (code === undefined) return undefined
   return { code, message: code === "invalid-utf8" ? "invalid UTF-8" : (e as Error).message, ...detailsJson(code, {}) }

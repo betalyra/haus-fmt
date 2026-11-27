@@ -8,8 +8,9 @@
  * given the code the core would report for the same value (see `issueError`).
  */
 import {
-  ERROR_CODES, errorDocs, errorHint, errorJson as coreErrorJson, formatPath, HausSyntaxError, parseAll, type ErrorCode, type ErrorJson, type Path, type Value,
-} from "@haus-fmt/haus"
+  ERROR_CODES, errorDocs, errorHint, errorJson as coreErrorJson, formatPath, HausConfigError as CoreConfigError, HausSyntaxError, parseAll, type ErrorCode, type ErrorJson,
+  type HausError as CoreHausError, type Path, type Value,
+} from "@haus-fmt/haus/internal"
 import { Option, Schema, SchemaAST } from "effect"
 import { ConversionError, isRedacted, secretMessage } from "./convert.js"
 
@@ -117,15 +118,61 @@ export class HausLimitsError extends Schema.TaggedError<HausLimitsError, { reado
 export type HausError = HausParseError | HausSchemaError | HausLimitsError
 
 /**
+ * A schema that can't be read or compiled (spec §13, §14, packages.md): a
+ * schema file's error, at its `line` and `column` (in the file the message
+ * names); or an error of the package layer, without a place: a file or
+ * package that can't be read, a manifest or its `rules` field, two packages
+ * with one name, an official package replaced, `missing-codec`.
+ */
+export class HausCompileError extends Schema.TaggedError<HausCompileError, { readonly brand: unique symbol }>()("HausCompileError", {
+  message: Schema.String,
+  line: Schema.optionalKey(Schema.Int),
+  column: Schema.optionalKey(Schema.Int),
+  ...details,
+}) {
+  /** `https://haus-fmt.org/docs/errors#<code>` */
+  get docs(): string {
+    return errorDocs(this.code)
+  }
+
+  /** The JSON form of spec §17: `{ code, message, line?, column?, hint, docs }`. */
+  override toJSON(): ErrorJson {
+    return {
+      code: this.code,
+      message: this.message,
+      ...(this.line !== undefined && this.column !== undefined ? { line: this.line, column: this.column } : {}),
+      ...detailsJson(this),
+      hint: this.hint,
+      docs: this.docs,
+    }
+  }
+}
+
+/**
+ * A mistake in the program's configuration, not in the data (packages.md
+ * §7): two codecs for one type, a rule supplied for a type its package gives
+ * no rule, a type the schema doesn't have. It has no code of the catalogue.
+ */
+export class HausConfigError extends Schema.TaggedError<HausConfigError, { readonly brand: unique symbol }>()("HausConfigError", {
+  message: Schema.String,
+}) {}
+
+/** An error of the core's read or compile step as this package's: a schema file's at its place, a configuration mistake as such. */
+export const compileErrorOf = (e: CoreHausError): HausCompileError | HausConfigError =>
+  e instanceof CoreConfigError ? new HausConfigError({ message: e.reason })
+  : e instanceof HausSyntaxError ? new HausCompileError({ message: e.reason, line: e.line, column: e.column, ...withCode(e.code, e) })
+  : new HausCompileError({ message: e.reason, ...withCode(e.code, "hint" in e ? { hint: e.hint } : {}) })
+
+/**
  * The JSON form of an error (spec §17), for tools and agents:
  *
  *   { code, message, line?, column?, path?, expected?, found?, hint, docs }
  *
- * For the errors of this package (`HausError`) and of the core; undefined for
- * anything else.
+ * For the errors of this package (`HausError`, `HausCompileError`) and of the
+ * core; undefined for anything else (`HausConfigError` has no code).
  */
 export const errorJson = (e: unknown): ErrorJson | undefined =>
-  e instanceof HausParseError || e instanceof HausSchemaError || e instanceof HausLimitsError ? e.toJSON() : coreErrorJson(e)
+  e instanceof HausParseError || e instanceof HausSchemaError || e instanceof HausLimitsError || e instanceof HausCompileError ? e.toJSON() : coreErrorJson(e)
 
 // ── building errors ──────────────────────────────────────────
 

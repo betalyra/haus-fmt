@@ -1,5 +1,5 @@
 /** Schema-based JSON (spec §16.3) for hand-written Effect schemas, and the forms without a schema. */
-import { canonical, num } from "@haus-fmt/haus"
+import { canonical, num } from "@haus-fmt/haus/internal"
 import { describe, expect, it } from "@effect/vitest"
 import { BigDecimal, Effect, Option, Redacted, Schema, Stream } from "effect"
 import * as Haus from "../src/index.js"
@@ -43,12 +43,14 @@ const json = `{"id":"9007199254740993","total":{"_tag":"Money","values":["19.90"
 describe("toJson / fromJson", () => {
   it.effect("writes and reads", () =>
     Effect.gen(function* () {
-      expect(yield* Haus.toJson(Order)(order)).toBe(json)
+      expect(yield* Haus.toJson(Order)(order, { revealSecrets: true })).toBe(json)
       const back = yield* Haus.fromJson(Order)(json)
       expect(BigDecimal.format(back.total.amount)).toBe("19.9")
       expect(Redacted.value(back.key)).toBe("sk-1")
       expect("tracking" in back).toBe(false)
-      expect(yield* Haus.toJson(Order)(back)).toBe(json)
+      expect(yield* Haus.toJson(Order)(back, { revealSecrets: true })).toBe(json)
+      // A secret is written only with revealSecrets (spec §15): cannot-encode at its place.
+      expect(yield* Effect.flip(Haus.toJson(Order)(order))).toMatchObject({ code: "cannot-encode", place: "$.key" })
     }))
 
   it.effect("Option: null, or tagged when its value's JSON can be null", () =>
@@ -123,8 +125,9 @@ describe("toJson / fromJson", () => {
       expect((yield* Effect.flip(Haus.fromHausJson(`{"_haus":2,"_value":"x"}`))).code).toBe("haus-json-version")
       const raw = yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":"\u{202E}"}`))
       expect([raw._tag, raw.code]).toEqual(["HausParseError", "bidi-control"])
-      // A value built in code is a haus value; only the limits can fail (spec §7).
-      expect((yield* Effect.flip(Haus.toHausJson(num("1".repeat(1001)))))).toMatchObject({ _tag: "HausSchemaError", code: "number-too-long" })
+      // A value built in code is checked when built (spec §7): one beyond the limits doesn't exist, so writing never fails on it.
+      expect(() => num("1".repeat(1001))).toThrow(expect.objectContaining({ code: "number-too-long" }))
+      expect(yield* Haus.toHausJson(num("1".repeat(1000)))).toBe(`{"_haus":1,"_value":{"_num":"${"1".repeat(1000)}"}}`)
     }))
 })
 

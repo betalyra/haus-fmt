@@ -24,7 +24,7 @@ fn cases(dir: &str) -> Vec<PathBuf> {
 /// built here independently of the crate's own writer.
 fn suite_json(v: &Value) -> Json {
     match v {
-        Value::String(s) => json!(s),
+        Value::String(s) => json!(s.as_str()),
         Value::Number(n) => json!({ "_num": n.as_str() }),
         Value::Bytes(b) => json!({ "_bytes": b.iter().map(|x| format!("{x:02x}")).collect::<String>() }),
         Value::Array(items) => Json::Array(items.iter().map(suite_json).collect()),

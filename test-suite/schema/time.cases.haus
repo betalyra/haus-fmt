@@ -1,5 +1,5 @@
 // std/time (spec/std/time.md): each type's form, and accepted and rejected
-// strings for every row of the profile's rules table. A string the profile
+// strings for every row of the std/time rule's table. A string the std/time rule
 // rejects is `invalid-time` at the tag's argument, `$[0]`. Ok cases have no
 // output: a schema binding's default host types keep the value, so encoding
 // gives the input back as written (`.000`, `+00:00`, spec §13.4).

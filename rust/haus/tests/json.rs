@@ -2,7 +2,7 @@
 //! JSON, self-describing JSON of values built in code, and the import.
 
 use haus::json::{self, Json, JsonNumber, from_str, parse, to_string};
-use haus::{Bytes, Decimal, Error, ErrorCode, Int, Limits, Secret, Value};
+use haus::{Bytes, Decimal, Encoder, Error, ErrorCode, Int, Limits, Secret, Value};
 use std::collections::BTreeMap;
 
 fn syntax_error(text: &str) -> String {
@@ -187,44 +187,34 @@ fn writers_count_lengths_on_the_haus_value() {
     // exactly at the limit is written, one more is not (spec §16 "Limits").
     let (two, four) =
         (Limits { max_string_length: 2, ..Limits::default() }, Limits { max_string_length: 4, ..Limits::default() });
+    let (two, four) = (Encoder::new(&two), Encoder::new(&four));
     // A string's characters, not its escapes: `é\n\t"` is 4 characters, 9 in JSON.
-    assert_eq!(written(json::to_string_with("é\n\t\"", &four)), "ok");
-    assert_eq!(written(json::to_string_with("é\n\t\"x", &four)), "string-too-long");
-    let described = |v: Value, limits: &Limits| written(json::to_haus_json_with(&v, limits));
-    assert_eq!(described(Value::String("é\n\t\"".into()), &four), "ok");
-    assert_eq!(described(Value::String("é\n\t\"x".into()), &four), "string-too-long");
+    assert_eq!(written(json::to_string_with("é\n\t\"", four)), "ok");
+    assert_eq!(written(json::to_string_with("é\n\t\"x", four)), "string-too-long");
     // Bytes: two characters per byte, in base64 as in hex.
-    let bytes = |n: usize, limits: &Limits| written(json::to_string_with(&Bytes(vec![0; n]), limits));
-    assert_eq!((bytes(2, &four), bytes(3, &four)), ("ok".into(), "string-too-long".into()));
+    let bytes = |n: usize, e: Encoder| written(json::to_string_with(&Bytes(vec![0; n]), e));
+    assert_eq!((bytes(2, four), bytes(3, four)), ("ok".into(), "string-too-long".into()));
     // One byte is 2 characters, although its base64 ("AA==") has 4.
-    assert_eq!((bytes(1, &two), bytes(2, &two)), ("ok".into(), "string-too-long".into()));
-    assert_eq!(described(Value::Bytes(vec![0x0b, 0x34]), &four), "ok");
-    assert_eq!(described(Value::Bytes(vec![0x0b, 0x34, 0xff]), &four), "string-too-long");
-    // Keys and tags, with their own codes.
-    let map = |k: &str| written(json::to_string_with(&BTreeMap::from([(k.to_owned(), 1)]), &four));
+    assert_eq!((bytes(1, two), bytes(2, two)), ("ok".into(), "string-too-long".into()));
+    // Keys, with their own code.
+    let map = |k: &str| written(json::to_string_with(&BTreeMap::from([(k.to_owned(), 1)]), four));
     assert_eq!((map("abcd"), map("abcde")), ("ok".into(), "key-too-long".into()));
-    let record = |k: &str| Value::record([(k, Value::from(1))]).unwrap();
-    assert_eq!(described(record("abcd"), &four), "ok");
-    assert_eq!(described(record("abcde"), &four), "key-too-long");
-    let tag = |t: &str| Value::variant(t, vec![]).unwrap();
-    assert_eq!(described(tag("Abcd"), &four), "ok");
-    assert_eq!(described(tag("Abcde"), &four), "tag-too-long");
     // What isn't a string of the value doesn't count: the forms' member names
-    // (`_haus`, `_value`, `_num`), and numbers held in strings, which the
-    // number limit bounds.
-    assert_eq!(described(Value::String("ab".into()), &two), "ok");
-    assert_eq!(described(Value::from(123456), &two), "ok");
-    assert_eq!(written(json::to_string_with(&123456i64, &two)), "ok");
-    assert_eq!(written(json::to_string_with(&Int::from(123456i64), &two)), "ok");
-    assert_eq!(written(json::to_string_with(&f64::INFINITY, &two)), "ok");
+    // (`_tag`, `value`), and numbers held in strings, which the number limit bounds.
+    assert_eq!(written(json::to_string_with(&123456i64, two)), "ok");
+    assert_eq!(written(json::to_string_with(&Int::from(123456i64), two)), "ok");
+    assert_eq!(written(json::to_string_with(&f64::INFINITY, two)), "ok");
     // std/time: the string inside `Date("…")`, and the tag.
-    let ten = Limits { max_string_length: 10, ..Limits::default() };
+    let ten = Encoder::new(&Limits { max_string_length: 10, ..Limits::default() });
     let date = haus::time::Date::new("2026-11-18").unwrap();
-    assert_eq!(written(json::to_string_with(&date, &ten)), "ok");
-    let nine = Limits { max_string_length: 9, ..Limits::default() };
-    assert_eq!(written(json::to_string_with(&date, &nine)), "string-too-long");
+    assert_eq!(written(json::to_string_with(&date, ten)), "ok");
+    let nine = Encoder::new(&Limits { max_string_length: 9, ..Limits::default() });
+    assert_eq!(written(json::to_string_with(&date, nine)), "string-too-long");
+    // Self-describing JSON is written from a value that exists, without limits.
+    let parsed = haus::parse_one_with("\"abcde\"", &Limits::default()).unwrap();
+    assert!(haus::to_haus_json(&parsed).contains("abcde"));
     // JSON built in code has no haus value: only its numbers and nesting are checked.
-    assert_eq!(written(json::write_with(&Json::String("abcde".into()), &four)), "ok");
+    assert_eq!(written(json::write_with(&Json::String("abcde".into()), four.limits())), "ok");
 }
 
 #[test]
@@ -265,15 +255,15 @@ fn line_and_paragraph_separators_are_written_escaped_and_read_raw() {
     assert_eq!(json::write(&Json::String(held.into())).unwrap(), escaped);
     assert_eq!(json::write(&Json::object([(held, Json::Null)]).unwrap()).unwrap(), format!("{{{escaped}:null}}"));
     assert_eq!(to_string(&held.to_owned()).unwrap(), escaped);
-    let value = haus::Value::record([(held, haus::Value::String(held.into()))]).unwrap();
-    let text = haus::to_haus_json(&value).unwrap();
+    let value = haus::Value::record([(held, haus::Value::string(held).unwrap())]).unwrap();
+    let text = haus::to_haus_json(&value);
     assert_eq!(text, format!(r#"{{"_haus":1,"_value":{{"_rec":{{{escaped}:{escaped}}}}}}}"#));
     assert!(!text.contains(['\u{2028}', '\u{2029}']));
     // ... and read raw by every reader, the self-describing one included.
     let raw = format!("\"{held}\"");
     assert_eq!(parse(&raw).unwrap(), Json::String(held.into()));
     assert_eq!(json::from_str::<String>(&raw).unwrap(), held);
-    assert_eq!(haus::import_json(&raw).unwrap(), haus::Value::String(held.into()));
+    assert_eq!(haus::import_json(&raw).unwrap(), haus::Value::string(held).unwrap());
     let enveloped = format!(r#"{{"_haus": 1, "_value": {{"_rec": {{{raw}: {raw}}}}}}}"#);
     assert_eq!(haus::from_haus_json(&enveloped).unwrap(), value);
 }
@@ -282,7 +272,7 @@ fn line_and_paragraph_separators_are_written_escaped_and_read_raw() {
 fn hex_and_binary_zero_keep_their_sign() {
     // `-0x0` is `-0`, as `-0` is (spec §2): in `_num`, and decoded.
     let v = &haus::parse("[-0x0, -0b0, 0x0]").unwrap()[0];
-    assert_eq!(haus::to_haus_json(v).unwrap(), r#"{"_haus":1,"_value":[{"_num":"-0"},{"_num":"-0"},{"_num":"0"}]}"#);
+    assert_eq!(haus::to_haus_json(v), r#"{"_haus":1,"_value":[{"_num":"-0"},{"_num":"-0"},{"_num":"0"}]}"#);
     assert_eq!(haus::from_str::<i32>("-0x0").unwrap(), 0);
     let float = haus::from_str::<f64>("-0x0").unwrap();
     assert!(float == 0.0 && float.is_sign_negative());
@@ -371,8 +361,11 @@ fn containers() {
         assert_eq!(to_string(&value).unwrap(), json);
         assert_eq!(from_str::<Three>(json).unwrap(), value);
     }
-    // Secret and Box don't change the form.
-    assert_eq!(to_string(&Some(Secret::new(None::<u8>))).unwrap(), r#"{"_tag":"Some","value":null}"#);
+    // Secret and Box don't change the form (a secret is written only when revealed).
+    let revealing = Encoder::default().reveal_secrets();
+    let secret = Some(Secret::new(None::<u8>));
+    assert_eq!(json::to_string_with(&secret, revealing).unwrap(), r#"{"_tag":"Some","value":null}"#);
+    assert_eq!(to_string(&secret).unwrap_err().code, ErrorCode::CannotEncode);
     assert_eq!(read_error::<Option<Option<u8>>>(r#"{"_tag":"Some"}"#), "missing member value");
     assert_eq!(
         read_error::<Option<Option<u8>>>(r#"{"_tag":"Maybe"}"#),
@@ -398,7 +391,7 @@ fn any_is_its_self_describing_value_without_the_envelope() {
         r#"{"_rec":{"a":[{"_num":"1.50"},"x",{"_bytes":"ff"},{"_tag":"None"},{"_tag":"Point","_args":[{"_num":"1"},{"_num":"2"}]}]}}"#
     );
     assert_eq!(from_str::<Value>(&json).unwrap(), v);
-    assert_eq!(haus::to_haus_json(&v).unwrap(), format!(r#"{{"_haus":1,"_value":{json}}}"#));
+    assert_eq!(haus::to_haus_json(&v), format!(r#"{{"_haus":1,"_value":{json}}}"#));
     // An envelope is an object like any other here: not a form of `Any`.
     let e = from_str::<Value>(r#"{"_haus":1,"_value":"x"}"#).unwrap_err();
     assert_eq!(e.code().map(|c| c.as_str()), Some("haus-json-form"));
@@ -409,21 +402,20 @@ fn any_is_its_self_describing_value_without_the_envelope() {
 }
 
 #[test]
-fn self_describing_json_checks_values_built_in_code_against_the_limits() {
-    let error = |v: Value| haus::to_haus_json(&v).unwrap_err().to_string();
+fn self_describing_json_writes_every_value_that_exists() {
     let number = |n: &str| Value::number(n).unwrap();
-    assert_eq!(haus::to_haus_json(&number("1E+05")).unwrap(), r#"{"_haus":1,"_value":{"_num":"1e5"}}"#);
-    assert_eq!(haus::to_haus_json(&number("0xFF")).unwrap(), r#"{"_haus":1,"_value":{"_num":"255"}}"#);
-    assert_eq!(error(Value::Array(vec![number("1"), number("1e6145")])), "[1]: exponent larger than 6144");
-    let payload = Value::variant("P", vec![Value::record([("x", number(&"9".repeat(1001)))]).unwrap()]).unwrap();
-    assert_eq!(error(payload), "(P).x: number literal longer than 1000 characters");
-    let deep = (0..257).fold(number("1"), |v, _| Value::Array(vec![v]));
-    assert!(error(deep).ends_with("nesting deeper than 256 levels"));
+    assert_eq!(haus::to_haus_json(&number("1E+05")), r#"{"_haus":1,"_value":{"_num":"1e5"}}"#);
+    assert_eq!(haus::to_haus_json(&number("0xFF")), r#"{"_haus":1,"_value":{"_num":"255"}}"#);
+    // What is beyond the limits is refused where it is built.
+    assert_eq!(Value::number("1e6145").unwrap_err().code, ErrorCode::ExponentTooLarge);
+    let deep = (0..256).fold(number("1"), |v, _| Value::array(vec![v]).unwrap());
+    assert!(haus::from_haus_json(&haus::to_haus_json(&deep)).is_ok());
+    assert_eq!(Value::array(vec![deep]).unwrap_err().code, ErrorCode::NestingTooDeep);
 
     // The largest hex literal is its decimal literal in self-describing JSON,
     // within the number limit, and reads back; a longer `_num` doesn't.
     let big = haus::parse(&format!("-0x{}", "f".repeat(829))).unwrap().remove(0);
-    let json = haus::to_haus_json(&big).unwrap();
+    let json = haus::to_haus_json(&big);
     assert_eq!(haus::from_haus_json(&json).unwrap(), big);
     let long = haus::from_haus_json(&format!(r#"{{"_haus":1,"_value":{{"_num":"{}"}}}}"#, "9".repeat(1001)));
     assert_eq!(long.unwrap_err().to_string(), "._value._num: number literal longer than 1000 characters");
@@ -508,7 +500,7 @@ fn json_lines() {
 
     // Self-describing lines: a haus stream as JSON Lines, an envelope per line.
     let values = haus::parse("1, Some(\"a\"),").unwrap();
-    let lines = json::to_haus_json_lines(&values).unwrap();
+    let lines = json::to_haus_json_lines(&values);
     assert_eq!(
         lines,
         "{\"_haus\":1,\"_value\":{\"_num\":\"1\"}}\n{\"_haus\":1,\"_value\":{\"_tag\":\"Some\",\"_args\":[\"a\"]}}\n"

@@ -175,12 +175,13 @@ impl RocConfig {
         self.modules_and_warnings(schema, module, id).map(|(modules, _)| modules)
     }
 
-    /// [`RocConfig::modules`], and the `missing-codec` warnings (spec
-    /// §13.4): one for each type that an official profile has a rule for
-    /// (`@haus-fmt/money@1#Currency`), that the types of the application's
-    /// files reach and that has no codec, whose values are then checked for
-    /// their shape only. What is inside a type with a codec doesn't count:
-    /// that codec decides (`money.Iso` checks the currency of a `Money`).
+    /// [`RocConfig::modules`], and the `missing-codec` warnings: one for each
+    /// type with a package rule (packages.md §4, `@haus-fmt/money@1#Currency`)
+    /// that the schema reaches and that has no codec. Roc applies a package's
+    /// rule with the codecs its Roc package ships (`money.Iso`), which a
+    /// program sets as codecs; a type without one is checked for its shape
+    /// only. (Roc keeps rules as codecs for now: packages.md §6's rule before
+    /// any codec is not done in the Roc generator.)
     pub fn modules_and_warnings(&self, schema: &Path, module: &str, id: &str) -> Result<(Modules, Vec<Warning>)> {
         let packages = self.packages.iter().map(|(dir, alias)| (dir.as_path(), alias.as_str()));
         let given = Given::new(packages, &self.folders)?;
@@ -189,12 +190,14 @@ impl RocConfig {
             id: Some(id),
             without_attributes: self.without_attributes,
             root: self.root.as_deref(),
+            require_rules: false,
+            rule_documents: false,
             ..LoadOptions::default()
         };
         let loaded = Schema::load_with(schema, &options)?;
         let units = graph::units(&loaded, self.without_attributes, &codec_ids(&self.codecs))?;
         let modules = generate_units(&loaded, &units, module, &given, &self.codecs, self.json)?;
-        Ok((modules, loaded.missing_codecs(codec_ids(&self.codecs))))
+        Ok((modules, missing_codecs(&loaded, &codec_ids(&self.codecs))))
     }
 
     /// The module for an application's schema file, named `module`, with id
@@ -303,7 +306,13 @@ fn generate_text(
     json: bool,
 ) -> Result<String> {
     let given = Given::new(packages.iter().map(|p| (p.dir.as_path(), p.krate.as_str())), &[])?;
-    let options = LoadOptions { packages: &given.explicit, id: Some(id), ..LoadOptions::default() };
+    let options = LoadOptions {
+        packages: &given.explicit,
+        id: Some(id),
+        require_rules: false,
+        rule_documents: false,
+        ..LoadOptions::default()
+    };
     let loaded = Schema::parse_with(text, &options)?;
     let units = graph::units(&loaded, false, &codec_ids(codecs))?;
     let mut modules = generate_units(&loaded, &units, module, &given, codecs, json)?;
@@ -312,6 +321,19 @@ fn generate_text(
 
 fn codec_ids(codecs: &[(String, String)]) -> Vec<&str> {
     codecs.iter().map(|(id, _)| id.as_str()).collect()
+}
+
+/// The `missing-codec` warnings of a Roc build: each type with a package
+/// rule that `schema` reaches and that none of `codecs` is for, at no place.
+fn missing_codecs(schema: &Schema, codecs: &[&str]) -> Vec<Warning> {
+    let missing = schema.reached_rules().into_iter().filter(|(id, _, _)| !codecs.contains(&id.as_str()));
+    let warning = |(id, rule, _): (String, String, bool)| {
+        let reason = format!(
+            "{id} has the rule {rule}, but no codec is set for it: its values are checked for their shape only"
+        );
+        Error::new(Code::MissingCodec, reason)
+    };
+    missing.map(warning).collect()
 }
 
 /// The modules of a schema's files: the root's, named `module`, then one for

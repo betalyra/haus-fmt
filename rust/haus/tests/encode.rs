@@ -1,7 +1,8 @@
 //! Encoding native values (spec §9.8, §15): the depth is checked while the
 //! value is traversed, so a value nested far deeper than the limit fails
-//! with the writer's error instead of overflowing the stack, and an error
-//! inside a `Secret` is reported at the secret, without anything inside it.
+//! with the encoder's error instead of overflowing the stack; a `Secret` is
+//! refused unless the encoder reveals secrets, and an error inside a
+//! revealed one is reported at the secret, without anything inside it.
 //!
 //! A [`Value`] drops without recursion; Rust drops a deeply nested native
 //! value recursively, so these tests take one apart in a loop
@@ -70,6 +71,11 @@ fn path(n: usize) -> String {
     "[0]".repeat(n)
 }
 
+/// An encoder with the default limits, but `limits` changed.
+fn with(limits: Limits) -> Encoder {
+    Encoder::new(&limits)
+}
+
 #[test]
 fn native_values_at_the_depth_limit_are_written() {
     let nest = Nest::new(256);
@@ -78,8 +84,8 @@ fn native_values_at_the_depth_limit_are_written() {
     nest.dismantle();
 
     let small = Limits { max_depth: 3, ..Limits::default() };
-    assert_eq!(haus::to_string_with(&Nest::new(3), &small).unwrap(), "[[[]]]");
-    assert_eq!(json::to_string_with(&Nest::new(3), &small).unwrap(), "[[[]]]");
+    assert_eq!(haus::to_string_with(&Nest::new(3), with(small)).unwrap(), "[[[]]]");
+    assert_eq!(json::to_string_with(&Nest::new(3), with(small)).unwrap(), "[[[]]]");
 }
 
 #[test]
@@ -92,12 +98,13 @@ fn native_values_beyond_the_depth_limit_fail_at_the_limit() {
     nest.dismantle();
 
     let small = Limits { max_depth: 3, ..Limits::default() };
-    let error = haus::to_string_with(&Nest::new(4), &small).unwrap_err();
+    let error = haus::to_string_with(&Nest::new(4), with(small)).unwrap_err();
     assert_eq!(error.to_string(), format!("{}: nesting deeper than 3 levels", path(3)));
-    let error = json::to_string_with(&Nest::new(4), &small).unwrap_err();
+    let error = json::to_string_with(&Nest::new(4), with(small)).unwrap_err();
     assert_eq!(error.to_string(), format!("{}: nesting deeper than 3 levels", path(3)));
 
-    // `Some` and payloads are levels too, as the writer counts them.
+    // `Some` and payloads are levels too, as the writer counts them: an
+    // `Any` holding a value 256 levels deep fits at the top, not inside `Some`.
     let options = (0..256).fold(Value::from(1), |v, _| Value::variant("Some", vec![v]).unwrap());
     assert!(haus::to_string(&options).is_ok());
     let one_more = Some(options.clone());
@@ -117,79 +124,104 @@ fn very_deep_native_values_fail_without_overflowing_the_stack() {
     nest.dismantle();
 }
 
-#[test]
-fn very_deep_values_built_in_code_have_a_canonical_form() {
-    // The canonical form takes no call stack per level: it has no limit (spec §12).
-    let deep = (0..1_000_000).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    let text = haus::canonical(&deep);
-    assert_eq!(text.len(), 2 * 1_000_001);
-    assert!(text.starts_with("[[[") && text.ends_with("]]]"));
-    assert!(haus::equals(&deep, &deep));
-    // Encoding it stops at the limit, as the writer does.
-    assert!(haus::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-    assert!(haus::to_haus_json(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-    assert!(json::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-}
-
-/// A [`Value`] built in code a million levels deep, of every kind of container.
-fn very_deep(bottom: &str) -> Value {
-    (0..1_000_000).fold(Value::number(bottom).unwrap(), |v, i| match i % 3 {
-        0 => Value::Array(vec![Value::Bytes(vec![1]), v]),
-        1 => Value::record([("a", v), ("b", Value::String("x".into()))]).unwrap(),
+/// The deepest value there is, of every kind of container.
+fn deepest(bottom: &str) -> Value {
+    (0..256).fold(Value::number(bottom).unwrap(), |v, i| match i % 3 {
+        0 => Value::array(vec![Value::bytes(vec![1]).unwrap(), v]).unwrap(),
+        1 => Value::record([("a", v), ("b", Value::string("x").unwrap())]).unwrap(),
         _ => Value::variant("Some", vec![v]).unwrap(),
     })
 }
 
 #[test]
-fn very_deep_values_built_in_code_drop_clone_and_compare_without_recursion() {
-    // A thread of its own, with the default stack (2 MiB): far too small to
-    // take a million levels by recursion.
-    std::thread::spawn(|| {
-        let deep = very_deep("1");
-        let copy = deep.clone();
-        assert!(copy == deep);
-        assert!(very_deep("2") != deep, "a difference at the bottom");
-        assert!(haus::equals(&copy, &deep));
-        drop(copy);
-        drop(deep);
-    })
-    .join()
-    .expect("no stack overflow");
+fn the_deepest_values_drop_clone_compare_and_write_without_recursion_trouble() {
+    // A thread of its own, with the default stack (2 MiB; tests/limits.rs
+    // runs every path in 512 KiB in an optimized build).
+    std::thread::Builder::new()
+        .spawn(|| {
+            let deep = deepest("1");
+            let copy = deep.clone();
+            assert!(copy == deep);
+            assert!(deepest("2") != deep, "a difference at the bottom");
+            assert!(haus::equals(&copy, &deep));
+            assert!(haus::parse_one(&ser::write(&deep)).is_ok());
+            assert!(haus::from_haus_json(&haus::to_haus_json(&deep)).is_ok());
+            // Encoding a value 256 levels deep as an `Any` inside anything else is one level too deep.
+            let arrays = (0..256).fold(Value::from(1), |v, _| Value::array(vec![v]).unwrap());
+            assert_eq!(haus::to_string(&vec![arrays]).unwrap_err().code, ErrorCode::NestingTooDeep);
+            drop(copy);
+            drop(deep);
+        })
+        .unwrap()
+        .join()
+        .expect("no stack overflow");
 }
 
-/// A record with a key that names the secret, and a value the writer rejects.
+/// A record with a key that names the secret, and a value an encoder with
+/// [`small`] limits rejects.
 fn leaky(bad: Value) -> Value {
     Value::record([("hunter2", bad)]).unwrap()
+}
+
+/// Limits a few values exceed: 4 characters, 5 digits, 3 levels.
+fn small() -> Limits {
+    Limits { max_string_length: 4, max_number_length: 5, max_depth: 3, ..Limits::default() }
+}
+
+#[test]
+fn secrets_are_refused_unless_revealed() {
+    let refused = "a Secret is not written unless the encoder reveals secrets (Encoder::reveal_secrets)";
+    let secret = Secret::new(Value::string("sk-123").unwrap());
+    let in_a_record: BTreeMap<String, &Secret<Value>> = [("vault".to_owned(), &secret)].into();
+    for e in [haus::to_string(&secret).unwrap_err(), json::to_string(&secret).unwrap_err()] {
+        assert_eq!((e.code, e.to_string()), (ErrorCode::CannotEncode, refused.to_owned()));
+    }
+    for e in [haus::to_string(&in_a_record).unwrap_err(), json::to_string(&in_a_record).unwrap_err()] {
+        assert_eq!((e.code, e.to_string()), (ErrorCode::CannotEncode, format!(".vault: {refused}")));
+        assert!(!e.to_string().contains("sk-123"));
+    }
+    // Revealed, in full.
+    let revealing = Encoder::default().reveal_secrets();
+    assert_eq!(haus::to_string_with(&in_a_record, revealing).unwrap(), r#"{ vault: "sk-123" }"#);
+    assert_eq!(json::to_string_with(&in_a_record, revealing).unwrap(), r#"{"vault":"sk-123"}"#);
+}
+
+/// A secret holding `bad`, which an encoder with [`small`] limits rejects:
+/// the error says only that the secret isn't valid, at it.
+fn hidden_inside<T: Encode + ToJson>(bad: T) {
+    let hidden = "not a valid Secret (the value is hidden)";
+    let revealing = Encoder::new(&small()).reveal_secrets();
+    let secret = Secret::new(bad);
+    let in_a_record: BTreeMap<String, &Secret<T>> = [("safe".to_owned(), &secret)].into();
+    for e in
+        [haus::to_string_with(&secret, revealing).unwrap_err(), json::to_string_with(&secret, revealing).unwrap_err()]
+    {
+        assert_eq!((e.code, e.to_string()), (ErrorCode::InvalidSecret, hidden.to_owned()));
+    }
+    for e in [
+        haus::to_string_with(&in_a_record, revealing).unwrap_err(),
+        json::to_string_with(&in_a_record, revealing).unwrap_err(),
+    ] {
+        assert_eq!(e.to_string(), format!(".safe: {hidden}"));
+    }
 }
 
 #[test]
 fn errors_inside_a_secret_name_only_the_secret() {
     let hidden = "not a valid Secret (the value is hidden)";
-    let bad_values = [
-        leaky(Value::number("1e6145").unwrap()),
-        leaky(Value::number(&"1".repeat(1001)).unwrap()),
-        leaky(Value::String("x".repeat(16 * 1024 * 1024 + 1))),
-        leaky((0..300).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]))),
-    ];
-    for bad in bad_values {
-        let secret = Secret::new(bad);
-        let in_a_record: BTreeMap<String, &Secret<Value>> = [("vault".to_owned(), &secret)].into();
-        for e in [haus::to_string(&secret).unwrap_err(), json::to_string(&secret).unwrap_err()] {
-            assert_eq!(e.to_string(), hidden);
-        }
-        for e in [haus::to_string(&in_a_record).unwrap_err(), json::to_string(&in_a_record).unwrap_err()] {
-            assert_eq!(e.to_string(), format!(".vault: {hidden}"));
-        }
-    }
+    let revealing = Encoder::new(&small()).reveal_secrets();
+    hidden_inside(haus::Int::from(123456i64));
+    hidden_inside("abcde".to_owned());
+    // A raw value keeps the lengths it was built with; its depth counts where it is put.
+    hidden_inside(leaky(Value::array(vec![Value::array(vec![Value::array(vec![]).unwrap()]).unwrap()]).unwrap()));
 
     // Native values inside a secret, too: a map key in the path would reveal it.
-    let small = Limits { max_string_length: 4, ..Limits::default() };
     let keys: Secret<BTreeMap<String, String>> = Secret::new([("hunter2".to_owned(), "abcde".to_owned())].into());
-    let e = haus::to_string_with(&keys, &small).unwrap_err();
+    let e = haus::to_string_with(&keys, revealing).unwrap_err();
     assert_eq!(e.to_string(), hidden);
     assert!(e.path.is_empty());
     // Outside a secret, the error says where.
-    let e = haus::to_string_with(keys.expose(), &small).unwrap_err();
+    let e = haus::to_string_with(keys.expose(), revealing).unwrap_err();
     assert_eq!(e.to_string(), ".hunter2: key longer than 4 characters");
 }
 
@@ -213,7 +245,7 @@ fn shared_parts_expand_only_within_the_node_limit() {
     // Leaves and raw values count too: an array of nine numbers is ten values.
     assert!(vec![1u8; 9].encode_with(budget(10)).is_ok() && vec![1u8; 9].to_json_with(budget(10)).is_ok());
     assert!(vec![1u8; 10].encode_with(budget(10)).is_err() && vec![1u8; 10].to_json_with(budget(10)).is_err());
-    let raw = Value::Array(vec![Value::from(1); 9]);
+    let raw = Value::array(vec![Value::from(1); 9]).unwrap();
     assert!(raw.encode_with(budget(10)).is_ok() && raw.to_json_with(budget(10)).is_ok());
     assert_eq!(raw.encode_with(budget(9)).unwrap_err().code, ErrorCode::TooManyNodes);
     assert_eq!(raw.to_json_with(budget(9)).unwrap_err().code, ErrorCode::TooManyNodes);
@@ -221,12 +253,14 @@ fn shared_parts_expand_only_within_the_node_limit() {
     for _ in 0..3 {
         assert!(Dag::new(3).encode_with(budget(15)).is_ok());
     }
-    // The writers apply the limit set for them.
-    let fifteen = Limits { max_nodes: 15, ..Limits::default() };
-    assert!(haus::to_string_with(&Dag::new(3), &fifteen).is_ok());
-    let e = haus::to_string_with(&Dag::new(4), &fifteen).unwrap_err();
+    // The encoders apply the limit set for them, each top-level value on its own.
+    let fifteen = budget(15);
+    for _ in 0..3 {
+        assert!(haus::to_string_with(&Dag::new(3), fifteen).is_ok());
+    }
+    let e = haus::to_string_with(&Dag::new(4), fifteen).unwrap_err();
     assert_eq!((e.code, e.place()), (ErrorCode::TooManyNodes, "$".to_owned()));
-    assert_eq!(json::to_string_with(&Dag::new(4), &fifteen).unwrap_err().code, ErrorCode::TooManyNodes);
+    assert_eq!(json::to_string_with(&Dag::new(4), fifteen).unwrap_err().code, ErrorCode::TooManyNodes);
 }
 
 /// The compact text of [`Dag::new`]`(levels)`.

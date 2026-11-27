@@ -477,7 +477,7 @@ ${reads}
   const colon = w.tight ? ":" : ": "
   let first = true
   for (const [k, x] of a) {
-    if (typeof k !== "string") fail()
+    if (typeof k !== "string" || k.length > cx.values.maxStringLength) fail()
     w.s += (first ? w.open : w.comma) + keyText(k) + colon
     first = false
     ${value}(w, x, cx, depth + 1)
@@ -512,7 +512,7 @@ ${inner}`
       case "secret": {
         checkChain(s)
         const inner = this.write(shape.inner)
-        return `  ${STEP}\n  if (!(a instanceof Secret)) fail()\n  ${inner}(w, a.expose(), cx, depth)`
+        return `  ${STEP}\n  if (!(a instanceof Secret) || !cx.revealSecrets) fail()\n  ${inner}(w, a.expose(), cx, depth)`
       }
       case "refine": {
         checkChain(s)
@@ -575,7 +575,7 @@ ${indent}w.s += part.s.startsWith("{") ? w.tag + part.s : "(" + part.s + ")"`
     const integer = `t = ${v}.toString(); if (t.length > cx.values.maxNumberLength) fail()`
     switch (shape?.kind) {
       case "string":
-        return { check: `if (typeof ${v} !== "string") fail(); cx.steps++`, text: `quote(${v})` }
+        return { check: `if (typeof ${v} !== "string" || ${v}.length > cx.values.maxStringLength) fail(); cx.steps++`, text: `quote(${v})` }
       case "bool":
         return { check: `if (typeof ${v} !== "boolean") fail(); cx.steps++`, text: `(${v} ? "True" : "False")` }
       case "int":

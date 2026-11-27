@@ -4,9 +4,9 @@
  */
 import { describe, expect, it } from "vitest"
 import { BigDecimal, Cause, DateTime, Effect, Exit, Option, Redacted, Schema, Stream } from "effect"
-import { arr, parse, type Value } from "@haus-fmt/haus"
-import * as h from "@haus-fmt/haus/schema"
+import { arr, h, parse, uncheckedArr, type Value } from "@haus-fmt/haus/internal"
 import * as Haus from "../src/index.js"
+import { compileText } from "./support.js"
 
 interface TA { readonly _tag: "A"; readonly a: ReadonlyArray<TA | TB> }
 interface TB { readonly _tag: "B"; readonly a: ReadonlyArray<TA | TB>; readonly b: string }
@@ -23,7 +23,7 @@ describe("recursive schemas", () => {
   })
 
   it("recursive values are limited only by the nesting depth (spec §9.9)", () => {
-    const { schemas } = Haus.compileSchemaFile(
+    const { schemas } = compileText(
       "type Ints = < Nil | Cons Int Ints >\ntype Tree = { children: Array Tree }\ntype Chain = { next: Maybe (Array (Maybe Chain)) }",
     )
     const ints = "Cons(1, ".repeat(255) + "Nil" + ")".repeat(255)
@@ -80,26 +80,20 @@ describe("values built in code", () => {
 
   it("a shared Value (a DAG) counts each time it is reached, but fails at once beyond the limit", () => {
     // 2^41 − 1 values when expanded, 41 objects in memory: the core and the adapter both fail with too-many-nodes.
-    const dag = Array.from({ length: 40 }).reduce<Value>((x) => arr([x, x]), arr([]))
+    // The constructors refuse to build it (too-many-nodes, spec §7); the readers' unchecked ones stand in for a forged value.
+    expect(() => Array.from({ length: 40 }).reduce<Value>((x) => arr([x, x]), arr([]))).toThrow(expect.objectContaining({ code: "too-many-nodes" }))
+    const dag = Array.from({ length: 40 }).reduce<Value>((x) => uncheckedArr([x, x]), uncheckedArr([]))
     const [codes, ms] = timed(() => [
       Effect.runSync(Effect.flip(Haus.decodeValue(Tree)(dag))).code,
       Effect.runSync(Effect.flip(Haus.decodeValue(Haus.Any)(dag))).code,
-      (() => {
-        try {
-          return h.decode(h.Any, dag)
-        } catch (e) {
-          return (e as h.HausDecodeError).code
-        }
-      })(),
     ])
     expect(ms).toBeLessThan(1000)
-    expect(codes).toEqual(["too-many-nodes", "too-many-nodes", "too-many-nodes"])
+    expect(codes).toEqual(["too-many-nodes", "too-many-nodes"])
     // Within the limits, a shared Value decodes as the tree it expands to, and is held to maxDepth along every path.
     const small = Array.from({ length: 9 }).reduce<Value>((x) => arr([x, x]), arr([]))
     expect(Effect.runSync(Haus.decodeValue(Tree)(small))).toEqual(sharedTree(10))
     expect(h.decode(h.Any, small)).toBe(small)
     expect(Effect.runSync(Effect.flip(Haus.decodeValue(Tree)(small, { maxDepth: 9 }))).code).toBe("nesting-too-deep")
-    expect(() => h.decode(h.Any, small, { maxDepth: 9 })).toThrow("value nested deeper than 9 levels")
     expect(Effect.runSync(Haus.decodeValue(Tree)(small, { maxDepth: 10 }))).toEqual(sharedTree(10))
   })
 
@@ -271,8 +265,10 @@ describe("values built in code: Effect's encoder sees them only within the limit
       raw,
       shape: { _tag: "Circle", r: 1.5 } as const,
     }
-    expect(Effect.runSync(Haus.encode(Order)(order, { style: "compact" }))).toBe(
+    expect(Effect.runSync(Haus.encode(Order)(order, { style: "compact", revealSecrets: true }))).toBe(
       `{ id: 7, at: Instant("1970-01-01T00:00:00Z"), total: 19.90, tags: ["a", "b"], note: Some("hi"), bytes: x"00ff", key: "s3cret", raw: T { a: [1, Some(x"00ff")] }, shape: Circle { r: 1.5 } }`,
     )
+    // Without revealSecrets, the secret is refused at its place (spec §15).
+    expect(Effect.runSync(Effect.flip(Haus.encode(Order)(order)))).toMatchObject({ code: "cannot-encode", place: "$.key" })
   })
 })

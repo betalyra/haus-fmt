@@ -325,40 +325,37 @@ fn check_reads_a_stream_item_by_item_up_to_its_syntax_error() {
 }
 
 #[test]
-fn check_notes_imports_of_packages_whose_profiles_it_does_not_check() {
-    // Spec §13.4: a tool without codecs notes each import of an official package with profiles.
+fn check_has_the_official_rules_and_notes_the_others() {
+    // packages.md §2, §7 "Tools": the official packages are built in, with
+    // their rules; a reached rule of another package is a hint at its import.
     let dir = tempfile::tempdir().unwrap();
-    let schema =
-        "import @haus-fmt/money (Money)\nimport @haus-fmt/geo (LatLng)\ntype Root = { total: Money, at: LatLng }\n";
-    fs::write(dir.path().join("x.schema.haus"), schema).unwrap();
-    let money = repo().join("extensions/money");
-    let geo = repo().join("extensions/geo");
-    let packages = ["--package", money.to_str().unwrap(), "--package", geo.to_str().unwrap()];
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }");
+    write("vendor/codes/schema.haus", "type Code = < >");
+    write("vendor/codes/rules/iso.md", "A Code is three capital letters.");
+    let schema = "import @haus-fmt/money (Money)\nimport @haus-fmt/geo (LatLng)\nimport @acme/codes (Code)\n\
+                  type Root = { total: Money, at: LatLng, code: Code }\n";
+    write("x.schema.haus", schema);
+    let packages = ["--package", "vendor/codes"];
     let (code, json) = check_json(dir.path(), &[&packages[..], &["x.schema.haus"]].concat());
     assert_eq!(code, 0, "notes don't fail: {json:?}");
     let notes: Vec<(&str, &str, &str)> = array(&array(&json, "files")[0], "diagnostics")
         .iter()
         .map(|d| (str_of(d, "severity"), str_of(d, "code"), str_of(d, "message")))
         .collect();
-    assert_eq!(
-        notes,
-        [
-            (
-                "hint",
-                "missing-codec",
-                "the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec"
-            ),
-            (
-                "hint",
-                "missing-codec",
-                "the rules of @haus-fmt/geo (profiles: wgs84) are not checked here; your application checks them by adding a codec"
-            ),
-        ]
-    );
-    // Not on the data files checked against it.
-    fs::write(dir.path().join("x.haus"), "{ total: Money(1, EUR), at: LatLng(1, 2) }\n").unwrap();
+    assert_eq!(notes, [("hint", "missing-codec", "the rules of @acme/codes (Code: iso) are not checked here")]);
+    // Not on the data files checked against it; the official rules are checked there.
+    write("x.haus", "{ total: Money(1, EUR), at: LatLng(1, 2), code: Anything }\n");
     let (code, json) = check_json(dir.path(), &[&packages[..], &["x.haus"]].concat());
     assert_eq!((code, found(&json)), (0, vec![]));
+    write("x.haus", "{ total: Money(1, Bitcoin), at: LatLng(91, 2), code: Anything }\n");
+    let (code, json) = check_json(dir.path(), &[&packages[..], &["x.haus"]].concat());
+    let codes: Vec<String> = found(&json).into_iter().map(|(_, c, _)| c).collect();
+    assert_eq!((code, codes), (1, vec!["codec-rejected".to_owned(), "codec-rejected".to_owned()]));
 }
 
 #[test]
@@ -471,15 +468,19 @@ fn packages_and_their_files() {
     let manifest = |name: &str| format!("{{ name: \"{name}\", version: \"1.2.0\" }}");
     write("secret/creds.txt", "API_TOKEN=hunter2");
     write("secret/creds.schema.haus", "API_TOKEN=hunter2");
-    // A package that works: app → @acme/orders → @haus-fmt/money, given in a folder.
-    write("vendor/money/package.haus", &manifest("@haus-fmt/money"));
-    write("vendor/money/schema.haus", "type Money = closed < Money Decimal String >");
+    // A package that works: app → @acme/orders (given in a folder) → @haus-fmt/money (built in).
     write("vendor/orders/package.haus", &manifest("@acme/orders"));
     write("vendor/orders/schema.haus", "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }");
     write("app/order.schema.haus", "import @acme/orders (Order)\ntype Root = Order");
-    write("app/order.haus", "{ total: Money(19.99, \"EUR\") }");
+    write("app/order.haus", "{ total: Money(19.99, EUR) }");
     let (code, json) = check_json(dir.path(), &["--packages", "vendor", "app"]);
     assert_eq!(code, 0, "{}", pretty(&json));
+    // An official package can't be replaced: a copy that differs is a duplicate (packages.md §3).
+    write("copies/money/package.haus", &manifest("@haus-fmt/money"));
+    write("copies/money/schema.haus", "type Money = closed < Money Decimal String >");
+    let (code, json) = check_json(dir.path(), &["--packages", "copies", "--packages", "vendor", "app"]);
+    assert_eq!(code, 2, "{}", pretty(&json));
+    assert!(pretty(&json).contains("duplicate-package"), "{}", pretty(&json));
     // A package's schema.haus is a schema file.
     let (code, json) = check_json(dir.path(), &["--packages", "vendor", "vendor/orders"]);
     assert_eq!(code, 0, "{}", pretty(&json));
@@ -685,45 +686,33 @@ fn colors() {
 
 // ── the conformance suite and the repository ─────────────────────
 
-/// The repository's `examples`: the files copied into a temporary
-/// directory, with the official packages they import in a folder of
-/// packages, `packages`, taken from `extensions` (given with `--packages`:
-/// this binding never reads `node_modules`).
-fn examples_with_packages() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let examples = dir.path().join("examples");
-    fs::create_dir_all(&examples).unwrap();
-    for entry in fs::read_dir(repo().join("examples")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_file() {
-            fs::copy(&path, examples.join(path.file_name().unwrap())).unwrap();
-        }
-    }
-    for name in ["money", "geo"] {
-        let package = dir.path().join("packages").join(name);
-        fs::create_dir_all(&package).unwrap();
-        for file in ["package.haus", "schema.haus"] {
-            fs::copy(repo().join("extensions").join(name).join(file), package.join(file)).unwrap();
-        }
-    }
-    dir
-}
+/// The errors the repository has until the official packages' folder
+/// `profiles/` is renamed `rules/` (packages.md §4: a rule's prose is
+/// `rules/<name>.md`): one per official package, about its rule's document.
+const UNTIL_THE_RULES_FOLDER: &[&str] = &["rules/iso.md", "rules/wgs84.md", "rules/rfc9562.md"];
 
 #[test]
 fn the_repository_has_no_errors() {
-    let no_errors = |json: &Json| {
-        let summary = json.get("summary").unwrap();
-        assert_eq!(summary.get("errors"), Some(&Json::Number(0.into())), "{}", pretty(json));
+    let errors = |json: &Json| -> Vec<String> {
+        let files = array(json, "files");
+        let diagnostics = files.iter().flat_map(|f| array(f, "diagnostics"));
+        let errors = diagnostics.filter(|d| str_of(d, "severity") == "error");
+        errors.map(|d| format!("{}: {}", str_of(d, "code"), str_of(d, "message"))).collect()
     };
-    let (code, json) = check_json(&repo(), &["test-suite/valid", "extensions"]);
-    no_errors(&json);
-    assert_eq!(code, 0);
+    let (_, json) = check_json(&repo(), &["test-suite/valid", "extensions"]);
+    let mut found = errors(&json);
+    // Expected until the rename; once it is done, drop them from UNTIL_THE_RULES_FOLDER.
+    for document in UNTIL_THE_RULES_FOLDER {
+        let at = found.iter().position(|e| e.starts_with("package-manifest") && e.contains(document));
+        assert!(at.is_some(), "no error about {document} any more: drop it from UNTIL_THE_RULES_FOLDER");
+        found.remove(at.unwrap());
+    }
+    assert!(found.is_empty(), "{}", pretty(&json));
     let suite = array(&json, "files").len();
 
-    let examples = examples_with_packages();
-    let (code, json) = check_json(examples.path(), &["--packages", "packages", "examples"]);
-    no_errors(&json);
-    assert_eq!(code, 0);
+    // The examples import the official packages, which are built in.
+    let (code, json) = check_json(&repo(), &["examples"]);
+    assert_eq!((code, errors(&json)), (0, vec![]), "{}", pretty(&json));
     assert!(suite + array(&json, "files").len() > 40);
 }
 

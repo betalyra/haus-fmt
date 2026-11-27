@@ -12,7 +12,7 @@
  *   Schema.Literals(["Debug", "Info"]) → "Debug"                           TaggedStruct("Circle", { r }) → {"_tag": "Circle", "r": 1.5}
  *   Haus.OpenUnion([...]): other tags → {"_tag": "Hexagon", "_args": [self-describing…]}
  */
-import type { JsonCase, JsonRecordType, JsonType } from "@haus-fmt/haus"
+import type { JsonCase, JsonRecordType, JsonType } from "@haus-fmt/haus/internal"
 import { Option, SchemaAST } from "effect"
 import { BARE_TAG, CLOSED, DECIMAL, declarationId, members, NESTED, NUMBER, POSITIONAL, PRELUDE_TAG, SECRET, tagOf, UNKNOWN_TAG, VALUE, VALUES } from "./convert.js"
 

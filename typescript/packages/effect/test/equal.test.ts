@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { parse, parseAll, parseWithLocations } from "@haus-fmt/haus"
+import { parse, parseAll, parseWithLocations } from "@haus-fmt/haus/internal"
 import { Equal, HashMap, HashSet, Option } from "effect"
 import * as Haus from "../src/index.js"
 

@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest"
 import { fileURLToPath } from "node:url"
 import { checkData, checkText, compileSchemaFile, MAX_ERRORS, parseSchemaFile, parseWithLocations } from "../src/index.js"
 import * as h from "../src/schema.js"
-import { schemaOptions } from "../src/node.js"
+import { schemaFileAt } from "../src/node.js"
 
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
 const read = (path: string) => readFileSync(repo(path), "utf8")
-/** Options for a schema file of the repo: official extensions come from extensions/. */
-const options = (path: string) => schemaOptions(repo(path), { packages: { "@haus-fmt/money": repo("extensions/money") } })
+/** Options for a schema file of the repo: the official packages are built in. */
+const options = (path: string) => schemaFileAt(repo(path)).options
 
 /** Issues as "severity text-at-location: message". */
 const issues = (schema: string, data: string, type = "Root") =>

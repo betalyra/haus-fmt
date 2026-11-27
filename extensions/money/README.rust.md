@@ -19,9 +19,12 @@ Import its types in your schema like any other package's:
 import @haus-fmt/money (Money)
 ```
 
-The schema gives the shape; the profile says which values are valid. Register
-its codecs in `build.rs`, and values that break the rule are rejected when
-decoding. Without them the build warns (`missing-codec`).
+The schema gives the shape; the package's rule, `iso` for `Currency` (and so
+for `Money`), says which values are valid. The crate carries the rule
+(`haus_money::rules::Iso`), and the generated code checks it wherever a
+`Currency` is decoded or encoded, before any codec: `Money(19.90, Bitcoin)`
+is rejected (`codec-rejected`) with or without codecs. Its codecs are
+optional and give you Rust types for the values the rule accepts:
 
 ```rust
 haus_build::Config::new()

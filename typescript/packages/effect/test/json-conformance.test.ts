@@ -5,12 +5,13 @@
  * without the envelope, as the schema-based form of `Haus.Any`), the import
  * with `Haus.importJson`, and every valid/NAME.jsonl a line at a time.
  */
-import { canonical, equalsJson, isJsonObject, parseAll, parseJson, stringifyJson, type Json, type Value } from "@haus-fmt/haus"
+import { canonical, equalsJson, isJsonObject, parseAll, parseJson, stringifyJson, type Json, type Value } from "@haus-fmt/haus/internal"
 import { describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Option } from "effect"
 import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
+import { compileText, failureOf } from "./support.js"
 
 const SUITE = fileURLToPath(new URL("../../../../test-suite/", import.meta.url))
 const read = (path: string) => readFileSync(`${SUITE}${path}`, "utf8")
@@ -25,6 +26,8 @@ interface Case {
   readonly code: string | undefined
   /** For `Err`, when given: the error's place in the JSON (spec §16.3 "Places"). */
   readonly path: string | undefined
+  /** For `Ok`: the places of the secrets in the decoded value (spec §15). */
+  readonly secrets: readonly string[]
   readonly name: string
 }
 
@@ -46,6 +49,10 @@ const cases = (text: string): Case[] =>
       json: json.value,
       code: code?.kind === "string" ? code.value : undefined,
       path: path?.kind === "string" ? path.value : undefined,
+      secrets: (() => {
+        const s = f.get("secrets")
+        return s?.kind === "array" ? s.items.map((x) => (x.kind === "string" ? x.value : canonical(x))) : []
+      })(),
       name: `${v.tag} ${type?.kind === "string" ? type.value + " " : ""}${json.value}`,
     }
   })
@@ -65,7 +72,8 @@ const fails = <A>(effect: Effect.Effect<A, Haus.HausError>, c: Case) => {
 }
 
 describe("schema-based (spec §16.3)", () => {
-  const { schemas } = Haus.compileSchemaFile(read("json/schema-based.schema.haus"))
+  const { schemas } = compileText(read("json/schema-based.schema.haus"))
+  const reveal = { revealSecrets: true }
 
   for (const c of cases(read("json/schema-based.cases.haus"))) {
     it.effect(c.name, () =>
@@ -74,11 +82,18 @@ describe("schema-based (spec §16.3)", () => {
         if (c.kind === "Err") return fails(Haus.fromJson(schema)(c.json), c)
         if (c.kind === "Ok") {
           const decoded = yield* Haus.decodeValue(schema)(c.input!)
-          expectJson(yield* Haus.toJsonValue(schema)(decoded), c.json)
-          expectJson(parseJson(yield* Haus.toJson(schema)(decoded)), c.json)
+          expectJson(yield* Haus.toJsonValue(schema)(decoded, reveal), c.json)
+          expectJson(parseJson(yield* Haus.toJson(schema)(decoded, reveal)), c.json)
+          // Without revealSecrets: refused at a secret's place, or the same JSON (spec §15, "Encoding a secret").
+          if (c.secrets.length === 0) expectJson(yield* Haus.toJsonValue(schema)(decoded), c.json)
+          else {
+            const e = failureOf(Haus.toJson(schema)(decoded))
+            expect(e.code, e.message).toBe("cannot-encode")
+            expect(c.secrets, e.message).toContain(e._tag === "HausSchemaError" ? e.place : undefined)
+          }
         }
         const back = yield* Haus.fromJson(schema)(c.json)
-        expect(canonical(yield* Haus.encodeValue(schema)(back))).toBe(canonical(c.output!))
+        expect(canonical(yield* Haus.encodeValue(schema)(back, reveal))).toBe(canonical(c.output!))
       }))
   }
 })

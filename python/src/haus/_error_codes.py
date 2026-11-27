@@ -92,6 +92,7 @@ ErrorCode: TypeAlias = Literal[
     "duplicate-package",
     "undeclared-package",
     "package-manifest",
+    "missing-codec",
     "package-version",
     "package-path",
     "package-name",
@@ -115,6 +116,7 @@ ErrorCode: TypeAlias = Literal[
     "codec-rejected",
     "cannot-encode",
     "cyclic-value",
+    "value-changed",
     "step-budget",
     "too-many-nodes",
     "json-syntax",
@@ -132,7 +134,6 @@ ErrorCode: TypeAlias = Literal[
     "deprecated",
     "unlisted-field",
     "unlisted-tag",
-    "missing-codec",
     "unused-codec",
 ]
 """An error code (spec §17): stable, the same in every binding."""
@@ -271,26 +272,28 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
             "imports",
             "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
         ),
-        "import-not-found": ErrorInfo("imports", "Install the package, or fix the path."),
+        "import-not-found": ErrorInfo("imports", "Give the package to the build (packages.md), or fix the path."),
         "import-outside-root": ErrorInfo(
             "imports",
             "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package.",
         ),
         "import-version": ErrorInfo(
             "imports",
-            "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
+            "Give the build the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
         ),
         "import-cycle": ErrorInfo("imports", "Move the shared types to a file both import."),
         "duplicate-package": ErrorInfo(
             "imports",
-            "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`.",
+            "Give one copy of the package: align the versions of the libraries that carry it. Don't give copies of the official packages: they are built in. On npm, a library declares the libraries of the schema packages its schema imports as `peerDependencies`.",
         ),
-        "undeclared-package": ErrorInfo(
-            "imports",
-            "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`).",
-        ),
+        "undeclared-package": ErrorInfo("imports", "Give the package to the build."),
         "package-manifest": ErrorInfo(
-            "imports", 'Write `{ name: "@org/name", version: "1.2.0" }`, in lowercase, with a full version.'
+            "imports",
+            'Write `{ name: "@org/name", version: "1.2.0" }`, in lowercase, with a full version. Give a rule only to a type the schema defines without parameters, as `rules: { "Code": "iso" }`, with its prose in `rules/iso.md`.',
+        ),
+        "missing-codec": ErrorInfo(
+            "imports",
+            "Use the library that publishes the package (its bundle carries the rule), supply the rule (`Package.withRule`), or take the package shape-only (`Package.shapeOnly`) if your program checks its values itself.",
         ),
         "package-version": ErrorInfo("imports", "Release both with the same version: change them together."),
         "package-path": ErrorInfo(
@@ -306,14 +309,14 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         ),
         "package-install-script": ErrorInfo(
             "imports",
-            "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run.",
+            "Remove the script: a schema package is its manifest, its schema and its rules, and needs nothing run.",
         ),
         "package-files": ErrorInfo(
-            "imports", "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships."
+            "imports", "List `package.haus`, `schema.haus` and `rules` in what the package manager ships."
         ),
         "profile-vectors": ErrorInfo(
             "imports",
-            'Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: "T", value: "…" }` or `Reject { type: "T", value: "…" }`, with values valid for `T`.',
+            'Write the rule in `rules/<name>.md`, and each vector as `Accept { type: "T", value: "…" }` or `Reject { type: "T", value: "…" }`, with values valid for `T`.',
         ),
         "package-wrapper": ErrorInfo("imports", "Fix the file so that its package manager can read it."),
         "codec-unreachable": ErrorInfo(
@@ -342,19 +345,28 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         ),
         "invalid-time": ErrorInfo(
             "decoding",
-            "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type.",
+            "Write the date or time as the std/time rule says (spec/std/time.md); the message names the type.",
         ),
         "invalid-secret": ErrorInfo(
             "decoding", "Write a value of the secret's type; the value isn't shown, so check it where it comes from."
         ),
         "codec-rejected": ErrorInfo(
             "decoding",
-            "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which.",
+            "Write a value the codec accepts; the package's rule (rules/<name>.md) or the codec's documentation says which.",
         ),
-        "cannot-encode": ErrorInfo("decoding", "Pass a value of the host type the binding documents for the type."),
+        "cannot-encode": ErrorInfo(
+            "decoding",
+            "Pass a value of the host type the binding documents for the type. For a secret, encode with `revealSecrets` if the program means to write it.",
+        ),
         "cyclic-value": ErrorInfo("decoding", "Break the cycle before encoding."),
+        "value-changed": ErrorInfo(
+            "decoding", "Don't change a value after it is built: build a new one from its parts."
+        ),
         "step-budget": ErrorInfo("decoding", "Simplify the schema, or raise the step limit if the work is expected."),
-        "too-many-nodes": ErrorInfo("decoding", "Build a smaller value, or raise the limit."),
+        "too-many-nodes": ErrorInfo(
+            "decoding",
+            "Build a value whose parts share each other less, or raise the limit where the binding lets you.",
+        ),
         "json-syntax": ErrorInfo("json", "Write valid JSON; the message says what was expected."),
         "unpaired-surrogate": ErrorInfo("json", "Write both halves of the surrogate pair, or the character itself."),
         "haus-json-form": ErrorInfo(
@@ -376,10 +388,6 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         ),
         "unlisted-tag": ErrorInfo(
             "hints", "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
-        ),
-        "missing-codec": ErrorInfo(
-            "hints",
-            "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.",
         ),
         "unused-codec": ErrorInfo(
             "hints",

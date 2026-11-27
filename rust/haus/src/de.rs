@@ -7,7 +7,7 @@
 //! them (a DAG) or contain itself, so it needs no node limit beyond the
 //! memory it takes, only the depth limit of [`Decoder`].
 
-use crate::{Codec, DecodeError, ErrorCode as Code, Limits, Number, Secret, Tag, Value};
+use crate::{Codec, DecodeError, Encode, Encoder, ErrorCode as Code, Limits, Number, Rule, Secret, Tag, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
@@ -408,7 +408,7 @@ impl Decode for AnyTag {
             Value::Variant { tag, args } if args.is_empty() => Ok(AnyTag::Bare(tag.clone())),
             Value::Variant { tag, args } => {
                 args_within_depth(tag, args, d)?;
-                Ok(AnyTag::Other(Unknown::new(tag.clone(), args.clone())))
+                Ok(AnyTag::Other(Unknown::new(tag.clone(), args.to_vec())))
             }
             _ => Err(mismatch("a variant (a tag)", v)),
         }
@@ -489,6 +489,30 @@ pub fn codec_inside_out<C: Codec, Inner: Decode>(v: &Value, d: Decoder) -> R<C::
     codec::<C>(v, d)
 }
 
+/// A value of a type with the package rule `Ru`, as the schema decoded it
+/// (`x`), checked by the rule (packages.md §6): on the value the schema
+/// decoded (what `x` encodes to, its secrets included), before any codec.
+/// A value the rule rejects is `codec-rejected`, at the place of the type.
+pub fn ruled<Ru: Rule, T: Encode>(x: T, d: Decoder) -> R<T> {
+    let rejected = |reason: String| DecodeError::new(Code::CodecRejected, reason);
+    let decoded = match x.encode_with(Encoder::new(d.limits()).reveal_secrets()) {
+        Ok(decoded) => decoded,
+        // A type that checks its rule itself when it is encoded: rejected there.
+        Err(e) if e.code == Code::CannotEncode => return Err(e.into_decode().with_code(Code::CodecRejected)),
+        Err(e) => return Err(e.into_decode()),
+    };
+    Ru::check(&decoded).map_err(|reason| rejected(crate::ser::rejected_by::<Ru>(&reason)))?;
+    Ok(x)
+}
+
+/// A type with the package rule `Ru` and the codec `C`: its base type
+/// decoded, checked by the rule, then given to the codec (packages.md §6:
+/// no codec can make a value pass a rule).
+pub fn codec_ruled<C: Codec, Ru: Rule>(v: &Value, d: Decoder) -> R<C::Target> {
+    let base = ruled::<Ru, _>(C::Base::decode_with(v, d)?, d)?;
+    C::decode(base).map_err(|reason| DecodeError::new(Code::CodecRejected, reason))
+}
+
 impl<T: Decode> Decode for Vec<T> {
     fn decode_with(v: &Value, d: Decoder) -> R<Self> {
         array(v, d, T::decode_with)
@@ -527,7 +551,7 @@ impl Decode for Value {
 impl Decode for String {
     fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
-            Value::String(s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.to_string()),
             _ => Err(mismatch("a string", v)),
         }
     }
@@ -540,7 +564,7 @@ pub struct Bytes(pub Vec<u8>);
 impl Decode for Bytes {
     fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
-            Value::Bytes(b) => Ok(Bytes(b.clone())),
+            Value::Bytes(b) => Ok(Bytes(b.to_vec())),
             _ => Err(mismatch("a byte string", v)),
         }
     }

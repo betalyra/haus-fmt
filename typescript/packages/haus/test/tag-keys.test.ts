@@ -31,12 +31,14 @@ const variants = suite("test-suite/schema/variants.schema.haus")
 const types = suite("test-suite/schema/types.schema.haus")
 const schemaBased = suite("test-suite/json/schema-based.schema.haus")
 
+/** Secrets are written back with revealSecrets only (spec §15). */
+const reveal = { revealSecrets: true }
 /** Decode `text` with `schema` and encode it again, canonical. */
-const roundTrip = (schema: h.Schema<unknown>, text: string) => canonical(h.encode(schema, h.decode(schema, parse(text))))
+const roundTrip = (schema: h.Schema<unknown>, text: string) => canonical(h.encode(schema, h.decode(schema, parse(text)), reveal))
 /** Write `text` as schema-based JSON, read it back and encode it, canonical. */
 const jsonRoundTrip = (schema: h.Schema<unknown>, text: string) => {
-  const json = h.toJson(schema, h.decode(schema, parse(text)))
-  return { json, back: canonical(h.encode(schema, h.fromJson(schema, json))) }
+  const json = h.toJson(schema, h.decode(schema, parse(text)), reveal)
+  return { json, back: canonical(h.encode(schema, h.fromJson(schema, json), reveal)) }
 }
 
 describe("keys named _tag", () => {
@@ -97,7 +99,7 @@ describe("a payload field named _tag", () => {
 
   it("is declared nested", () => {
     expect(schemaDeclarations(compileSchemaFile(namesText).file))
-      .toContain(`type Odd = { readonly _tag: "Odd"; readonly value: { readonly _tag: number; readonly x?: string } } | { readonly _tag: "Even" } | h$.Unknown;`)
+      .toContain(`type Odd<H$ = {}> = { readonly _tag: "Odd"; readonly value: { readonly _tag: h$.Host<H$, "prelude#Int32", number>; readonly x?: h$.Host<H$, "prelude#String", string> } } | { readonly _tag: "Even" } | h$.Unknown;`)
   })
 
   it("h.Variant nests it too, in its type", () => {

@@ -128,6 +128,9 @@ jobs:
       - name: Package suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus
+      - name: Package rules suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --packages ../../test-suite/packages/rules.haus
       - name: Stream suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --stream-suite ../../test-suite/stream
@@ -143,12 +146,12 @@ jobs:
       - name: Format suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --format-suite ../../test-suite/format
-      - name: Profile vectors
+      - name: Rule vectors
         working-directory: spec/lean
         run: |
-          .lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus
-          .lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
-          .lake/build/bin/haus-ref --profile @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
+          .lake/build/bin/haus-rules --rule @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus
+          .lake/build/bin/haus-rules --rule @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
+          .lake/build/bin/haus-rules --rule @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
 
   rust:
     name: Rust
@@ -581,7 +584,7 @@ jobs:
       matrix:
         include:
           - part: lean
-            files: spec/lean/.lake/build/bin/haus-ref
+            files: spec/lean/.lake/build/bin/haus-ref spec/lean/.lake/build/bin/haus-rules
           - part: rust
             files: >-
               rust/target/release/examples/fuzz_runner rust/target/release/examples/time_runner

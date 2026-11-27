@@ -1,3 +1,5 @@
 // The manifest of a schema package: its name and version are the identity of
-// its types in every language (@haus-fmt/money@1#Money).
-{ name: "@haus-fmt/money", version: "1.0.0" }
+// its types in every language (@haus-fmt/money@1#Money). `rules` gives a type
+// its package rule, defined in rules/<name>.md (packages.md §4, §6); Money is
+// covered through its Currency.
+{ name: "@haus-fmt/money", version: "1.0.1", rules: { "Currency": "iso" } }

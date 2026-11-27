@@ -12,7 +12,7 @@
 //! under the last part of its name (`money` for `@haus-fmt/money`).
 //! Packages are looked for only among these. `--codec ID=MODULE`: the Roc module MODULE is the codec
 //! for the type with this id: a module of the app (`Cents`) or of a package
-//! (`money.Iso`, the iso profile's codec of `@haus-fmt/money`). Without `--out`, the module is written to
+//! (`money.Iso`, the codec of `@haus-fmt/money` that checks its rule iso). Without `--out`, the module is written to
 //! standard output. The files a schema imports (`import ./common (Address)`)
 //! get modules of their own (`OrderCommon` for the module `Order`), written
 //! next to `--out`, which they then need; so do the packages' types that a
@@ -23,8 +23,10 @@
 //! (`from_json_<name>`, `to_json_<name>`, spec §16.3).
 //!
 //! Warnings go to standard error: the schema's own, and `missing-codec` for
-//! each type of an official package with profiles that the schema reaches
-//! without a `--codec` for it (spec §13.4).
+//! each type with a package rule (its manifest's `rules`, packages.md §4)
+//! that the schema reaches without a `--codec` for it. Roc still checks a
+//! rule with a package's codec (`money.Iso`); rules apart from codecs, and
+//! `missing-codec` as an error, are not done in the Roc generator yet.
 
 use haus_build::roc::RocConfig;
 use std::io::{self, Write};

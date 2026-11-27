@@ -100,6 +100,22 @@ impl Origin {
             Origin::Package { template, .. } | Origin::File { template, .. } => shape(schema, *template),
         }
     }
+
+    /// Whether the imported type is a Rust type of its own, a struct or an
+    /// enum, whose `Decode` checks its package rule itself; an alias
+    /// (`pub type Currency = haus::AnyTag`) can't, so its uses do.
+    pub fn nominal(&self, schema: &Schema) -> bool {
+        match self {
+            Origin::Time => true,
+            Origin::Package { template, .. } | Origin::File { template, .. } => {
+                match &schema.instance(*template).body {
+                    Type::Record(_) => true,
+                    Type::Variant(v) => !(v.open && v.cases.is_empty()),
+                    _ => false,
+                }
+            }
+        }
+    }
 }
 
 /// What the type with this template (its body, its parameters left as they are) is.
@@ -550,6 +566,13 @@ pub(crate) fn check_codecs<'a>(units: &[Unit], ids: impl IntoIterator<Item = &'a
     if ids.is_empty() {
         return Ok(());
     }
+    // A codec for a type that can't have one never runs (packages.md §7):
+    // a generic type, or a Stream definition.
+    for id in &ids {
+        if let Some(why) = no_codec(units, id) {
+            return Err(Error::config(format!("a codec for {id}, which can't have one: {why}")));
+        }
+    }
     // Every type the generated code has: the units' own, and what they import.
     let mut known: Vec<String> = units
         .iter()
@@ -571,6 +594,41 @@ pub(crate) fn check_codecs<'a>(units: &[Unit], ids: impl IntoIterator<Item = &'a
         )),
         None => Ok(()),
     }
+}
+
+/// Why the type with the id `id` can't have a codec, if it can't: a generic
+/// type of the prelude or of the units (`prelude#Maybe`, `@acme/lib@1#Pair`),
+/// or a `Stream` definition (`Log is a Stream: set the codec for Entry`).
+fn no_codec(units: &[Unit], id: &str) -> Option<String> {
+    if let Some(name) = id.strip_prefix("prelude#") {
+        return PRELUDE.iter().find(|(n, params)| *n == name && *params > 0).map(|(n, params)| {
+            format!("{n} has {params} parameter(s): codecs are for named types without parameters")
+        });
+    }
+    let (file, name) = id.rsplit_once('#')?;
+    let def = units.iter().filter(|u| u.id == file).flat_map(|u| &u.file.types).find(|d| d.name == name);
+    if let Some(def) = def {
+        if !def.params.is_empty() {
+            let params = def.params.join(" ");
+            return Some(format!("{name} {params} has parameters: codecs are for named types without parameters"));
+        }
+        if let schema::Ty::Name { name: stream, args, .. } = &def.ty
+            && stream == "Stream"
+        {
+            let item = match args.as_slice() {
+                [schema::Ty::Name { name, .. }] => name.as_str(),
+                _ => "its items' type",
+            };
+            return Some(format!("{name} is a Stream: set the codec for {item}"));
+        }
+    }
+    let imported = units.iter().flat_map(|u| &u.imports).find(|(n, o)| o.id(n) == id);
+    imported.and_then(|(n, o)| match o {
+        Origin::Package { params, .. } | Origin::File { params, .. } if *params > 0 => {
+            Some(format!("{n} has parameters: codecs are for named types without parameters"))
+        }
+        _ => None,
+    })
 }
 
 /// The ids of the named types `ty` uses, directly or not, and of std/time

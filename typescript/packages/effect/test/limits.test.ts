@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema, Stream } from "effect"
-import { arr, rec, variant, type Value } from "@haus-fmt/haus"
+import { arr, rec, uncheckedArr, variant, type Value } from "@haus-fmt/haus/internal"
 import * as Haus from "../src/index.js"
 
 type Nest = ReadonlyArray<Nest>
@@ -13,8 +13,11 @@ const Nest: Schema.Codec<Nest> = Schema.Array(Schema.suspend(() => Nest))
 
 /** `n` levels of arrays, as haus or JSON text. */
 const nested = (n: number) => "[".repeat(n) + "]".repeat(n)
-/** `n` levels of arrays, as a value built in code. */
-const nestedValue = (n: number): Value => Array.from({ length: n - 1 }).reduce<Value>((inner) => arr([inner]), arr([]))
+/**
+ * `n` levels of arrays, as a value a reader builds (read with limits of `n`
+ * levels): the constructors build values within the default limits only.
+ */
+const nestedValue = (n: number): Value => Array.from({ length: n - 1 }).reduce<Value>((inner) => uncheckedArr([inner]), uncheckedArr([]))
 /** `n` levels of arrays, as the decoded type. */
 const nestedArray = (n: number): Nest => Array.from({ length: n - 1 }).reduce<Nest>((inner) => [inner], [])
 
@@ -256,9 +259,9 @@ describe("JSON", () => {
       expect((yield* Haus.importJson(nested(RAISED), { maxDepth: RAISED })).kind).toBe("array")
       expect((yield* Effect.flip(Haus.importJson(nested(LOWERED + 1), { maxDepth: LOWERED })))._tag).toBe("HausParseError")
       const deep = yield* Haus.importJson(nested(RAISED), { maxDepth: RAISED })
-      const json = yield* Haus.toHausJson(deep, { maxDepth: RAISED })
+      // Writing is total (spec §11): the value was checked when it was read, with the limits it was read with.
+      const json = yield* Haus.toHausJson(deep)
       expect((yield* Haus.fromHausJson(json, { maxDepth: RAISED })).kind).toBe("array")
-      expect((yield* Effect.flip(Haus.toHausJson(deep, { maxDepth: LOWERED })))._tag).toBe("HausSchemaError")
       // 512 JSON levels are beyond hausJsonDepth(8) = 34: the reader stops them.
       expect((yield* Effect.flip(Haus.fromHausJson(json, { maxDepth: LOWERED })))._tag).toBe("HausParseError")
     }))
@@ -324,7 +327,7 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
       expect((yield* Haus.encode(Haus.Any)(any, { limits })).split("\n")).toHaveLength(2 * MAX + 1)
       const json = yield* Haus.toJson(Haus.Any)(any, limits)
       expect(yield* Haus.encode(Haus.Any)(yield* Haus.fromJson(Haus.Any)(json, limits), { style: "compact", limits })).toBe(tagged(MAX))
-      const self = yield* Haus.toHausJson(any, limits)
+      const self = yield* Haus.toHausJson(any)
       expect(yield* Haus.encode(Haus.Any)(yield* Haus.fromHausJson(self, limits), { style: "compact", limits })).toBe(tagged(MAX))
     }))
 
@@ -346,7 +349,6 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
         yield* Effect.flip(Stream.runCollect(Haus.decodeJsonLines(Nest)(chunked("[]\n"), over))),
         yield* Effect.flip(Stream.runCollect(Haus.encodeJsonLines(Nest)(Stream.make([]), over))),
         yield* Effect.flip(Haus.importJson("[]", over)),
-        yield* Effect.flip(Haus.toHausJson(arr([]), over)),
         yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":[]}`, over)),
       ]
       for (const e of errors) {
@@ -371,7 +373,6 @@ describe("an empty record, array or payload is a level, built in code as parsed 
       expect(code(Haus.decode(Haus.Any)(text, { maxDepth: 2 }))).toBe("nesting-too-deep")
       expect(code(Haus.decodeValue(Haus.Any)(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
       expect(code(Haus.encodeValue(Haus.Any)(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
-      expect(code(Haus.toHausJson(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
       expect(Effect.runSync(Haus.decodeValue(Haus.Any)(value, { maxDepth: 3 }))).toBe(value)
     })
   }

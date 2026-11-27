@@ -228,14 +228,14 @@ fn strings_in_order(values: Vec<Value>) -> Vec<String> {
     let mut stack: Vec<Value> = values.into_iter().rev().collect();
     while let Some(mut v) = stack.pop() {
         match &mut v {
-            Value::String(s) => out.push(std::mem::take(s)),
+            Value::String(s) => out.push(std::mem::take(s).into_string()),
             Value::Array(items) | Value::Variant { args: items, .. } => {
                 stack.extend(std::mem::take(items).into_iter().rev())
             }
             Value::Record(fields) => {
                 for (k, v) in std::mem::take(fields).into_iter().rev() {
                     stack.push(v);
-                    stack.push(Value::String(k));
+                    stack.push(Value::String(crate::Text::from_checked(k)));
                 }
             }
             Value::Number(_) | Value::Bytes(_) => {}

@@ -104,10 +104,10 @@ pub struct CheckArgs {
     pub limits: LimitArgs,
 }
 
-/// Where the schema packages that schemas import are (spec §13.3): given
+/// Where the schema packages that schemas import are (packages.md §2): the
+/// official ones are built in, with their rules; others are given
 /// explicitly, each by its directory or in a folder of packages. This tool
-/// never looks in `node_modules` (only JavaScript runtimes, the npm
-/// ecosystem, do).
+/// searches for none (no `node_modules`, no other ecosystem's folders).
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Packages")]
 pub struct PackageArgs {
@@ -127,10 +127,11 @@ pub enum PackageCommand {
     /// Check a schema package before publishing it.
     ///
     /// Its manifest (package.haus) and schema (schema.haus, with its imports
-    /// resolved), its profiles' test vectors, and the wrappers of package
-    /// managers next to them: package.json, Cargo.toml and pyproject.toml
-    /// give the manifest's version, ship package.haus, schema.haus and the
-    /// profiles, declare every package the schema imports, and run nothing
+    /// resolved), its rules (the manifest's field, their prose and test
+    /// vectors), and the wrappers of package managers next to them:
+    /// package.json, Cargo.toml and pyproject.toml give the manifest's
+    /// version, ship package.haus, schema.haus and the rules' files, declare
+    /// every package the schema imports, and run nothing
     /// when installed (no npm install scripts). The files are only read:
     /// nothing is run, packed or fetched.
     Check(PackageCheckArgs),

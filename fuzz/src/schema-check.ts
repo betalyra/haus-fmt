@@ -85,11 +85,11 @@ function inProcess(name: string, compile: (text: string) => unknown): Runner {
   }
 }
 
-/** @haus-fmt/effect's `Haus.compileSchemaFile`: the TypeScript parser and checker, its own schema builder. */
+/** @haus-fmt/effect's schema builder (`compileSchemaFile`, the module behind `Haus.compile`): the core's parser and checker, its own schema builder. */
 async function effectRunner(): Promise<Runner> {
   const dir = join(root, "typescript/packages/effect")
-  const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
-  return inProcess("effect", (t) => Haus.compileSchemaFile(t))
+  const SchemaFile = await import(pathToFileURL(join(dir, "dist/schema-file.js")).href)
+  return inProcess("effect", (t) => SchemaFile.compileSchemaFile(t))
 }
 
 const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "python", "go", "swift", "jvm", "zig"]

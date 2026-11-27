@@ -321,6 +321,16 @@ where
     codec::<C>(json, d)
 }
 
+/// A type with the package rule `Ru` and the codec `C`: its base type read,
+/// checked by the rule (see [`crate::de::ruled`]), then given to the codec.
+pub fn codec_ruled<C: Codec, Ru: crate::Rule>(json: &Json, d: Decoder) -> R<C::Target>
+where
+    C::Base: FromJson,
+{
+    let base = crate::de::ruled::<Ru, _>(C::Base::from_json_with(json, d)?, d)?;
+    C::decode(base).map_err(|reason| DecodeError::new(Code::CodecRejected, reason))
+}
+
 impl<T: FromJson> FromJson for Vec<T> {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         array(json, d, T::from_json_with)

@@ -22,7 +22,7 @@
 //! assert_eq!(haus::json::to_string(&Some(None::<f64>)).unwrap(), r#"{"_tag":"Some","value":null}"#);
 //!
 //! let value = haus::parse("Point(1, 2.50)").unwrap().remove(0);
-//! let json = haus::to_haus_json(&value).unwrap();
+//! let json = haus::to_haus_json(&value);
 //! assert_eq!(json, r#"{"_haus":1,"_value":{"_tag":"Point","_args":[{"_num":"1"},{"_num":"2.50"}]}}"#);
 //! assert_eq!(haus::from_haus_json(&json).unwrap(), value);
 //! ```
@@ -607,6 +607,28 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
 
 /// [`write_with`], for a reader of `form`: it nests as deep as that reader takes.
 fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, EncodeError> {
+    crate::ser::supported(limits)?;
+    let max = form.max_depth(limits);
+    let too_deep = || EncodeError::new(ErrorCode::NestingTooDeep, format!("JSON nested deeper than {max} levels"));
+    render(json, |part, depth| match part {
+        Json::Number(n) => check_number(n, limits),
+        Json::Array(_) | Json::Object(_) if depth >= max => Err(too_deep()),
+        _ => Ok(()),
+    })
+}
+
+/// JSON built from a value that exists (self-describing JSON, spec §16.2),
+/// on one line: it needs no check, so it can't fail.
+pub(crate) fn write_unchecked(json: &Json) -> String {
+    match render(json, |_, _| Ok::<(), std::convert::Infallible>(())) {
+        Ok(text) => text,
+        Err(never) => match never {},
+    }
+}
+
+/// JSON on one line, each value checked by `check` (with the number of
+/// arrays and objects it is inside) before it is written.
+fn render<E>(json: &Json, mut check: impl FnMut(&Json, usize) -> Result<(), E>) -> Result<String, E> {
     /// What is left to write, last first: a stack rather than recursion, so
     /// that deep nesting takes no call stack.
     enum Next<'a> {
@@ -615,10 +637,11 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
         Text(&'static str),
         Close(char),
     }
-    crate::ser::supported(limits)?;
-    let max = form.max_depth(limits);
     let (mut out, mut depth, mut todo) = (String::new(), 0, vec![Next::Value(json)]);
     while let Some(next) = todo.pop() {
+        if let Next::Value(part) = next {
+            check(part, depth)?;
+        }
         match next {
             Next::Text(t) => out.push_str(t),
             Next::Name(k) => {
@@ -631,18 +654,9 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
             }
             Next::Value(Json::Null) => out.push_str("null"),
             Next::Value(Json::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
-            Next::Value(Json::Number(n)) => {
-                check_number(n, limits)?;
-                out.push_str(n);
-            }
+            Next::Value(Json::Number(n)) => out.push_str(n),
             Next::Value(Json::String(s)) => escape(s, &mut out),
             Next::Value(Json::Array(items)) => {
-                if depth >= max {
-                    return Err(EncodeError::new(
-                        ErrorCode::NestingTooDeep,
-                        format!("JSON nested deeper than {max} levels"),
-                    ));
-                }
                 depth += 1;
                 out.push('[');
                 todo.push(Next::Close(']'));
@@ -654,12 +668,6 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
                 }
             }
             Next::Value(Json::Object(members)) => {
-                if depth >= max {
-                    return Err(EncodeError::new(
-                        ErrorCode::NestingTooDeep,
-                        format!("JSON nested deeper than {max} levels"),
-                    ));
-                }
                 depth += 1;
                 out.push('{');
                 todo.push(Next::Close('}'));
@@ -743,30 +751,29 @@ pub fn from_str_with<T: FromJson + Encode>(text: &str, limits: &Limits) -> Resul
 /// it is encoded to check that, and an error encoding it is the error.
 fn typed<T: FromJson + Encode>(json: &Json, limits: &Limits) -> Result<T, Error> {
     let x = T::from_json_with(json, Decoder::new(limits))?;
-    match x.encode_with(Encoder::new(limits)) {
+    // Checked as a haus value, its secrets included (they are only counted).
+    match x.encode_with(Encoder::new(limits).reveal_secrets()) {
         Ok(_) => Ok(x),
         Err(e) => Err(e.into_decode().into()),
     }
 }
 
-/// Write a value as schema-based JSON (spec §16.3), on one line.
+/// Encode a value as schema-based JSON (spec §16.3), on one line, with the
+/// default limits. A [`crate::Secret`] is refused (`cannot-encode`) unless
+/// the encoder reveals secrets ([`to_string_with`]).
 pub fn to_string<T: ToJson + ?Sized>(value: &T) -> Result<String, EncodeError> {
-    to_string_with(value, &Limits::default())
+    to_string_with(value, Encoder::default())
 }
 
-/// [`to_string`], for a reader with `limits`. Fails if `limits.max_depth`
-/// is more than [`crate::MAX_SUPPORTED_DEPTH`].
-pub fn to_string_with<T: ToJson + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
-    write_with(&value.to_json_with(Encoder::new(limits))?, limits)
+/// [`to_string`], encoded with `e`: the limits of the reader it is for
+/// (`Encoder::new(&limits)`), and whether secrets are written
+/// (`.reveal_secrets()`). Fails if the depth limit is more than
+/// [`crate::MAX_SUPPORTED_DEPTH`].
+pub fn to_string_with<T: ToJson + ?Sized>(value: &T, e: Encoder) -> Result<String, EncodeError> {
+    write_with(&value.to_json_with(e.restarted())?, e.limits())
 }
 
 // ── self-describing JSON and the import ──────────────────────
-
-/// [`crate::to_haus_json`], for a reader with `limits`. Fails if
-/// `limits.max_depth` is more than [`crate::MAX_SUPPORTED_DEPTH`].
-pub fn to_haus_json_with(value: &Value, limits: &Limits) -> Result<String, EncodeError> {
-    write_form(&to_self_describing(value, limits)?, limits, Form::SelfDescribing)
-}
 
 /// [`crate::from_haus_json`] with `limits`. Fails if `limits.max_depth` is
 /// more than [`crate::MAX_SUPPORTED_DEPTH`].
@@ -790,9 +797,9 @@ pub fn to_string_all<T: ToJson>(values: &[T]) -> Result<String, EncodeError> {
 }
 
 /// Write values as self-describing JSON Lines: an envelope per value, each
-/// followed by a line feed. Errors say which value: `[3].total: …`.
-pub fn to_haus_json_lines(values: &[Value]) -> Result<String, EncodeError> {
-    lines(values, crate::to_haus_json)
+/// followed by a line feed. It can't fail (spec §11).
+pub fn to_haus_json_lines(values: &[Value]) -> String {
+    values.iter().map(|v| crate::to_haus_json(v) + "\n").collect()
 }
 
 /// Each value written by `write`, followed by a line feed.

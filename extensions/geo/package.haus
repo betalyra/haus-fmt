@@ -1,1 +1,1 @@
-{ name: "@haus-fmt/geo", version: "1.0.0" }
+{ name: "@haus-fmt/geo", version: "1.0.1", rules: { "LatLng": "wgs84", "BBox": "wgs84" } }

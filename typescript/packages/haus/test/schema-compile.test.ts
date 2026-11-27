@@ -1,13 +1,20 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { canonical, compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, uncheckedProfiles, type Codec, type StandardSchemaV1 } from "../src/index.js"
-import { nodeResolver, schemaOptions } from "../src/node.js"
+import { canonical, compileSchemaFile, HausSchemaFileError, parseOptionsOf, parseSchemaFile, schemaDeclarations, Sources, type EngineCodec as Codec, type ModuleResolver, type StandardSchemaV1 } from "../src/index.js"
+import { schemaFileAt } from "../src/node.js"
 import * as h from "../src/schema.js"
 
 const examples = join(import.meta.dirname, "../../../../examples")
 const read = (name: string) => readFileSync(join(examples, name), "utf8")
-const compile = (name: string) => compileSchemaFile(read(name), schemaOptions(join(examples, name)))
+const compile = (name: string) => compileSchemaFile(read(name), schemaFileAt(join(examples, name)).options)
+
+/** A resolver with the built-in official packages, for a schema given as text. */
+const builtIns = (): ModuleResolver => {
+  const sources = Sources.make("x.schema.haus", { "x.schema.haus": "" })
+  if (sources._tag === "Failure") throw sources.failure
+  return parseOptionsOf(sources.success).options.resolver!
+}
 
 describe("schemas from schema files", () => {
   it("compile a record that reaches its own record case by name (found by the schema-file fuzzer)", () => {
@@ -138,8 +145,8 @@ describe("schemas from schema files", () => {
     expect(h.toJson(schemas.Gen!, h.parse(schemas.Gen!, "Box { w: 1 }"))).toBe(`{"_tag":"Box","value":{"w":1}}`)
     // The declarations agree: the record's fields beside the tag.
     const decl = schemaDeclarations(file)
-    const box = `{ readonly _tag: "Box"; readonly w: number; readonly tags?: ReadonlyArray<string> }`
-    for (const name of ["Inline", "Paren", "Named", "Chain", "Applied", "ById"]) expect(decl).toContain(`export type ${name} = ${box} | { readonly _tag: "Empty" } | h$.Unknown;`)
+    const box = `{ readonly _tag: "Box"; readonly w: h$.Host<H$, "prelude#Int32", number>; readonly tags?: ReadonlyArray<h$.Host<H$, "prelude#String", string>> }`
+    for (const name of ["Inline", "Paren", "Named", "Chain", "Applied", "ById"]) expect(decl).toContain(`export type ${name}<H$ = {}> = ${box} | { readonly _tag: "Empty" } | h$.Unknown;`)
   })
 
   it("agree with hand-written schemas where a Recursive record is a case's one argument (spec §15)", () => {
@@ -191,14 +198,12 @@ describe("schemas from schema files", () => {
 })
 
 describe("codecs", () => {
-  const repo = join(import.meta.dirname, "../../../..")
-  const packages = { "@haus-fmt/money": join(repo, "extensions/money") }
   const capitals: Codec = {
     id: "@haus-fmt/money@1#Currency",
     apply: (base) => h.refine(base, (c) => (typeof c === "string" && /^[A-Z]{3}$/.test(c) ? undefined : "a currency is three letters A–Z")),
   }
   const order = (codecs: readonly Codec[]) =>
-    compileSchemaFile(`import @haus-fmt/money (Money)\ntype Order = { total: Money, paid: Array Money }`, { resolver: nodeResolver({ packages }), codecs }).schemas.Order!
+    compileSchemaFile(`import @haus-fmt/money (Money)\ntype Order = { total: Money, paid: Array Money }`, { resolver: builtIns(), codecs }).schemas.Order!
 
   it("apply wherever their type occurs, inside imported packages too", () => {
     const text = `{ total: Money(19.90, EUR), paid: [Money(1, USD)] }`
@@ -223,7 +228,7 @@ describe("codecs", () => {
 
   it("unused-codec: once per id no type has, not for the prelude, std/time or the imported package's types (spec §13.4)", () => {
     const compiled = (codecs: readonly Codec[]) =>
-      compileSchemaFile(`import @haus-fmt/money (Currency)\ntype Order = { shown: Currency }`, { resolver: nodeResolver({ packages }), codecs }).warnings
+      compileSchemaFile(`import @haus-fmt/money (Currency)\ntype Order = { shown: Currency }`, { resolver: builtIns(), codecs }).warnings
     const major2: Codec = { id: "@haus-fmt/money@2#Money", apply: (base) => base }
     expect(compiled([capitals, major2])).toEqual([{ code: "unused-codec", id: "@haus-fmt/money@2#Money", message: "a codec is set for @haus-fmt/money@2#Money, but no type has that id: it never runs" }])
     const known = ["@haus-fmt/money@1#Money", "prelude#Decimal", "std/time#Instant", "Order"].map((id): Codec => ({ id, apply: (base) => base }))
@@ -233,7 +238,7 @@ describe("codecs", () => {
   it("for the prelude and std/time apply wherever their type occurs, in a package's types too (spec §13.4)", () => {
     const tenths: Codec = { id: "prelude#Decimal", apply: (base) => h.refine(base as h.Schema<string>, (d) => (/\.\d{2,}$/.test(d) ? "at most one decimal" : undefined)) }
     const at: Codec = { id: "std/time#Instant", apply: (base) => h.transform(base as h.Schema<string>, (s) => new globalThis.Date(s), (d) => d.toISOString().replace(".000Z", "Z")) }
-    const { schemas } = compileSchemaFile(`import @haus-fmt/money (Money)\nimport std/time (Instant)\ntype Order = { total: Money, at: Instant, rate: Decimal }`, { resolver: nodeResolver({ packages }), codecs: [tenths, at] })
+    const { schemas } = compileSchemaFile(`import @haus-fmt/money (Money)\nimport std/time (Instant)\ntype Order = { total: Money, at: Instant, rate: Decimal }`, { resolver: builtIns(), codecs: [tenths, at] })
     const order = h.parse(schemas.Order!, `{ total: Money(1.5, EUR), at: Instant("2026-11-01T09:00:00Z"), rate: 0.5 }`) as { at: globalThis.Date }
     expect(order.at).toBeInstanceOf(globalThis.Date)
     expect(h.stringify(schemas.Order!, order, { style: "compact" })).toBe(`{ total: Money(1.5, EUR), at: Instant("2026-11-01T09:00:00Z"), rate: 0.5 }`)
@@ -242,36 +247,11 @@ describe("codecs", () => {
   })
 
   it("runs on the type a value is decoded with; inside a Secret its rejection is invalid-secret; encoding, cannot-encode at the codec's place", () => {
-    const options = { resolver: nodeResolver({ packages }), codecs: [capitals] }
+    const options = { resolver: builtIns(), codecs: [capitals] }
     const { schemas } = compileSchemaFile(`import @haus-fmt/money (Currency)\ntype Code = Currency\ntype Key = { c: Secret Currency }`, options)
     expect(() => h.parse(schemas.Code!, `Usd`)).toThrow(expect.objectContaining({ code: "codec-rejected", path: [] }))
     expect(() => h.parse(schemas.Key!, `{ c: Usd }`)).toThrow(expect.objectContaining({ code: "invalid-secret", path: ["c"] }))
     expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(expect.objectContaining({ code: "cannot-encode", path: ["total", 1] }))
-  })
-
-  it("missing for a type of an official profile: the warning missing-codec, once per id (spec §13.4)", () => {
-    const compiled = (text: string, codecs: readonly Codec[], more: Record<string, string> = {}) =>
-      compileSchemaFile(text, { resolver: nodeResolver({ packages: { ...packages, ...more } }), codecs })
-    const orderText = `import @haus-fmt/money (Money)\ntype Order = { total: Money, paid: Array Money }`
-    expect(compiled(orderText, []).warnings).toEqual([{
-      code: "missing-codec",
-      id: "@haus-fmt/money@1#Currency",
-      profiles: ["iso"],
-      message: "@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only",
-    }])
-    // With the codec, none; decoding is the same either way.
-    expect(compiled(orderText, [capitals]).warnings).toEqual([])
-    // A codec for Money covers its Currency; a Currency outside a Money still needs one.
-    const money: Codec = { id: "@haus-fmt/money@1#Money", apply: (base) => base }
-    expect(compiled(orderText, [money]).warnings).toEqual([])
-    expect(compiled(`import @haus-fmt/money (Money, Currency)\ntype Order = { total: Money, shown: Currency }`, [money]).warnings.map((w) => w.id)).toEqual(["@haus-fmt/money@1#Currency"])
-    // Only what the file's types reach counts: an import alone is no use.
-    expect(compiled(`import @haus-fmt/money (Money)\ntype Order = { n: Int }`, []).warnings).toEqual([])
-    // geo: BBox and LatLng each have a rule; a codec for BBox covers the corners inside it.
-    const geo = { "@haus-fmt/geo": join(repo, "extensions/geo") }
-    const box: Codec = { id: "@haus-fmt/geo@1#BBox", apply: (base) => base }
-    expect(compiled(`import @haus-fmt/geo (BBox)\ntype Area = { view: BBox }`, [], geo).warnings.map((w) => w.id)).toEqual(["@haus-fmt/geo@1#BBox", "@haus-fmt/geo@1#LatLng"])
-    expect(compiled(`import @haus-fmt/geo (BBox)\ntype Area = { view: BBox }`, [box], geo).warnings).toEqual([])
   })
 
   it("apply to recursive types", () => {
@@ -310,32 +290,25 @@ describe("codecs", () => {
   })
 })
 
-describe("tools without codecs (spec §13.4)", () => {
-  it("note each import of an official package with profiles, at the import", () => {
-    const text = `import std/time (Date)\nimport @haus-fmt/money@1 (Money)\nimport @haus-fmt/geo (LatLng)\nimport @acme/ids (Id)\ntype A = Int`
-    const notes = uncheckedProfiles(text)
-    expect(notes.map(({ module, profiles, message }) => ({ module, profiles, message }))).toEqual([
-      { module: "@haus-fmt/money", profiles: ["iso"], message: "the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec" },
-      { module: "@haus-fmt/geo", profiles: ["wgs84"], message: "the rules of @haus-fmt/geo (profiles: wgs84) are not checked here; your application checks them by adding a codec" },
-    ])
-    expect(text.slice(notes[0]!.offset, notes[0]!.end)).toBe("import @haus-fmt/money@1 (Money)")
-    expect(notes.every((n) => n.code === "missing-codec")).toBe(true)
-  })
-})
-
 describe("declarations", () => {
-  it("declare types and schemas", () => {
+  it("declare types, with the codecs' host types, and their handles", () => {
     const decl = schemaDeclarations(parseSchemaFile(`
       import std/time (Date, Instant)
       // a level
       type Level = closed < Debug | Info >
       type List a = < Nil | Cons a (List a) >
       type Root = { level: Level, n: List Int, at: Instant, when?: Maybe Date }
+      type Log = Stream Root
     `))
-    expect(decl).toContain(`export type Level = "Debug" | "Info";`)
-    expect(decl).toContain(`export type List<A> = { readonly _tag: "Nil" } | { readonly _tag: "Cons"; readonly values: readonly [A, List<A>] } | h$.Unknown;`)
-    expect(decl).toContain(`export type Root = { readonly level: Level; readonly n: List<bigint>; readonly at: string; readonly when?: h$.Maybe<string> };`)
-    expect(decl).toContain(`export declare const Root: h$.Schema<Root>;`)
+    expect(decl).toContain(`import type * as h$ from "@haus-fmt/haus";`)
+    expect(decl).toContain(`export type Level<H$ = {}> = "Debug" | "Info";`)
+    expect(decl).toContain(`export type List<H$, A> = { readonly _tag: "Nil" } | { readonly _tag: "Cons"; readonly values: readonly [A, List<H$, A>] } | h$.Unknown;`)
+    expect(decl).toContain(
+      `export type Root<H$ = {}> = { readonly level: h$.Host<H$, "Level", Level<H$>>; readonly n: List<H$, h$.Host<H$, "prelude#Int", bigint>>; readonly at: h$.Host<H$, "std/time#Instant", string>; readonly when?: h$.Maybe<h$.Host<H$, "std/time#Date", string>> };`,
+    )
+    expect(decl).toContain(`export interface Root$ extends h$.TypeLambda { readonly type: h$.Host<this["hosts"], "Root", Root<this["hosts"]>> }`)
+    expect(decl).toContain(`export declare const Root: h$.Type<Root$, "Root">;`)
+    expect(decl).toContain(`export declare const Log: h$.StreamType<Log$, "Log">;`)
     expect(decl).not.toContain("export declare const List")
   })
 })

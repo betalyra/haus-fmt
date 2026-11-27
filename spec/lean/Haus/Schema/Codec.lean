@@ -10,10 +10,11 @@ a decoded value, which the schema's encoder writes out. So a codec is a pair
 of functions on decoded values (`Codec`); it never sees the text, and it
 can't change how the schema decodes.
 
-Profiles (§13.3) are the common case: a codec that keeps the decoded value
-and only checks it (`Codec.check`). For every codec that keeps the value
-(`Codec.Keeps`, which every check does), the laws of §13.4 hold, proven here
-once, so a profile or an application's codec gets them without a proof of
+Packages' rules (packages.md §6) are the common case: a check that keeps the
+decoded value and only accepts or rejects it (`Codec.check`). For every codec
+that keeps the value (`Codec.Keeps`, which every check does), the laws of
+§13.4 hold, proven here once, so a package's rule or an application's codec
+gets them without a proof of
 its own:
 
 - **It accepts only what the schema accepts** (`decode_ok`, `decode_schema`):
@@ -75,7 +76,7 @@ def Keeps (c : Codec H) : Prop := ∀ x h, c.read x = some h → c.write h = x
 
 /--
 A **check**: the host type is the decoded value itself, kept as it is, and
-`p` says which values are accepted. A profile is one (§13.3).
+`p` says which values are accepted. A package's rule is one (packages.md §6).
 -/
 def check (p : Typed → Bool) : Codec Typed where
   read x := if p x then some x else none

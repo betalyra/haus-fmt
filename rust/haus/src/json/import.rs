@@ -4,7 +4,7 @@
 
 use super::{Json, decode_supported, open};
 use crate::ser::check_key;
-use crate::{DecodeError, Limits, Number, Record, Tag, Value};
+use crate::{DecodeError, Limits, List, Number, Record, Tag, Text, Value};
 
 type R = Result<Value, DecodeError>;
 
@@ -43,7 +43,7 @@ impl Import<'_> {
     fn items(&self, items: &[Json], depth: usize) -> R {
         let depth = open(self.limits, depth)?;
         let values = items.iter().enumerate().map(|(i, x)| self.value(x, depth).map_err(|e| e.index(i)));
-        values.collect::<Result<_, _>>().map(Value::Array)
+        values.collect::<Result<_, _>>().map(|items| Value::Array(List::from_checked(items)))
     }
 
     fn members(&self, members: &[(String, Json)], depth: usize) -> R {
@@ -54,7 +54,8 @@ impl Import<'_> {
         });
         let fields = fields.collect::<Result<Vec<_>, DecodeError>>()?;
         // The reader takes no member twice; a Json built in code may have one twice.
-        Ok(Value::Record(Record::from_fields(fields)?))
+        // The depth and the keys were checked above.
+        Ok(Value::Record(Record::from_fields_with(fields, &crate::value::any())?))
     }
 }
 
@@ -65,7 +66,7 @@ fn scalar_value(json: &Json, limits: &Limits) -> R {
         Json::Number(n) => Value::Number(Number::from_normalized(normalize_number(n))),
         Json::String(s) => {
             crate::ser::check_length(s, limits).map_err(crate::EncodeError::into_decode)?;
-            Value::String(s.clone())
+            Value::String(Text::from_checked(s.clone()))
         }
         _ => tag("None"),
     })

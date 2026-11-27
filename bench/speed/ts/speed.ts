@@ -43,8 +43,8 @@
  *
  * Writes <source>/speed-typescript.json, one source after the other.
  */
-import { compileSchemaFile, equals, format, parse, parseAll, stringify, type Value } from "@haus-fmt/haus"
-import * as h from "@haus-fmt/haus/schema"
+import { compileSchemaFile, equals, format, parse, parseAll, stringify, type Value } from "@haus-fmt/haus/internal"
+import { h } from "@haus-fmt/haus/internal"
 import type { ValidateFunction } from "ajv"
 import { Console, Effect, Option } from "effect"
 import { Bench } from "tinybench"

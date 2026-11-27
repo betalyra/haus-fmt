@@ -35,11 +35,14 @@
 import {
   definitionDoc, deprecatedDoc, describeType, parseSchemaFile, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions,
   type SchemaFile, type StdType, type Type,
-} from "@haus-fmt/haus"
+} from "@haus-fmt/haus/internal"
 import { Schema } from "effect"
 import { entries, idOf, setId, type AnyCodec, type CodecEntry, type Named } from "./codec.js"
 import { BARE_TAG, CLOSED, NESTED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
 import { CODE, schemaErrorOf } from "./errors.js"
+
+/** Annotation on a package rule's check: the type id whose rule it is. */
+export const RULE = "hausRule"
 // Circular import: only used when a schema file is compiled, after both modules have loaded.
 import * as Haus from "./index.js"
 
@@ -51,16 +54,20 @@ export interface CompiledSchemaFile {
   readonly streams: ReadonlySet<string>
 }
 
+/** A package's rule as the core compiled it (packages.md §6): why it rejects a value, or undefined. */
+export type RuleCheck = (value: unknown) => string | undefined
+
 export interface FromSchemaFileOptions {
   /** Codecs whose types replace the named types they target. */
   readonly codecs?: ReadonlyArray<AnyCodec>
+  /** The package rules to check, by type id: on the value the type's schema decodes, before its codec. */
+  readonly rules?: ReadonlyMap<string, RuleCheck>
 }
 
 /**
- * Parse a schema file and build Effect schemas for its types. Read the file
- * and its options with `readSchemaFile(path)` (from `@haus-fmt/haus/node`),
- * which reads it as every file of the schema is read, to import packages
- * and files. Throws HausSchemaFileError.
+ * @internal Parse a schema file and build Effect schemas for its types,
+ * without packages' rules: for tests and tools. Programs compile `Sources`
+ * (`Haus.compile`), which checks the rules. Throws HausSchemaFileError.
  */
 export const compileSchemaFile = (text: string, options: ParseSchemaOptions = {}): CompiledSchemaFile =>
   fromSchemaFile(parseSchemaFile(text, options))
@@ -150,8 +157,8 @@ export const prelude = <N extends Builtin>(name: N): Named<Schema.Top, `prelude#
 /** `< >`, any tag: a bare tag decodes to its name, other tags to Unknown. */
 const AnyTag = Schema.String.annotate({ [BARE_TAG]: true })
 
-/** Where a schema came from: so that `withCodecs` can build it again with codecs. */
-const sources = new WeakMap<object, { readonly file: SchemaFile; readonly name: string }>()
+/** Where a schema came from: so that `withCodecs` can build it again with codecs (and the same rules). */
+const sources = new WeakMap<object, { readonly file: SchemaFile; readonly name: string; readonly rules: ReadonlyMap<string, RuleCheck> | undefined }>()
 const rebuilt = new WeakMap<SchemaFile, Map<string, CompiledSchemaFile>>()
 const entryIds = new WeakMap<CodecEntry, number>()
 let nextEntry = 0
@@ -179,7 +186,7 @@ export const withCodecs = (schema: Schema.Top, codecs: ReadonlyArray<AnyCodec>):
   let compiled = cache.get(key)
   if (!compiled) {
     if (cache.size > 64) cache.clear()
-    compiled = fromSchemaFile(source.file, { codecs })
+    compiled = fromSchemaFile(source.file, source.rules === undefined ? { codecs } : { codecs, rules: source.rules })
     cache.set(key, compiled)
   }
   return compiled.schemas[source.name]!
@@ -197,6 +204,16 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     return c ? c.apply(base) : base
   }
 
+  /**
+   * A named type with its package's rule, if it has one: a check of the
+   * value its schema decoded (and of the value encoded), failing with
+   * `codec-rejected` and the rule's reason (packages.md §6, spec §17).
+   */
+  const checked = (id: string, base: Schema.Top): Schema.Top => {
+    const rule = options.rules?.get(id)
+    return rule === undefined ? base : base.check(Schema.makeFilter((value: unknown) => rule(value) ?? true, { [CODE]: "codec-rejected", [RULE]: id }))
+  }
+
   const std = (name: StdType): Schema.Top => named(stdId(name), Haus[name])
 
   const ref = (inst: Instance): Schema.Top => {
@@ -206,8 +223,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     if (building.has(inst)) return Schema.suspend(() => built.get(inst)!)
     building.add(inst)
     let schema = build(inst.body).annotate({ identifier: inst.key })
-    // Codecs target named types without arguments, by id.
-    if (inst.args.length === 0) schema = named(inst.definition.id, setId(schema, inst.definition.id))
+    // Codecs and rules target named types without arguments, by id: the rule first, on what the type's schema decoded (packages.md §6).
+    if (inst.args.length === 0) schema = named(inst.definition.id, setId(checked(inst.definition.id, schema), inst.definition.id))
     building.delete(inst)
     built.set(inst, schema)
     return schema
@@ -306,7 +323,7 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   for (const d of file.definitions) {
     if (d.params.length > 0) continue // generic types have no schema of their own
     const schema = ref(d.template)
-    if (!options.codecs) sources.set(schema, { file, name: d.name })
+    if (!options.codecs) sources.set(schema, { file, name: d.name, rules: options.rules })
     Object.defineProperty(schemas, d.name, { value: schema as Schema.Codec<unknown>, enumerable: true })
     if (d.template.stream) streams.add(d.name)
   }

@@ -40,7 +40,9 @@ fn cases(file: &str) -> Vec<(String, Value)> {
     values
         .into_iter()
         .map(|mut v| match &mut v {
-            Value::Variant { tag, args } if args.len() == 1 => (tag.to_string(), args.remove(0)),
+            Value::Variant { tag, args } if args.len() == 1 => {
+                (tag.to_string(), std::mem::take(args).into_vec().remove(0))
+            }
             _ => panic!("{file}: not a case: {}", canonical(&v)),
         })
         .collect()
@@ -48,7 +50,7 @@ fn cases(file: &str) -> Vec<(String, Value)> {
 
 fn text(fields: &Value, key: &str) -> String {
     match fields.get(key) {
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => s.to_string(),
         _ => panic!("not a case: {}", canonical(fields)),
     }
 }
@@ -91,9 +93,8 @@ fn self_describing() {
             let json = text(fields, "json");
             let failure = match (tag.as_str(), fields.get("input")) {
                 ("Ok", Some(input)) => match haus::to_haus_json(input) {
-                    Err(e) => Some(format!("can't write the input: {e}")),
-                    Ok(written) if !same_json(&written, &json) => Some(format!("written as {written}")),
-                    Ok(_) => match haus::from_haus_json(&json) {
+                    written if !same_json(&written, &json) => Some(format!("written as {written}")),
+                    _ => match haus::from_haus_json(&json) {
                         Ok(v) if haus::equals(&v, input) => None,
                         Ok(v) => Some(format!("read as {}", canonical(&v))),
                         Err(e) => Some(format!("can't read it: {e}")),
@@ -144,10 +145,10 @@ fn json_lines() {
             let failure = match (tag.as_str(), fields.get("output")) {
                 ("Ok", Some(Value::Array(output))) => match read {
                     Ok(v) if v.len() == output.len() && v.iter().zip(output).all(|(a, b)| haus::equals(a, b)) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
+                    Ok(v) => Some(format!("read as {}", shown(&v))),
                     Err(e) => Some(format!("can't read it: {:?} ({e})", e.code())),
                 },
-                ("Err", None) => rejected(read.map(Value::Array), fields),
+                ("Err", None) => rejected(read.map(|v| Value::array(v).expect("a few shallow values")), fields),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json:?}: {why}"))
@@ -189,16 +190,15 @@ fn compare_valid_files() {
             let values = haus::parse_bytes(&fs::read(path).unwrap()).unwrap();
             let expected = fs::read_to_string(path.with_extension("jsonl")).unwrap();
             let failure = match haus::json::to_haus_json_lines(&values) {
-                Err(e) => Some(format!("can't write it: {e}")),
-                Ok(written)
+                written
                     if lines(&written).len() != lines(&expected).len()
                         || !lines(&written).iter().zip(lines(&expected)).all(|(a, b)| same_json(a, &b)) =>
                 {
                     Some(format!("written as {written}"))
                 }
-                Ok(_) => match haus::json::from_haus_json_lines(&expected) {
+                _ => match haus::json::from_haus_json_lines(&expected) {
                     Ok(v) if v.len() == values.len() && v.iter().zip(&values).all(|(a, b)| haus::equals(a, b)) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
+                    Ok(v) => Some(format!("read as {}", shown(&v))),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
             };
@@ -206,4 +206,9 @@ fn compare_valid_files() {
         })
         .collect();
     assert!(failures.is_empty(), "valid/*.jsonl as self-describing cases failed:\n{}", failures.join("\n"));
+}
+
+/// Values for a message: their canonical forms, one after the other.
+fn shown(values: &[Value]) -> String {
+    values.iter().map(canonical).collect::<Vec<_>>().join(", ")
 }

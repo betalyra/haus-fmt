@@ -4,6 +4,9 @@
 // as data, numbers by their text), and reading `json` back gives a value that
 // encodes to `input` (or `output`). Read: reading `json` gives `output`; it is
 // not what writing gives. Err: reading `json` fails, with `code` (spec §17).
+// An Ok case whose value holds a secret lists their places (spec §15) in
+// `secrets`: writing without revealSecrets fails with cannot-encode at one of
+// them; writing with it gives `json` (spec §15, "Encoding a secret").
 
 // ── scalars ──
 Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
@@ -62,7 +65,7 @@ Ok { type: "Raw", input: { a: [1, "x", None] }, json: "{\"_rec\": {\"a\": [{\"_n
 Err { type: "Raw", json: "1", code: "haus-json-form" },
 // `Any` is the value without the envelope
 Err { type: "Raw", json: "{\"_haus\": 1, \"_value\": \"x\"}", code: "haus-json-form" },
-Ok { type: "Key", input: "sk-1", json: "\"sk-1\"" },
+Ok { type: "Key", input: "sk-1", json: "\"sk-1\"", secrets: ["$"] },
 
 // ── containers ──
 Ok { type: "Ints", input: [1, 2], json: "[1, 2]" },
@@ -150,8 +153,8 @@ Err { type: "StrictBox", json: "{\"_tag\": \"Box\", \"id\": 1, \"x\": 2}", code:
 // a generic: X a is positional even where a is a record.
 Ok { type: "InnerRec", input: { item: X { w: 1 } }, json: "{\"item\": {\"_tag\": \"X\", \"value\": {\"w\": 1}}}" },
 // Secret around a record is not a record: one positional argument.
-Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
-Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", secrets: ["$[0]"] },
+Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", secrets: ["$[0]"] },
 // A type parameter is not a record, even where its argument is one.
 Ok { type: "GenRec", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 Err { type: "GenRec", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}, \"w\": 1}", code: "unexpected-member" },

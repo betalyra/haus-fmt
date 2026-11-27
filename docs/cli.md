@@ -31,7 +31,7 @@ installers, are on each [release](https://github.com/betalyra/haus-fmt/releases?
 | `haus fmt PATH…` | rewrites data files in a standard layout (spec §11): pretty, compact or minimised; `--check` only lists them |
 | `haus canonical [FILE]` | the canonical form (spec §12) of each value, one per line |
 | `haus hash [FILE]` | `hashAll` of the file's values (spec §12); `--each` hashes each value |
-| `haus package check [DIR…]` | a schema package before it is published: its manifest, schema and profiles, and its `package.json`, `Cargo.toml` and `pyproject.toml` |
+| `haus package check [DIR…]` | a schema package before it is published: its manifest, schema and rules, and its `package.json`, `Cargo.toml` and `pyproject.toml` |
 | `haus completions SHELL` | a completion script for bash, zsh, fish, elvish or PowerShell |
 
 A `PATH` is a file, a directory or `-` (standard input). `check` and `fmt`
@@ -75,33 +75,32 @@ A data file never names its own schema (spec §14): the reader decides, so a
 file can't make `haus check` read another file. Comments in it mean nothing.
 
 Imports in schemas resolve as in the other bindings: `std/time`, files next to
-the schema (`import ./common (Address)`), and schema packages. A package
-`@org/name` is found in `node_modules/@org/name` in the directory of the
-importing file's real path or above it, as Node finds packages, so pnpm and
-workspace links work. It is never taken from `NODE_PATH` or npm's global
-folder. In a Cargo or Python project, or for packages anywhere else, give
-them explicitly:
+the schema (`import ./common (Address)`), and schema packages. The official
+packages (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) are built in,
+with their rules: `import @haus-fmt/money (Money)` needs no option, and
+`Money(19.90, Bitcoin)` is `codec-rejected`. `haus check` never searches for
+other packages (not in `node_modules`, Cargo or Python projects): give them
+explicitly:
 
 ```sh
-haus check --package vendor/money order.haus              # a package's directory
-haus check --package @acme/money=vendor/money order.haus  # the same; its manifest must say @acme/money
-haus check --packages schemas/ order.haus                 # every subdirectory with a package.haus
+haus check --package vendor/acme-ids order.haus             # a package's directory
+haus check --package @acme/ids=vendor/acme-ids order.haus   # the same; its manifest must say @acme/ids
+haus check --packages schemas/ order.haus                   # every subdirectory with a package.haus
 ```
 
-Both options can be repeated. A package given with `--package` is used
-instead of `node_modules` for its name. One found with `--packages` is not:
-if `node_modules` holds a different copy, that's `duplicate-package`. A package given that can't be used (no
-`package.haus`, an invalid manifest, two packages with one name) stops the
-check with exit code 2.
+Both options can be repeated. A package given with `--package` wins over one
+with the same name in a `--packages` folder. A copy of an official package
+must be byte for byte the built-in one, else `duplicate-package`. A package
+given that can't be used (no `package.haus`, an invalid manifest, two packages
+with one name) stops the check with exit code 2.
 
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
 define, uses of deprecated types), which don't fail the check. An import of
-an official package with profiles (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) gets a
-hint (`missing-codec`): `haus check` has no codecs, so it checks the
-package's types for their shape only, not its profiles' rules (`the rules of
-@haus-fmt/money (profiles: iso) are not checked here; your application checks
-them by adding a codec`, spec §13.4).
+a package whose manifest gives a type the schema reaches a rule that `haus
+check` doesn't have (any package but the official ones) gets a hint
+(`missing-codec`): its values are checked for their shape only (`the rules of
+@acme/ids (Id: ulid) are not checked here`, packages.md §7).
 
 ```text
 error[type-mismatch]: expected Int, found the string "7"
@@ -186,7 +185,7 @@ value by value.
 | `files[].error` | why the file couldn't be read (then the exit code is 2) |
 | `files[].diagnostics[]` | the error form of spec §17, with `severity` first |
 | `files[].stopped` | `true` when the check stopped after 200 errors: the file may have more; absent otherwise |
-| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose profiles aren't checked, in schema files) |
+| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose rules aren't checked, in schema files) |
 | `code`, `message`, `hint`, `docs` | always: the [error code](/docs/errors), the message, a fix, its documentation |
 | `file` | when the place is in another file than the one checked: the data file's schema, when that schema is broken |
 | `line`, `column` | the place in the text, when there is one |
@@ -321,11 +320,12 @@ only read: nothing is run, packed, built or fetched. `DIR` defaults to `.`.
 |---|---|
 | `package.haus` | a regular file of at most 64 KiB, one record with a lowercase `@org/name` and a semantic `version` (`package-manifest`); a former `schema` field is ignored (a warning) |
 | `schema.haus` | a regular file next to it, not a link (`package-path`); loaded with its imports and checked like `haus check` does, errors and warnings |
-| profiles | each `profiles/<name>.vectors.haus` has its rule, `profiles/<name>.md`, next to it; the vectors are haus, each `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with no other fields (only an Accept has an `output`); `type` names a type of the package without parameters; `value` and `output` are one haus value each, and an accepted one and its output are valid for `type`, since codecs run after the schema (`profile-vectors`) |
+| rules | the manifest's `rules` field (`rules: { "Code": "iso" }`): each key a type `schema.haus` defines without parameters, each rule name `[a-z][a-z0-9-]*` with its prose in `rules/<name>.md`, a regular file (`package-manifest`) |
+| rule vectors | each `profiles/<name>.vectors.haus` has its rule, `profiles/<name>.md`, next to it; the vectors are haus, each `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with no other fields (only an Accept has an `output`); `type` names a type of the package without parameters; `value` and `output` are one haus value each, and an accepted one and its output are valid for `type`, since codecs run after the schema (`profile-vectors`) |
 | versions | the `version` of `package.json`, `Cargo.toml` (also inherited from the workspace) and `pyproject.toml` is the manifest's (`package-version`) |
 | npm | `package.json` is a regular file (`package-path`); its `name` is the manifest's (`package-name`); no `preinstall`, `install` or `postinstall` script and no `binding.gyp` (`package-install-script`) |
 | Cargo | `links` is the library's name (`[lib] name`, or the package's with `_`), which crates that use the package's types name it by; a schema package it depends on isn't renamed (`package = …`) (`package-crate`) |
-| files shipped | `files` of `package.json` (or, without it, `.npmignore`/`.gitignore`), `include` (or `exclude`) of `Cargo.toml`, and hatchling's wheel configuration (`force-include`, `only-include`, `packages`, `include`, `exclude`) ship `package.haus`, `schema.haus` and the profiles (vectors and rules) (`package-files`) |
+| files shipped | `files` of `package.json` (or, without it, `.npmignore`/`.gitignore`), `include` (or `exclude`) of `Cargo.toml`, and hatchling's wheel configuration (`force-include`, `only-include`, `packages`, `include`, `exclude`) ship `package.haus`, `schema.haus` and the rules' prose and vectors (`package-files`) |
 | wrappers | each `package.json`, `Cargo.toml` and `pyproject.toml` present can be read: valid JSON or TOML, a `name` in `package.json`, a `[package]` in `Cargo.toml` (`package-wrapper`) |
 | dependencies | every package `schema.haus` imports is declared in every wrapper present (`undeclared-package`): in `peerDependencies`, `dependencies` or `optionalDependencies` of `package.json` (not `devDependencies`; anything but `peerDependencies` is a warning), and among the dependencies of `Cargo.toml` and `pyproject.toml` |
 
@@ -337,9 +337,10 @@ dependency could provide is a warning, not an error. Likewise the files a
 wheel ships with another build backend than hatchling, and a dynamic
 version.
 
-Imports are found as in `haus check`: the packages given with `--package`
-and `--packages`, then the path dependencies of the package's wrappers that
-are schema packages (and theirs), then `node_modules`.
+Imports are found as in `haus check`: the official packages, built in, the
+packages given with `--package` and `--packages`, then the path dependencies
+of the package's wrappers that are schema packages (and theirs). Nothing else
+is searched (no `node_modules`).
 
 ```text
 error[package-version]: package.haus says version 1.0.0, package.json 1.0.1

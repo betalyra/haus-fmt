@@ -1,6 +1,6 @@
 [package]
 name = "haus-fmt-money"
-version = "1.0.0"
+version = "1.0.1"
 description = "@haus-fmt/money: Exact amounts with a currency (a haus schema package)"
 edition = "2024"
 license = "MIT"

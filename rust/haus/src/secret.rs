@@ -7,15 +7,18 @@
 //! let key: Secret<String> = haus::from_str(r#""sk-123""#).unwrap();
 //! assert_eq!(format!("{key:?}"), "<redacted>");
 //! assert_eq!(key.expose(), "sk-123");
-//! assert_eq!(haus::to_string(&key).unwrap(), r#""sk-123""#);
+//! // Encoded only by the program's choice (spec §15).
+//! assert_eq!(haus::to_string(&key).unwrap_err().code, haus::ErrorCode::CannotEncode);
+//! assert_eq!(haus::to_string_with(&key, haus::Encoder::default().reveal_secrets()).unwrap(), r#""sk-123""#);
 //! ```
 
 use crate::{Decode, DecodeError, Value};
 use std::fmt;
 
 /// A value that `Debug` and `Display` print as `<redacted>`. Get it with
-/// [`Secret::expose`] or [`Secret::into_inner`]. Encoding writes it in full:
-/// the receiver needs it.
+/// [`Secret::expose`] or [`Secret::into_inner`]. Encoding refuses it
+/// (`cannot-encode`) unless the encoder reveals secrets
+/// ([`crate::Encoder::reveal_secrets`]), which writes it in full.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Secret<T>(T);
 
@@ -99,8 +102,16 @@ mod tests {
     }
 
     #[test]
-    fn encodes_in_full() {
+    fn encodes_only_when_revealed() {
         let key: Secret<String> = from_str("\"sk-123\"").unwrap();
-        assert_eq!(crate::Encode::encode(&key), Ok(Value::String("sk-123".into())));
+        let refused = crate::Encode::encode(&key).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::CannotEncode);
+        assert!(!refused.to_string().contains("sk-123"), "{refused}");
+        let revealed = crate::Encode::encode_with(&key, crate::Encoder::default().reveal_secrets());
+        assert_eq!(revealed.unwrap(), Value::string("sk-123").unwrap());
+        // Inside a record: at the secret.
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("key".to_owned(), key);
+        assert_eq!(crate::Encode::encode(&fields).unwrap_err().place(), "$.key");
     }
 }

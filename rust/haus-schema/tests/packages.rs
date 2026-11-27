@@ -290,7 +290,7 @@ fn package_suite() {
         skipped.len(),
         if unix { "Mode cases as root" } else { "os: unix" }
     );
-    assert_eq!((cases.len(), core.len(), npm), (136, 90, 46), "the suite's cases: all, core, npm");
+    assert_eq!((cases.len(), core.len(), npm), (93, 93, 0), "the suite's cases: all, core, npm");
     assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), run.len(), failures.join("\n"));
 }
 

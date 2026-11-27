@@ -31,6 +31,6 @@ h.parse(schemas.Root!, `{ at: LatLng(52.52, 13.405) }`)   // ok
 h.parse(schemas.Root!, `{ at: LatLng(95.0, 13.405) }`)   // HausDecodeError
 ```
 
-With Effect: `import { wgs84 } from "@haus-fmt/geo/effect"`, then `Haus.decode(Root, wgs84)`.
+With Effect: `@haus-fmt/effect` has the package built in, its rule wgs84 on by default (`Haus.compile`); `@haus-fmt/effect/geo` exports the package value (`geo`, for `Haus.Package.shapeOnly`) and `wgs84Types`, a codec giving `LatLng` and `BBox` their TypeScript types.
 
 Other languages: [extensions](https://github.com/betalyra/haus-fmt/tree/main/extensions).

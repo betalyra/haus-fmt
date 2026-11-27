@@ -54,15 +54,21 @@ fn revealing_and_encoding_give_the_secrets_in_full() {
     let (schema, decoded) = decode(DATA);
     let expected = canonical(&haus::parse_one(DATA).unwrap());
     assert_eq!(canonical(&decoded.clone().reveal()), expected);
-    // Decode, then encode with the schema: the same value, secrets and all.
-    let encoded = schema.encode("Root", &decoded).unwrap();
+    // Decode, then encode with the schema: refused, unless secrets are revealed;
+    // then the same value, secrets and all.
+    let refused = schema.encode("Root", &decoded).unwrap_err();
+    assert_eq!(refused.code, haus::ErrorCode::CannotEncode);
+    assert!(!refused.to_string().contains("secret-"), "{refused}");
+    let reveal = haus_schema::EncodeOptions { reveal_secrets: true, ..Default::default() };
+    let encoded = schema.encode_with("Root", &decoded, &reveal).unwrap();
     assert_eq!(canonical(&encoded), expected);
     assert_eq!(schema.decode("Root", &encoded).unwrap(), decoded);
     // The other cases of the variant.
     let token = DATA.replace(r#"Password { hash: "h-secret" }"#, r#"Token("t-secret")"#);
     let (_, decoded) = decode(&token);
     assert!(!format!("{decoded:?}{decoded}").contains("t-secret"));
-    assert_eq!(canonical(&schema.encode("Root", &decoded).unwrap()), canonical(&haus::parse_one(&token).unwrap()));
+    let encoded = schema.encode_with("Root", &decoded, &reveal).unwrap();
+    assert_eq!(canonical(&encoded), canonical(&haus::parse_one(&token).unwrap()));
 }
 
 #[test]

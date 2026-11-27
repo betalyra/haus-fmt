@@ -8,6 +8,7 @@ mod fmt;
 mod highlight;
 mod input;
 mod json;
+mod official;
 mod output;
 mod package;
 mod pieces;

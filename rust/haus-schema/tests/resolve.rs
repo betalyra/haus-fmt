@@ -460,8 +460,9 @@ fn streams_decode_each_value() {
 #[test]
 fn deep_values_built_in_code_and_the_limits() {
     let schema = Schema::parse("type Root = Any").unwrap();
-    let deep = (0..300).fold(Value::from(1), |v, _| Value::Array(vec![v]));
-    assert_eq!(schema.decode("Root", &deep).unwrap_err().message, "value nested deeper than 256 levels");
+    let deep = (0..200).fold(Value::from(1), |v, _| Value::array(vec![v]).unwrap());
+    let low = haus::Limits { max_depth: 100, ..haus::Limits::default() };
+    assert_eq!(schema.decode_with("Root", &deep, &low).unwrap_err().message, "value nested deeper than 100 levels");
     // A recursive type: limited only by the depth (spec §9.9).
     let schema = Schema::parse("type Root = < Nil | Cons Int Root >").unwrap();
     let list = (0..255)

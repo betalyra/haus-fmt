@@ -198,8 +198,11 @@ fn secrets_stay_hidden() {
     let login: Login =
         haus::from_str(r#"{ user: "ada", password: "hunter2", pin: 1234, extra: [1, Some { a: 19.90 }] }"#).unwrap();
     let json = r#"{"user":"ada","password":"hunter2","pin":1234,"extra":[{"_num":"1"},{"_tag":"Some","_args":[{"_rec":{"a":{"_num":"19.90"}}}]}]}"#;
-    // Written in full; Any as its self-describing value, without the envelope.
-    assert_eq!(to_string(&login).unwrap(), json);
+    // Refused unless secrets are revealed, at the secret (spec §15); then
+    // written in full; Any as its self-describing value, without the envelope.
+    assert_eq!(to_string(&login).unwrap_err().place(), "$.password");
+    let reveal = haus::Encoder::default().reveal_secrets();
+    assert_eq!(haus::json::to_string_with(&login, reveal).unwrap(), json);
     assert_eq!(from_str::<Login>(json).unwrap(), login);
 
     // Errors name the place and the type, never the value.

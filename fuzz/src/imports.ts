@@ -23,7 +23,7 @@ import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import { parseSchemaFile } from "../../typescript/packages/haus/dist/index.js"
-import { readSchemaFile } from "../../typescript/packages/haus/dist/node.js"
+import { schemaFileAt as readSchemaFile } from "../../typescript/packages/haus/dist/node.js"
 import { Rng } from "./generate.ts"
 import { external, inProcess, type LineRunner } from "./lines.ts"
 import { runProgram, timeoutFor } from "./spawn.ts"
@@ -275,7 +275,7 @@ const inThisProcess = (name: string, compile: Compile): LineRunner =>
   inProcess(name, (l) => {
     const [entry, rootOpt] = l.split(" ") as [string, string]
     try {
-      const { text, options } = readSchemaFile(unhex(entry), { packages: [], folders: [], npm: false, ...(rootOpt === "-" ? {} : { root: unhex(rootOpt) }) })
+      const { text, options } = readSchemaFile(unhex(entry), { packages: [], folders: [], ...(rootOpt === "-" ? {} : { root: unhex(rootOpt) }) })
       const f = compile(text, options)
       return `ok ${names(f.definitions.map((d) => d.name))} ${names(f.imported.keys())}`
     } catch (e) {
@@ -285,10 +285,10 @@ const inThisProcess = (name: string, compile: Compile): LineRunner =>
     }
   })
 
-/** @haus-fmt/effect's `Haus.compileSchemaFile`, with the options of TypeScript's Node resolver. */
+/** @haus-fmt/effect's schema builder (`compileSchemaFile`, the module behind `Haus.compile`), with the options of TypeScript's Node resolver. */
 async function effectRunner(): Promise<LineRunner> {
-  const Haus = await import(pathToFileURL(join(root, "typescript/packages/effect/dist/index.js")).href)
-  return inThisProcess("effect", (text, options) => Haus.compileSchemaFile(text, options).file)
+  const SchemaFile = await import(pathToFileURL(join(root, "typescript/packages/effect/dist/schema-file.js")).href)
+  return inThisProcess("effect", (text, options) => SchemaFile.compileSchemaFile(text, options).file)
 }
 
 const ALL = ["lean", "typescript", "effect", "rust", "python", "go", "jvm"]

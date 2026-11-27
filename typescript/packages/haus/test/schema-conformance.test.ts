@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { canonical, compileSchemaFile, errorCode, formatPath, HausSchemaFileError, parseAll, withoutAttributes, type Value } from "../src/index.js"
 import * as h from "../src/schema.js"
+import { checkSecrets } from "./secrets.js"
 
 const DIR = join(import.meta.dirname, "../../../../test-suite/schema")
 
@@ -16,10 +17,12 @@ interface Case {
   readonly code: string | undefined
   /** For `Err`: the place of the error (spec §15), as text: `$.items[2].price`. */
   readonly path: string | undefined
+  /** For `Ok`: the places of the secrets in the decoded value (spec §15, "Encoding a secret"). */
+  readonly secrets: readonly string[]
   readonly name: string
 }
 
-/** The cases of one file: `Ok { type, input, output? }` and `Err { type, input, code, path }`. */
+/** The cases of one file: `Ok { type, input, output?, secrets? }` and `Err { type, input, code, path }`. */
 export const schemaCases = (text: string): Case[] =>
   parseAll(text).map((v) => {
     if (v.kind !== "variant" || (v.tag !== "Ok" && v.tag !== "Err") || v.args[0]?.kind !== "record") throw new Error(`not a case: ${canonical(v)}`)
@@ -31,19 +34,26 @@ export const schemaCases = (text: string): Case[] =>
     const path = f.get("path")
     if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
     if (v.tag === "Err" && path?.kind !== "string") throw new Error(`an Err case without a path: ${canonical(v)}`)
+    const secrets = f.get("secrets")
     return {
       ok: v.tag === "Ok", type: type.value, input, output: f.get("output") ?? input,
-      code: code?.kind === "string" ? code.value : undefined, path: path?.kind === "string" ? path.value : undefined, name: `${v.tag} ${type.value} ${canonical(input)}`,
+      code: code?.kind === "string" ? code.value : undefined, path: path?.kind === "string" ? path.value : undefined,
+      secrets: secrets?.kind === "array" ? secrets.items.map((s) => (s.kind === "string" ? s.value : "")) : [],
+      name: `${v.tag} ${type.value} ${canonical(input)}`,
     }
   })
+
 
 const suites = readdirSync(DIR).filter((f) => f.endsWith(".schema.haus")).map((f) => f.replace(".schema.haus", ""))
 
 const run = (schemas: Readonly<Record<string, h.Schema<unknown>>>, c: Case) => {
   const schema = schemas[c.type]
   if (!schema) throw new Error(`no type ${c.type}`)
-  if (c.ok) expect(canonical(h.encode(schema, h.decode(schema, c.input)))).toBe(canonical(c.output))
-  else {
+  if (c.ok) {
+    const decoded = h.decode(schema, c.input)
+    expect(canonical(h.encode(schema, decoded, { revealSecrets: true }))).toBe(canonical(c.output))
+    checkSecrets(() => canonical(h.encode(schema, decoded)), c.secrets, () => canonical(h.encode(schema, decoded, { revealSecrets: true })))
+  } else {
     expect(() => h.decode(schema, c.input)).toThrow(h.HausDecodeError)
     try {
       h.decode(schema, c.input)

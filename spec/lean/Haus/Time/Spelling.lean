@@ -427,7 +427,7 @@ theorem zoned_same_iff {dt dt' o z z' : Text} (h : DateTime dt) (h' : DateTime d
 
 /-- `+00:00` -/
 def plusZero : Text := ['+', '0', '0', ':', '0', '0']
-/-- `-00:00`, which RFC 3339 gives another meaning; the profile rejects it. -/
+/-- `-00:00`, which RFC 3339 gives another meaning; the std/time rule rejects it. -/
 def minusZero : Text := ['-', '0', '0', ':', '0', '0']
 
 theorem numOffset_shape {o : Text} (h : NumOffset o) : ∃ sg a b c d, o = [sg, a, b, ':', c, d] ∧

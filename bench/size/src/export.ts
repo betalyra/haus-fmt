@@ -19,7 +19,7 @@
  * names sort in index order.
  */
 import * as Haus from "@haus-fmt/effect"
-import { format, parse } from "@haus-fmt/haus"
+import { format, parse } from "@haus-fmt/haus/internal"
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { CorpusError, messageOf, ResultsFileError } from "./errors.ts"
 import { BenchPaths } from "./paths.ts"

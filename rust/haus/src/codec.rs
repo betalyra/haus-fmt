@@ -62,10 +62,11 @@ pub trait Codec {
     ///
     /// `base` is the value as the schema decoded it, never what the codecs of
     /// its parts made of them (spec §13.4 leaves this to the binding): a
-    /// codec for `Money` gets the `Currency` the schema decoded, so a profile's
-    /// rule checked here holds whatever codec the application sets for a part.
-    /// Generated code runs the parts' codecs first (from the inside out), and
-    /// the first that rejects gives the error.
+    /// codec for `Money` gets the `Currency` the schema decoded. A package's
+    /// rule ([`crate::Rule`]) isn't a codec's job: generated code checks it
+    /// before any codec of the type runs. Generated code runs the parts'
+    /// codecs first (from the inside out), and the first that rejects gives
+    /// the error.
     fn decode(base: Self::Base) -> Result<Self::Target, String>;
     /// Back to the base type: encoding what was decoded gives an equal value.
     fn encode(value: &Self::Target) -> Self::Base;

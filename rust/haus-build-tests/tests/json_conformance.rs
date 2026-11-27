@@ -55,6 +55,8 @@ struct Case {
     code: Option<String>,
     /// For an `Err`, the place in the JSON it fails at, if the case gives one.
     path: Option<String>,
+    /// For an `Ok`, the places of its secrets (spec §15, "Encoding a secret").
+    secrets: Vec<String>,
 }
 
 impl Case {
@@ -69,8 +71,12 @@ impl Case {
             _ => return Err(not_a_case()),
         };
         let text = |key: &str| match fields.get(key) {
-            Some(Value::String(s)) => Ok(s.clone()),
+            Some(Value::String(s)) => Ok(s.to_string()),
             _ => Err(not_a_case()),
+        };
+        let secrets = match fields.get("secrets") {
+            Some(Value::Array(places)) => places.iter().filter_map(|p| p.as_str()).map(str::to_owned).collect(),
+            _ => vec![],
         };
         Ok(Case {
             kind,
@@ -80,6 +86,7 @@ impl Case {
             output: fields.get("output").cloned(),
             code: text("code").ok(),
             path: text("path").ok(),
+            secrets,
         })
     }
 
@@ -103,11 +110,23 @@ impl Case {
         };
         match (&self.kind, &self.input, &self.output) {
             (Kind::Ok, Some(input), output) => {
-                let written = match suite::schema_based::write(&self.ty, input) {
+                let (written, refused) = match suite::schema_based::write(&self.ty, input) {
                     None => return Some(format!("no type {}", self.ty)),
                     Some(Err(e)) => return Some(e),
-                    Some(Ok(text)) => text,
+                    Some(Ok(written)) => written,
                 };
+                // Without revealSecrets: refused at one of its secrets, or written as with it.
+                let secrets = &self.secrets;
+                match refused {
+                    None if !secrets.is_empty() => return Some(format!("written without revealing {secrets:?}")),
+                    Some((code, place)) if secrets.is_empty() || code != haus::ErrorCode::CannotEncode => {
+                        return Some(format!("can't be written without revealSecrets: {code} at {place}"));
+                    }
+                    Some((_, place)) if !secrets.contains(&place) => {
+                        return Some(format!("refused at {place}, expected a secret at {secrets:?}"));
+                    }
+                    _ => {}
+                }
                 match same_json(&written, &self.json) {
                     Ok(true) => expect_read(output.as_ref().unwrap_or(input)),
                     Ok(false) => Some(format!("written as {written}")),

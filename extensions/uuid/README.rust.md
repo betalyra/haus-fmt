@@ -19,9 +19,12 @@ Import its types in your schema like any other package's:
 import @haus-fmt/uuid (Uuid)
 ```
 
-The schema gives the shape; the profile says which values are valid. Register
-its codecs in `build.rs`, and values that break the rule are rejected when
-decoding. Without them the build warns (`missing-codec`).
+The schema gives the shape; the package's rule, `rfc9562` for `Uuid`, says
+which values are valid. The crate carries the rule
+(`haus_uuid::rules::Rfc9562`), and the generated code checks it wherever a
+`Uuid` is decoded or encoded, before any codec: an uppercase UUID is rejected
+(`codec-rejected`) with or without the codec. The codec is optional and
+gives you a Rust type for the values the rule accepts:
 
 ```rust
 haus_build::Config::new()

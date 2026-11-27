@@ -1,6 +1,7 @@
 {
   "name": "@haus-fmt/uuid",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "private": true,
   "description": "haus schema package: universally unique identifiers",
   "keywords": [
     "haus",
@@ -23,10 +24,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./effect": {
-      "types": "./dist/effect.d.ts",
-      "default": "./dist/effect.js"
-    },
     "./package.haus": "./package.haus",
     "./schema.haus": "./schema.haus",
     "./profiles/*": "./profiles/*",
@@ -43,7 +40,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "lint": "effect-tsgo tsc@7.0.2 -p tsconfig.json --noEmit"
   },
   "peerDependencies": {

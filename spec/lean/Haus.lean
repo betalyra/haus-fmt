@@ -55,6 +55,7 @@ import Haus.Schema.Rules
 import Haus.Schema.Correct
 import Haus.Schema.RoundTrip
 import Haus.Schema.Codec
+import Haus.Schema.Secrets
 import Haus.SchemaFile.Syntax
 import Haus.SchemaFile.Parse
 import Haus.SchemaFile.Check
@@ -92,6 +93,7 @@ import Haus.Layout.Pretty
 import Haus.Layout.PrettyRoundTrip
 import Haus.Layout.Format
 import Haus.Layout.FormatRoundTrip
+import Haus.Built
 import Haus.Packages.Fs
 import Haus.Packages.Names
 import Haus.Packages.SchemaFile
@@ -108,7 +110,5 @@ import Haus.Packages.Steps
 import Haus.Packages.Done
 import Haus.Packages.Walk
 import Haus.Packages.Folders
-import Haus.Profiles.Money
-import Haus.Profiles.Geo
-import Haus.Profiles.Uuid
-import Haus.Profiles.Vectors
+import Haus.Packages.Official
+import Haus.Packages.Rules

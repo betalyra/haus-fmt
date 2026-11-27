@@ -209,9 +209,11 @@ export function typescriptRunner(texts: ReadonlyMap<string, string>): JsonRunner
 export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<JsonRunner> {
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
+  // Its schema builder: the module behind `Haus.compile`.
+  const SchemaFile = await import(pathToFileURL(join(dir, "dist/schema-file.js")).href)
   const effectEntry = createRequire(join(dir, "package.json")).resolve("effect")
   const { Effect, Exit, Cause, Option } = await import(pathToFileURL(effectEntry).href)
-  const compiled = compileEach(texts, (t) => Haus.compileSchemaFile(t).schemas as Record<string, unknown>)
+  const compiled = compileEach(texts, (t) => SchemaFile.compileSchemaFile(t).schemas as Record<string, unknown>)
   /** The value of an effect, or the outcome of its failure, with its error code (spec §17) and place (`$` for an error in the text). */
   const runE = (e: unknown): { value: any } | { outcome: Outcome } => {
     const exit = Effect.runSyncExit(e)

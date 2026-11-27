@@ -259,7 +259,7 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
     | .any, v => .ok (.any v)
     | .time k, .variant tag [.str x] =>
       if tag == k.name && Time.check k x.toList then .ok (.time k x)
-      -- Text the profile rejects: at the string, `Date("…")`'s argument.
+      -- Text the std/time rule rejects: at the string, `Date("…")`'s argument.
       else if tag == k.name then under (.arg tag 0) (reject .invalidTime s!"not a valid {k.name}")
       else reject .typeMismatch s!"expected {k.name}"
     | .array t, .arr xs => (decodeItems env t 0 xs).map .arr

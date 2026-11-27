@@ -3,7 +3,24 @@ title: TypeScript
 description: Read and write haus in TypeScript and JavaScript, as plain values or typed by a schema.
 ---
 
-Parse haus into plain JavaScript values, or decode it with a schema into typed ones: `bigint` for integers, the exact text for decimals, objects with `_tag` for variants. `@haus-fmt/haus` has no dependencies. Using Effect? See [Effect](/docs/languages/effect).
+`@haus-fmt/haus` is the barebones foundation: the haus text, values, and schemas from `.schema.haus` files with packages, rules and codecs. It has no dependencies, and every step that can fail gives a `Result` instead of throwing. Most applications are better served by [Effect](/docs/languages/effect), which builds on it; use this package directly when you want nothing else, or to build your own layer.
+
+## With Effect (recommended)
+
+[`@haus-fmt/effect`](/docs/languages/effect) is the full-featured way: the same schemas, packages and rules, as Effect schemas. A compiled schema's types are Effect schemas, each package rule a check of its type, on by default and before any codec; codecs are ordinary Effect Schema transformations, secrets `Redacted`, errors Effect's, files of values `Stream`s. Reading files is an `Effect` that needs a file system; compiling needs nothing.
+
+```ts
+import * as Haus from "@haus-fmt/effect"
+import { NodeSchemaFiles } from "@haus-fmt/effect/node"
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const { schemas } = yield* Haus.readSources("order.schema.haus").pipe(Effect.flatMap(Haus.compile))
+  return yield* Haus.decode(schemas.Order!)(text)   // HausParseError | HausSchemaError, Money(1, Eur): codec-rejected
+}).pipe(Effect.provide(NodeSchemaFiles.layer))
+```
+
+It never decides anything about haus itself: parsing, schema files, packages, rules, values and their limits are this package's. The rest of this page is the barebones API.
 
 ## Install
 
@@ -14,86 +31,107 @@ npm install @haus-fmt/haus
 ## Read and write
 
 ```ts
-import { parse, parsePlain, stringify } from "@haus-fmt/haus"
+import { parse, parsePlain, Result, stringify } from "@haus-fmt/haus"
 
 const text = `{ id: 7, total: 44.40, status: Shipped { tracking: "DE-4711" }, note: None }`
 
 parsePlain(text)
-// { id: 7n, total: "44.40", status: { _tag: "Shipped", tracking: "DE-4711" }, note: { _tag: "None" } }
+// Success: { id: 7n, total: "44.40", status: { _tag: "Shipped", tracking: "DE-4711" }, note: { _tag: "None" } }
 
-const value = parse(text)                // the haus data model: a Value
-stringify(value, { style: "compact" })   // { id: 7, total: 44.40, status: Shipped { tracking: "DE-4711" }, note: None }
+const value = parse(text)                                     // Result<Value, HausSyntaxError>
+Result.map(value, (v) => stringify(v, { style: "compact" }))  // Success: "{ id: 7, total: 44.40, … }"
 ```
 
-Integers are `bigint` of any size, so a field's type never depends on its values. `None` is `{ _tag: "None" }`, not `null`, so `Some(None)` and `None` stay apart. `parse` takes one value; `parseAll` reads a file of several (a stream), and `parsePlain` gives it as an array.
+Integers are `bigint` of any size, so a field's type never depends on its values. `None` is `{ _tag: "None" }`, not `null`, so `Some(None)` and `None` stay apart. `parse` takes one value; `parseAll` reads a file of several (a stream).
+
+`Result` has the shape and names of Effect's: `Result.succeed`, `fail`, `map`, `flatMap`, `match`, `isSuccess`, `isFailure`, data-first or data-last with `pipe`.
+
+## Values
+
+A `Value` is always a valid haus value within the limits it was built with. Building one is the only step that can fail; what takes one is total:
+
+```ts
+import { canonical, hash, Value } from "@haus-fmt/haus"
+
+const order = Value.record({ id: Value.number(7), status: Value.variant("Paid") })   // Result<HRecord, HausEncodeError>
+Value.variant("paid")                                                               // Failure: invalid-tag
+
+if (Result.isSuccess(order)) {
+  canonical(order.success)         // "{id:7,status:Paid}"
+  await hash(order.success)        // a Promise that never rejects
+}
+```
+
+Constructors check tags, numbers, Unicode, duplicate keys and every limit of the spec (16 Mi characters per string, 1000 per number, 256 levels, 64 Mi values written out); each container records its size and depth. Values are read-only: changing one after it was built (a cast, a `Map`'s `set`) is a programming error, which the writers report as `value-changed` rather than hang. Writer options are checked when made: `WriteOptions.make({ indent: 4 })`.
 
 ## With a schema
 
-Write the schema in code with `h`:
+Schemas come from `.schema.haus` files. Read them with their imports, compile, and decode with a type handle:
 
 ```ts
-import * as h from "@haus-fmt/haus/schema"
+import { pipe, Result, Schema } from "@haus-fmt/haus"
+import { readSources } from "@haus-fmt/haus/node"
+import { Root } from "./order.schema.haus"      // with @haus-fmt/import: types and handles
 
-const Order = h.Record({
-  id: h.Int,
-  total: h.Decimal,
-  status: h.Variant({ Pending: h.Unit, Shipped: h.Record({ tracking: h.String }) }),
-  note: h.Maybe(h.String),
+const schema = Result.flatMap(await readSources("order.schema.haus"), Schema.compile)
+const order = Result.flatMap(schema, (s) => Schema.decode(s, Root)(text))   // Result<Root, HausError>
+```
+
+`readSources` is the only step that reads files; `Sources.make(entry, { "order.schema.haus": text, … })` makes the same from data you have from anywhere. With [`@haus-fmt/import`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/import), a schema file is a module that exports its compiled `schema` and a handle per type, and a data file is a module, typed and checked by the schema next to it. It works with Node, tsx, Vite and `tsc` 7.1.
+
+A value that doesn't fit is a `Failure` with its place and a code:
+
+```ts
+Schema.decode(schema, Root)(text.replace("id: 7", `id: "7"`))
+// Failure: HausDecodeError: expected Int, found string "7" at $.id   (code "type-mismatch")
+```
+
+`Schema.encode`, `Schema.stringify`, `Schema.toJson` and `Schema.fromJson` work the same way, and `Schema.standard(schema, Root)` is a [Standard Schema](https://standardschema.dev). What each haus type becomes: [host types](/docs/types#host-types-in-each-language).
+
+## Packages and rules
+
+The official packages (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) are built in, with their rules on: `Money(44.40, Eur)` is rejected (`codec-rejected`), since `Eur` is not a currency of the rule iso. Nothing is looked for: every other package is given, as a library's value or a directory.
+
+```ts
+import { Package, Sources } from "@haus-fmt/haus"
+import { money } from "@haus-fmt/haus/money"
+import { readSources } from "@haus-fmt/haus/node"
+
+const sources = await readSources("order.schema.haus", { packages: ["vendor/acme"], folders: ["schemas"] })
+pipe(sources, Result.map(Sources.withPackage(Package.shapeOnly(money))))   // currencies checked for their shape only
+Package.withRule(acme, "Id", (id) => (ulid.test(id) ? Result.succeed(id) : Result.fail("not a ULID")))
+```
+
+A package whose manifest gives a type a rule (`rules: { "Id": "ulid" }`) needs an implementation of it in your program, or compiling fails with [`missing-codec`](/docs/errors#missing-codec): supply it with `Package.withRule`, use the library that publishes the package (its value carries the rule), or take the package with `Package.shapeOnly`.
+
+## Codecs
+
+A codec chooses the host type of a named type, as a typed pair:
+
+```ts
+import { Codec, StdTime } from "@haus-fmt/haus"
+
+const instantAsDate = Codec.make(StdTime.Instant, {
+  decode: (s) => Result.succeed(new Date(s)),     // keeps the instant, drops the offset as written
+  encode: (d) => Result.succeed(d.toISOString()),
 })
-type Order = h.Infer<typeof Order>
-
-const order = h.parse(Order, text)
-if (order.status._tag === "Shipped") order.status.tracking   // "DE-4711"
-h.stringify(Order, { ...order, id: order.id + 1n }, { style: "compact" })
+const withDates = Result.flatMap(schema, Schema.withCodec(instantAsDate))
+// Schema.decode(withDates, Root)(text): every Instant is a Date, in the types too
 ```
 
-A value that doesn't fit throws a `HausDecodeError` with its place and a code:
-
-```ts
-h.parse(Order, text.replace("id: 7", `id: "7"`))
-// HausDecodeError: expected Int, found string "7" at $.id   (code "type-mismatch")
-```
-
-Or read the schema from a `.schema.haus` file. `readSchemaFile` resolves its imports, including packages in `node_modules`:
-
-```ts
-import { compileSchemaFile } from "@haus-fmt/haus"
-import { readSchemaFile } from "@haus-fmt/haus/node"
-
-const { text: schemaText, options } = readSchemaFile("order.schema.haus")
-const { schemas, warnings } = compileSchemaFile(schemaText, options)
-const order = h.parse(schemas.Root!, data)
-```
-
-With [`@haus-fmt/import`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/import), a data file is a module, typed and checked by the schema next to it: `import thread from "./thread.haus"`. It works with Node, tsx, Vite and `tsc` 7.1.
-
-Every `h` schema is also a [Standard Schema](https://standardschema.dev), and `parseWith(schema, text)` takes any Standard Schema: Zod, Valibot, ArkType. What each haus type becomes: [host types](/docs/types#host-types-in-each-language).
+Codecs run after the type's schema and its package rule, so they can reject more values, never fewer. Two for one type, or one for a type that can't have one (a generic type, a `Stream`), are mistakes of your configuration; a codec for an id no type has gives the warning [`unused-codec`](/docs/errors#unused-codec).
 
 ## What else you need to know
 
-**Codecs.** A schema package's rule is checked only when you add its codec. The official ones come with the packages:
-
-```ts
-import { iso } from "@haus-fmt/money"   // currencies are three letters A–Z
-import { wgs84 } from "@haus-fmt/geo"   // latitudes and longitudes in range
-
-const { schemas } = compileSchemaFile(schemaText, { ...options, codecs: [...iso, ...wgs84] })
-h.parse(schemas.Root!, data)   // Money(44.40, Eur): HausDecodeError, codec-rejected at $.total[1]
-```
-
-Without them, `warnings` lists [`missing-codec`](/docs/errors#missing-codec) for each profiled type the schema reaches, and [`unused-codec`](/docs/errors#unused-codec) for a codec whose id no type has (a typo, or `@haus-fmt/money@2#Money` with major 1 imported). Write your own with `h.refine` (one more rule) or `h.transform` (another host type), for any named type: yours, a package's, `std/time#Instant` or `prelude#Decimal`. [What haus checks](/docs/checks)
-
-- **Checking data.** `checkText(file, "Root", text)` reports every error and hint with its place (`$.items[2].price`), as editors show them; `{ first: true }` stops at the first error. A `Stream` is checked item by item, so a syntax error comes after the errors of the items before it. The check stops after `MAX_ERRORS` (200) errors, hints not counted, and says so (`stopped`).
-
-- **Streams.** `for await (const o of h.decodeStream(Order, response.body!))` decodes each value as it arrives; `parseStream` reads values without a schema. A log that holds one value so far is still a stream: `format(values, { stream: true })` and `h.formatAll(Order, orders, { stream: true })` write a comma after a single value too, so the next can be appended. [Logs and streams](/docs/tours/streams)
-- **JSON.** `h.toJson(Order, order)` gives `{"id":"7","total":"44.40",…}`, the JSON a JSON consumer expects; `h.fromJson` reads it back with the same checks. `importJson` reads any JSON as haus. [Coming from JSON](/docs/from-json)
-- **Dates.** std/time values are their checked text. `h.InstantAsDate` gives a JS `Date`; it keeps the instant to the millisecond and drops the offset as written.
-- **Secrets.** `Secret a` is a `Secret<A>`: it prints `<redacted>`, and `expose()` gives the value. [Config and secrets](/docs/tours/secrets)
-- **Limits.** Every reader and writer takes the limits of the spec: `parse(text, { maxDepth: 64 })`. The depth is at most 512.
+- **Checking data.** Decoding reports the first error; the editor tools report them all with their places.
+- **Streams.** `parseStream(source)` and `Schema.decodeStream(schema, Log, source)` yield a Result per value as it arrives. `format(values, { stream: true })` writes a comma after a single value too, so the next can be appended. [Logs and streams](/docs/tours/streams)
+- **JSON.** `Schema.toJson(schema, Root)(order)` gives the JSON a JSON consumer expects; `importJson` reads any JSON as haus; `toHausJson` and `fromHausJson` carry any value through JSON. [Coming from JSON](/docs/from-json)
+- **Secrets.** `Secret a` decodes to a `Secret<A>`: it prints `<redacted>`, and `expose()` gives the value. A `Value` can't hold one, and encoding refuses one (`cannot-encode`) unless you pass `revealSecrets: true`. [Config and secrets](/docs/tours/secrets)
+- **Limits.** Every reader takes the limits of the spec: `parse(text, { maxDepth: 64 })`. The depth is at most 512.
 - **Errors.** Each has a `code` and a `hint`; `errorJson(e)` gives the JSON form for tools and agents. [Error codes](/docs/errors)
 
 ## More
 
 - [README of `@haus-fmt/haus`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/haus): the whole API.
-- [Examples](https://github.com/betalyra/haus-fmt/tree/main/typescript/examples): `quickstart`, `order` and `logs`, on the shared [example files](https://github.com/betalyra/haus-fmt/tree/main/examples). They use Effect.
+- [Examples](https://github.com/betalyra/haus-fmt/tree/main/typescript/examples): `quickstart` and `order` with `@haus-fmt/haus`, `logs` with Effect, on the shared [example files](https://github.com/betalyra/haus-fmt/tree/main/examples).
 - [A tour of haus](/docs/tour) and [From schema to code](/docs/tours/typed).

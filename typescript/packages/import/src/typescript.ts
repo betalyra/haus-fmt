@@ -7,9 +7,10 @@
  *   "contentMappers": [{ "package": "@haus-fmt/import", "extensions": [".haus"], "options": { "target": "effect" } }]
  *
  * Syntax and schema errors become diagnostics at the right place in the file.
- * `packages` and `folders` in the options are relative to the tsconfig.json.
+ * `packages` and `folders` in the options are relative to the tsconfig.json;
+ * `bundles` are imported from its directory.
  */
-import { HausSyntaxError } from "@haus-fmt/haus"
+import { HausSyntaxError, isHausError } from "@haus-fmt/haus"
 import { isSchemaFile } from "@haus-fmt/haus/node"
 import { dirname } from "node:path"
 import { runContentMapper, stringIndexToPosition } from "ts-content-mapper"
@@ -31,11 +32,12 @@ runContentMapper<ImportOptions, Backend>({
         diagnostics: diagnostics.map((d) => ({ messageText: d.message, start: at(d.offset), length: d.length, code: 91002 })),
       }
     } catch (e) {
-      if (!(e instanceof HausSyntaxError)) throw e
+      // A syntax error at its place; an error of the package layer (no place) at the start.
+      if (!isHausError(e)) throw e
       return {
         text: isSchemaFile(params.fileName) ? "export {};\n" : "declare const value: unknown;\nexport default value;\n",
         extension: ".mts",
-        diagnostics: [{ messageText: e.reason, start: at(e.offset), length: 1, code: 91001 }],
+        diagnostics: [{ messageText: e.reason, start: at(e instanceof HausSyntaxError ? e.offset : 0), length: 1, code: 91001 }],
       }
     }
   },

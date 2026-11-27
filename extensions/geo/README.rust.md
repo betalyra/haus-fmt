@@ -19,9 +19,12 @@ Import its types in your schema like any other package's:
 import @haus-fmt/geo (LatLng)
 ```
 
-The schema gives the shape; the profile says which values are valid. Register
-its codecs in `build.rs`, and values that break the rule are rejected when
-decoding. Without them the build warns (`missing-codec`).
+The schema gives the shape; the package's rule, `wgs84` for `LatLng` and
+`BBox`, says which values are valid. The crate carries the rule
+(`haus_geo::rules::{Wgs84, Wgs84BBox}`), and the generated code checks it
+wherever such a value is decoded or encoded, before any codec:
+`LatLng(91, 0)` is rejected (`codec-rejected`) with or without codecs. Its
+codecs are optional and give you Rust types for the values the rule accepts:
 
 ```rust
 haus_build::Config::new()

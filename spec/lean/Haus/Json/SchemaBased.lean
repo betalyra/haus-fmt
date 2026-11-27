@@ -758,8 +758,10 @@ def readJson (L : Limits) (env : Env) (t : Ty) (text : Text) : Except Error Type
 encodes to, checked against the limits before it is written. A value built in
 code may be outside them, and so may an `Any` or an unknown value kept from
 input read with larger limits (§9.5); the error is the limit's code. The node
-limit (§7) comes first: a writer counts the values it writes, and stops at
-the limit before it has written a deeper or longer part.
+limit (§7) comes first: encoding builds a value, and counts its size as it
+builds it, before it has built a deeper or longer part (§7: a value whose
+parts share each other is refused where it is built). The writers that
+follow apply no limits (§11).
 -/
 def encodeChecked (L : Limits) (x : Typed) : Except Error Value :=
   if (encode x).nodes > L.maxNodes then

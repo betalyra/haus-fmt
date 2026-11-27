@@ -1,13 +1,15 @@
 //! The haus data model, exactly as written in the source. No schema has been
 //! applied: numbers are kept as exact literal text, and variants are generic.
 //!
-//! Every [`Value`] is a haus value (spec §1): its constructors reject what
-//! isn't one (spec §11, "Values built in code"). A [`Number`] holds a number
-//! literal, normalized; a [`Tag`] is a tag name; a [`Record`] has each key
-//! once. So writing a value fails only beyond the writer's limits, and its
-//! canonical form, hash, equality and order (spec §12) can't fail.
+//! Every [`Value`] is a haus value (spec §1) within the limits it was built
+//! with (spec §7, §11): its parts are types whose constructors check what
+//! they are given, so that a value that exists can always be written, and
+//! read back by a reader with those limits. Building is the one step that
+//! can fail; writing, the canonical form, hashing, equality and order are
+//! total (spec §11, §12).
 
 use crate::keys::{FEW, Keys, first_repeated};
+use crate::parser::MAX_SUPPORTED_DEPTH;
 use crate::scan::{is_ident, plain_decimal, shown};
 use crate::{ErrorCode, Limits, ValueError};
 use std::borrow::Borrow;
@@ -18,43 +20,51 @@ use std::str::FromStr;
 
 /// A haus value.
 ///
-/// Build one with the constructors of its parts, which take only haus values:
-/// [`Number::new`] and [`Value::number`], [`Tag::new`] and
-/// [`Value::variant`], [`Record::insert`], [`Record::from_fields`] and
-/// [`Value::record`]; strings, bytes, arrays and integers convert with
-/// `From`.
+/// Its parts check what they are given when they are built, with the
+/// default limits of spec §7, so that the value is a haus value a reader
+/// with the default limits reads back: a [`Text`] or [`ByteString`] within
+/// the string limit, a [`Number`] (a number literal, normalized, within the
+/// number limits), a [`Tag`] (a tag name), a [`Record`] (each key once) and
+/// a [`List`] (the elements of an array or the arguments of a variant), the
+/// containers no deeper than the depth limit. Building is the one step that
+/// fails ([`ValueError`], with the code of the mistake): a value that exists
+/// is written, and has a canonical form, a hash, equality and order, without
+/// any error (spec §11, §12).
 ///
 /// ```
 /// use haus::{Record, Value};
 /// let mut person = Record::new();
 /// person.insert("name", "Ada")?;
-/// person.insert("born", Value::variant("Date", vec!["1815-12-10".into()])?)?;
+/// person.insert("born", Value::variant("Date", vec![Value::string("1815-12-10")?])?)?;
 /// person.insert("score", Value::number("1E+05")?)?;
-/// assert_eq!(haus::to_string(&Value::from(person))?, r#"{ name: "Ada", born: Date("1815-12-10"), score: 1e5 }"#);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// assert_eq!(haus::ser::write(&Value::from(person)), r#"{ name: "Ada", born: Date("1815-12-10"), score: 1e5 }"#);
+/// # Ok::<(), haus::ValueError>(())
 /// ```
 ///
-/// A value built in code may nest any depth. Dropping, cloning and comparing
-/// with `==` take a heap stack rather than recursion, so they need no call
-/// stack per level (a parsed value nests at most [`crate::MAX_SUPPORTED_DEPTH`]
-/// levels). `==` compares the values as they are: the same kind, text, tag,
-/// keys in the same order and equal parts; [`crate::equals`] is haus
-/// equality (spec §2), for which key order doesn't matter. `{:?}` shows the
-/// first [`crate::DEBUG_DEPTH`] levels, then `…`, so that printing a value
-/// of any depth takes a bounded stack (spec §7).
+/// Values don't change once they are built (spec §11): the parts of a
+/// value are reached through shared references only, so a container's
+/// recorded depth always matches its parts, and the safety net of spec §11
+/// (`value-changed`, for a value changed after it was built) never fires in
+/// Rust. A value built in code nests at most the depth limit (256 by
+/// default); one parsed at most the parser's limit, which is at most
+/// [`crate::MAX_SUPPORTED_DEPTH`]. Dropping, cloning and comparing with `==`
+/// take a heap stack rather than recursion. `==` compares the values as they
+/// are: the same kind, text, tag, keys in the same order and equal parts;
+/// [`crate::equals`] is haus equality (spec §2), for which key order doesn't
+/// matter. `{:?}` shows the first [`crate::DEBUG_DEPTH`] levels, then `…`.
 pub enum Value {
     /// A number literal, normalized (spec §2): `19.90`, `-1e10`, `255`.
     Number(Number),
-    String(String),
+    String(Text),
     /// A byte string, written `x"0b34ff"`.
-    Bytes(Vec<u8>),
-    Array(Vec<Value>),
+    Bytes(ByteString),
+    Array(List),
     /// Fields in source order, each key once.
     Record(Record),
     /// `args` is empty for a bare tag; `Tag { … }` has one record argument.
     Variant {
         tag: Tag,
-        args: Vec<Value>,
+        args: List,
     },
 }
 
@@ -65,8 +75,24 @@ impl Value {
         Number::new(literal).map(Value::Number)
     }
 
+    /// A string, within the string limit: see [`Text::new`].
+    pub fn string(text: impl Into<String>) -> Result<Value, ValueError> {
+        Text::new(text).map(Value::String)
+    }
+
+    /// A byte string, within the string limit: see [`ByteString::new`].
+    pub fn bytes(bytes: impl Into<Vec<u8>>) -> Result<Value, ValueError> {
+        ByteString::new(bytes).map(Value::Bytes)
+    }
+
+    /// An array of `items`, within the depth limit: see [`List::new`].
+    pub fn array(items: Vec<Value>) -> Result<Value, ValueError> {
+        List::new(items).map(Value::Array)
+    }
+
     /// A variant: `tag` with `args`, none for a bare tag. Fails if `tag`
-    /// isn't a tag name (`invalid-tag`).
+    /// isn't a tag name (`invalid-tag`) or the payload is nested deeper than
+    /// the depth limit (`nesting-too-deep`).
     ///
     /// ```
     /// let some = haus::Value::variant("Some", vec![1.into()]).unwrap();
@@ -74,7 +100,12 @@ impl Value {
     /// assert!(haus::Value::variant("some", vec![]).is_err());
     /// ```
     pub fn variant(tag: &str, args: Vec<Value>) -> Result<Value, ValueError> {
-        Tag::new(tag).map(|tag| Value::Variant { tag, args })
+        let (tag, limits) = (Tag::new(tag)?, Limits::default());
+        // `Tag { … }` is as deep as its record, `Tag(…)` one more than its arguments.
+        match args_depth(&args) > limits.max_depth {
+            true => Err(too_deep(&limits)),
+            false => Ok(Value::Variant { tag, args: List::from_checked(args) }),
+        }
     }
 
     /// A record of `fields`, in order: see [`Record::from_fields`].
@@ -131,6 +162,45 @@ impl Value {
         }
     }
 
+    /// How deep the value nests, counted as spec §7 counts values built in
+    /// code: each array, record and parenthesized payload is a level, a
+    /// record payload (`Tag { … }`) shares its tag's, and a value without
+    /// parts (`1`, a bare tag) is at depth 0. Recorded when the containers
+    /// are built: it takes no walk.
+    ///
+    /// ```
+    /// let depth = |text: &str| haus::parse_one(text).unwrap().depth();
+    /// assert_eq!((depth("1"), depth("[]"), depth("Some { a: 1 }"), depth("Some([])")), (0, 1, 1, 2));
+    /// ```
+    pub fn depth(&self) -> usize {
+        match self {
+            Value::Array(items) => items.depth(),
+            Value::Record(r) => r.depth(),
+            Value::Variant { args, .. } => match args.as_slice() {
+                [] => 0,
+                [Value::Record(r)] => r.depth(),
+                _ => args.depth(),
+            },
+            _ => 0,
+        }
+    }
+
+    /// The number of values it is written as (spec §7, "Size"): itself and
+    /// every element, field value and argument inside it. Walks the value.
+    pub fn size(&self) -> u64 {
+        let mut todo = vec![self];
+        let mut n = 0u64;
+        while let Some(v) = todo.pop() {
+            n += 1;
+            match v {
+                Value::Array(items) | Value::Variant { args: items, .. } => todo.extend(items.iter()),
+                Value::Record(r) => todo.extend(r.values()),
+                _ => {}
+            }
+        }
+        n
+    }
+
     /// Whether this is an array, record or variant with at least one part.
     fn has_parts(&self) -> bool {
         match self {
@@ -143,7 +213,7 @@ impl Value {
     /// Moves this value's parts onto `stack`, leaving it without parts.
     fn move_parts(&mut self, stack: &mut Vec<Value>) {
         match self {
-            Value::Array(items) | Value::Variant { args: items, .. } => stack.append(items),
+            Value::Array(items) | Value::Variant { args: items, .. } => stack.append(&mut items.items),
             Value::Record(r) => {
                 r.keys = None;
                 stack.extend(r.fields.drain(..).map(|(_, v)| v));
@@ -159,6 +229,25 @@ impl From<Number> for Value {
     }
 }
 
+impl From<Text> for Value {
+    fn from(s: Text) -> Value {
+        Value::String(s)
+    }
+}
+
+impl From<ByteString> for Value {
+    fn from(b: ByteString) -> Value {
+        Value::Bytes(b)
+    }
+}
+
+/// An array.
+impl From<List> for Value {
+    fn from(items: List) -> Value {
+        Value::Array(items)
+    }
+}
+
 impl From<Record> for Value {
     fn from(r: Record) -> Value {
         Value::Record(r)
@@ -168,7 +257,7 @@ impl From<Record> for Value {
 /// A bare tag: `None`, `EUR`.
 impl From<Tag> for Value {
     fn from(tag: Tag) -> Value {
-        Value::Variant { tag, args: Vec::new() }
+        Value::Variant { tag, args: List::default() }
     }
 }
 
@@ -179,28 +268,71 @@ impl From<bool> for Value {
     }
 }
 
-impl From<&str> for Value {
-    fn from(s: &str) -> Value {
-        Value::String(s.to_owned())
+/// A string, within the string limit ([`Text::new`]).
+impl TryFrom<&str> for Value {
+    type Error = ValueError;
+    fn try_from(s: &str) -> Result<Value, ValueError> {
+        Value::string(s)
     }
 }
 
-impl From<String> for Value {
-    fn from(s: String) -> Value {
-        Value::String(s)
+/// A string, within the string limit ([`Text::new`]).
+impl TryFrom<String> for Value {
+    type Error = ValueError;
+    fn try_from(s: String) -> Result<Value, ValueError> {
+        Value::string(s)
     }
 }
 
-/// A byte string.
-impl From<Vec<u8>> for Value {
-    fn from(b: Vec<u8>) -> Value {
-        Value::Bytes(b)
+/// A byte string, within the string limit ([`ByteString::new`]).
+impl TryFrom<Vec<u8>> for Value {
+    type Error = ValueError;
+    fn try_from(b: Vec<u8>) -> Result<Value, ValueError> {
+        Value::bytes(b)
     }
 }
 
-impl From<Vec<Value>> for Value {
-    fn from(items: Vec<Value>) -> Value {
-        Value::Array(items)
+/// An array, within the depth limit ([`List::new`]).
+impl TryFrom<Vec<Value>> for Value {
+    type Error = ValueError;
+    fn try_from(items: Vec<Value>) -> Result<Value, ValueError> {
+        Value::array(items)
+    }
+}
+
+/// What can become a [`Value`], checked as its constructor checks it: what
+/// [`Record::insert`] takes. Strings, byte strings and arrays are checked
+/// against the default limits; numbers, tags, records and values already are.
+pub trait IntoValue {
+    fn into_value(self) -> Result<Value, ValueError>;
+}
+
+macro_rules! into_value_from {
+    ($($t:ty),*) => {$(
+        impl IntoValue for $t {
+            fn into_value(self) -> Result<Value, ValueError> {
+                Ok(self.into())
+            }
+        }
+    )*};
+}
+into_value_from!(Value, Number, Text, ByteString, List, Record, Tag, bool);
+into_value_from!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+
+macro_rules! into_value_try {
+    ($($t:ty),*) => {$(
+        impl IntoValue for $t {
+            fn into_value(self) -> Result<Value, ValueError> {
+                Value::try_from(self)
+            }
+        }
+    )*};
+}
+into_value_try!(&str, String, Vec<u8>, Vec<Value>);
+
+impl IntoValue for &String {
+    fn into_value(self) -> Result<Value, ValueError> {
+        Value::string(self.as_str())
     }
 }
 
@@ -291,7 +423,7 @@ impl PartialEq for Value {
                 (Value::Bytes(x), Value::Bytes(y)) => x == y,
                 (Value::Array(x), Value::Array(y)) => {
                     x.len() == y.len() && {
-                        todo.extend(x.iter().zip(y));
+                        todo.extend(x.iter().zip(y.iter()));
                         true
                     }
                 }
@@ -304,7 +436,7 @@ impl PartialEq for Value {
                 }
                 (Value::Variant { tag: s, args: x }, Value::Variant { tag: t, args: y }) => {
                     s == t && x.len() == y.len() && {
-                        todo.extend(x.iter().zip(y));
+                        todo.extend(x.iter().zip(y.iter()));
                         true
                     }
                 }
@@ -324,11 +456,11 @@ impl Eq for Value {}
 /// being copied, each finished when its last part is.
 impl Clone for Value {
     fn clone(&self) -> Value {
-        /// A container being copied: its parts so far, and the ones left.
+        /// A container being copied: its depth, its parts so far, and the ones left.
         enum Frame<'a> {
-            Array(Vec<Value>, std::slice::Iter<'a, Value>),
-            Variant(&'a Tag, Vec<Value>, std::slice::Iter<'a, Value>),
-            Record(Vec<(String, Value)>, std::slice::Iter<'a, (String, Value)>),
+            Array(u32, Vec<Value>, std::slice::Iter<'a, Value>),
+            Variant(&'a Tag, u32, Vec<Value>, std::slice::Iter<'a, Value>),
+            Record(u32, Vec<(String, Value)>, std::slice::Iter<'a, (String, Value)>),
         }
         /// A copy of a value without parts, or the frame that copies its parts.
         fn start(v: &Value) -> Result<Value, Frame<'_>> {
@@ -336,9 +468,11 @@ impl Clone for Value {
                 Value::Number(n) => Ok(Value::Number(n.clone())),
                 Value::String(s) => Ok(Value::String(s.clone())),
                 Value::Bytes(b) => Ok(Value::Bytes(b.clone())),
-                Value::Array(items) => Err(Frame::Array(Vec::with_capacity(items.len()), items.iter())),
-                Value::Variant { tag, args } => Err(Frame::Variant(tag, Vec::with_capacity(args.len()), args.iter())),
-                Value::Record(r) => Err(Frame::Record(Vec::with_capacity(r.len()), r.iter())),
+                Value::Array(items) => Err(Frame::Array(items.depth, Vec::with_capacity(items.len()), items.iter())),
+                Value::Variant { tag, args } => {
+                    Err(Frame::Variant(tag, args.depth, Vec::with_capacity(args.len()), args.iter()))
+                }
+                Value::Record(r) => Err(Frame::Record(r.depth, Vec::with_capacity(r.len()), r.iter())),
             }
         }
         let mut stack = match start(self) {
@@ -348,9 +482,9 @@ impl Clone for Value {
         loop {
             let top = stack.last_mut().expect("a frame is open");
             let next = match top {
-                Frame::Array(_, rest) | Frame::Variant(_, _, rest) => rest.next(),
-                Frame::Record(done, rest) => rest.next().map(|(k, v)| {
-                    done.push((k.clone(), Value::Array(Vec::new())));
+                Frame::Array(_, _, rest) | Frame::Variant(_, _, _, rest) => rest.next(),
+                Frame::Record(_, done, rest) => rest.next().map(|(k, v)| {
+                    done.push((k.clone(), Value::Number(Number::from(0))));
                     v
                 }),
             };
@@ -363,27 +497,407 @@ impl Clone for Value {
                     }
                 },
                 None => match stack.pop().expect("a frame is open") {
-                    Frame::Array(done, _) => Value::Array(done),
-                    Frame::Variant(tag, done, _) => Value::Variant { tag: tag.clone(), args: done },
-                    Frame::Record(done, _) => Value::Record(Record::from_unique(done)),
+                    Frame::Array(depth, done, _) => Value::Array(List { items: done, depth }),
+                    Frame::Variant(tag, depth, done, _) => {
+                        Value::Variant { tag: tag.clone(), args: List { items: done, depth } }
+                    }
+                    Frame::Record(depth, done, _) => Value::Record(Record { fields: done, keys: None, depth }),
                 },
             };
             // A finished part: the next part of the container below, or the copy.
             match stack.last_mut() {
                 None => return copy,
-                Some(Frame::Array(done, _) | Frame::Variant(_, done, _)) => done.push(copy),
-                Some(Frame::Record(done, _)) => done.last_mut().expect("its key was pushed").1 = copy,
+                Some(Frame::Array(_, done, _) | Frame::Variant(_, _, done, _)) => done.push(copy),
+                Some(Frame::Record(_, done, _)) => done.last_mut().expect("its key was pushed").1 = copy,
             }
         }
     }
 }
 
+// ── limits ────────────────────────────────────────────────────
+
+/// The depth of a variant with the arguments `args` (see [`Value::depth`]).
+pub(crate) fn args_depth(args: &[Value]) -> usize {
+    match args {
+        [] => 0,
+        [Value::Record(r)] => r.depth(),
+        _ => 1 + args.iter().map(Value::depth).max().unwrap_or(0),
+    }
+}
+
+/// The error for a container nested deeper than `limits` allow.
+fn too_deep(limits: &Limits) -> ValueError {
+    ValueError::new(ErrorCode::NestingTooDeep, format!("nesting deeper than {} levels", limits.max_depth))
+}
+
+/// Whether this binding supports `limits` (spec §7): an error naming
+/// [`crate::MAX_SUPPORTED_DEPTH`] if the depth limit is above it.
+fn supported(limits: &Limits) -> Result<(), ValueError> {
+    limits.unsupported().map_or(Ok(()), |reason| Err(ValueError::new(ErrorCode::UnsupportedDepth, reason)))
+}
+
+/// Whether a string, key or tag (`code` says which) is within the string limit.
+pub(crate) fn check_text(s: &str, code: ErrorCode, limits: &Limits) -> Result<(), ValueError> {
+    let max = limits.max_string_length;
+    if s.len() > max && s.chars().count() > max {
+        let what = match code {
+            ErrorCode::KeyTooLong => "key",
+            ErrorCode::TagTooLong => "tag",
+            _ => "string",
+        };
+        return Err(ValueError::new(code, format!("{what} longer than {max} characters")));
+    }
+    Ok(())
+}
+
+/// Whether a byte string's hex is within the string limit: two characters
+/// per byte, also where JSON spells them in base64 (spec §16).
+pub(crate) fn check_bytes(b: &[u8], limits: &Limits) -> Result<(), ValueError> {
+    if b.len() > limits.max_string_length / 2 {
+        let reason = format!("byte string longer than {} characters", limits.max_string_length);
+        return Err(ValueError::new(ErrorCode::StringTooLong, reason));
+    }
+    Ok(())
+}
+
+/// Whether a number's normalized literal is within the number limits
+/// (spec §7, §11): its length first (`number-too-long`), then its exponent
+/// (`exponent-too-large`).
+pub(crate) fn check_number(n: &str, limits: &Limits) -> Result<(), ValueError> {
+    if n.len() > limits.max_number_length {
+        let reason = format!("number literal longer than {} characters", limits.max_number_length);
+        return Err(ValueError::new(ErrorCode::NumberTooLong, reason));
+    }
+    if let Some((_, exp)) = n.split_once('e')
+        && limits.exponent_exceeds(exp.trim_start_matches('-'))
+    {
+        let reason = format!("exponent larger than {}", limits.max_exponent);
+        return Err(ValueError::new(ErrorCode::ExponentTooLarge, reason));
+    }
+    Ok(())
+}
+
+/// The limits under which every value that exists was built: the deepest
+/// any can be is [`MAX_SUPPORTED_DEPTH`], and no other limit is checked
+/// again. For containers built from the parts of an existing value.
+pub(crate) fn any() -> Limits {
+    Limits {
+        max_depth: MAX_SUPPORTED_DEPTH,
+        max_number_length: usize::MAX,
+        max_exponent: u64::MAX,
+        max_string_length: usize::MAX,
+        ..Limits::default()
+    }
+}
+
+// ── strings ───────────────────────────────────────────────────
+
+/// The text of a string: at most the string limit's characters (spec §7).
+/// It derefs to its `str`, and compares with one: `text == "Ada"`.
+///
+/// ```
+/// use haus::Text;
+/// let t = Text::new("Ada").unwrap();
+/// assert!(t == "Ada" && t.len() == 3);
+/// let limits = haus::Limits { max_string_length: 2, ..haus::Limits::default() };
+/// assert_eq!(Text::with_limits("Ada", &limits).unwrap_err().code, haus::ErrorCode::StringTooLong);
+/// ```
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Text(String);
+
+impl Text {
+    /// The text `s`, if it has at most 16 Mi characters (`string-too-long`).
+    pub fn new(s: impl Into<String>) -> Result<Text, ValueError> {
+        Text::with_limits(s, &Limits::default())
+    }
+
+    /// The text `s`, within the string limit of `limits`.
+    pub fn with_limits(s: impl Into<String>, limits: &Limits) -> Result<Text, ValueError> {
+        let s = s.into();
+        check_text(&s, ErrorCode::StringTooLong, limits)?;
+        Ok(Text(s))
+    }
+
+    /// Text checked already (by the parser, or against an encoder's limits).
+    pub(crate) fn from_checked(s: String) -> Text {
+        Text(s)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl Deref for Text {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Text {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for Text {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// As a `String`: `"Ada"`.
+impl fmt::Debug for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl PartialEq<str> for Text {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for Text {
+    fn eq(&self, other: &String) -> bool {
+        self.0 == *other
+    }
+}
+
+impl TryFrom<&str> for Text {
+    type Error = ValueError;
+    fn try_from(s: &str) -> Result<Text, ValueError> {
+        Text::new(s)
+    }
+}
+
+impl TryFrom<String> for Text {
+    type Error = ValueError;
+    fn try_from(s: String) -> Result<Text, ValueError> {
+        Text::new(s)
+    }
+}
+
+impl From<Text> for String {
+    fn from(t: Text) -> String {
+        t.0
+    }
+}
+
+/// The bytes of a byte string: at most half the string limit, since each
+/// byte is written as two hex digits (spec §7). It derefs to its `[u8]`.
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ByteString(Vec<u8>);
+
+impl ByteString {
+    /// The bytes `b`, if their hex has at most 16 Mi characters (`string-too-long`).
+    pub fn new(b: impl Into<Vec<u8>>) -> Result<ByteString, ValueError> {
+        ByteString::with_limits(b, &Limits::default())
+    }
+
+    /// The bytes `b`, within the string limit of `limits`.
+    pub fn with_limits(b: impl Into<Vec<u8>>, limits: &Limits) -> Result<ByteString, ValueError> {
+        let b = b.into();
+        check_bytes(&b, limits)?;
+        Ok(ByteString(b))
+    }
+
+    /// Bytes checked already (by the parser, or against an encoder's limits).
+    pub(crate) fn from_checked(b: Vec<u8>) -> ByteString {
+        ByteString(b)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl Deref for ByteString {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for ByteString {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// As a `Vec<u8>`: `[11, 52]`.
+impl fmt::Debug for ByteString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl PartialEq<[u8]> for ByteString {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.0 == other
+    }
+}
+
+impl TryFrom<Vec<u8>> for ByteString {
+    type Error = ValueError;
+    fn try_from(b: Vec<u8>) -> Result<ByteString, ValueError> {
+        ByteString::new(b)
+    }
+}
+
+impl TryFrom<&[u8]> for ByteString {
+    type Error = ValueError;
+    fn try_from(b: &[u8]) -> Result<ByteString, ValueError> {
+        ByteString::new(b)
+    }
+}
+
+// ── lists ─────────────────────────────────────────────────────
+
+/// The elements of an array, or the arguments of a variant: values in
+/// order, nested at most the depth limit (spec §7). It records its depth,
+/// one more than its deepest part's (see [`Value::depth`]), when it is
+/// built, and derefs to `[Value]`.
+///
+/// ```
+/// use haus::{List, Value};
+/// let mut deep = Value::from(1);
+/// for _ in 0..256 {
+///     deep = List::new(vec![deep]).unwrap().into();
+/// }
+/// assert_eq!(deep.depth(), 256);
+/// assert_eq!(List::new(vec![deep]).unwrap_err().code, haus::ErrorCode::NestingTooDeep);
+/// ```
+#[derive(Clone, PartialEq, Eq)]
+pub struct List {
+    items: Vec<Value>,
+    depth: u32,
+}
+
+impl List {
+    /// The values `items`, if, as an array, they nest at most 256 levels
+    /// (`nesting-too-deep`).
+    pub fn new(items: Vec<Value>) -> Result<List, ValueError> {
+        List::with_limits(items, &Limits::default())
+    }
+
+    /// The values `items`, nested within the depth limit of `limits`. Only
+    /// the depth is checked: each part was checked when it was built, and
+    /// keeps the limits it was built with (spec §7).
+    pub fn with_limits(items: Vec<Value>, limits: &Limits) -> Result<List, ValueError> {
+        supported(limits)?;
+        let list = List::from_checked(items);
+        match list.depth() > limits.max_depth {
+            true => Err(too_deep(limits)),
+            false => Ok(list),
+        }
+    }
+
+    /// No values: `[]`, or a bare tag's payload.
+    pub const fn empty() -> List {
+        List { items: Vec::new(), depth: 1 }
+    }
+
+    /// Values whose depth was checked already (by the parser, or against an
+    /// encoder's limits): the depth is recorded.
+    pub(crate) fn from_checked(items: Vec<Value>) -> List {
+        let deepest = items.iter().map(Value::depth).max().unwrap_or(0);
+        List { items, depth: u32::try_from(deepest + 1).unwrap_or(u32::MAX) }
+    }
+
+    /// How deep the values nest as an array: one more than the deepest.
+    pub fn depth(&self) -> usize {
+        self.depth as usize
+    }
+
+    pub fn as_slice(&self) -> &[Value] {
+        &self.items
+    }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        self.items
+    }
+}
+
+/// No values: `[]`, or a bare tag's payload.
+impl Default for List {
+    fn default() -> List {
+        List::empty()
+    }
+}
+
+impl Deref for List {
+    type Target = [Value];
+    fn deref(&self) -> &[Value] {
+        &self.items
+    }
+}
+
+impl AsRef<[Value]> for List {
+    fn as_ref(&self) -> &[Value] {
+        &self.items
+    }
+}
+
+/// As a `Vec<Value>`.
+impl fmt::Debug for List {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&ItemsAt(&self.items, 1), f)
+    }
+}
+
+impl TryFrom<Vec<Value>> for List {
+    type Error = ValueError;
+    fn try_from(items: Vec<Value>) -> Result<List, ValueError> {
+        List::new(items)
+    }
+}
+
+impl IntoIterator for List {
+    type Item = Value;
+    type IntoIter = std::vec::IntoIter<Value>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a List {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
 // ── numbers ───────────────────────────────────────────────────
 
-/// A number: a number literal, normalized as the parser reads it (spec §2).
-/// Digit separators are removed, the exponent is written `e` with no `+` or
-/// leading zeros, and hex and binary literals are decimal integers; the
-/// scale stays (`19.90` is not `19.9`).
+/// A number: a number literal, normalized as the parser reads it (spec §2),
+/// within the number limits on that form (spec §7). Digit separators are
+/// removed, the exponent is written `e` with no `+` or leading zeros, and
+/// hex and binary literals are decimal integers; the scale stays (`19.90`
+/// is not `19.9`).
 ///
 /// ```
 /// use haus::Number;
@@ -392,6 +906,8 @@ impl Clone for Value {
 /// assert_eq!(Number::new("1_000.50").unwrap(), "1000.50");
 /// assert_eq!(Number::from(-7).as_str(), "-7");
 /// assert!(Number::new("01").is_err() && Number::new("NaN").is_err() && Number::new("").is_err());
+/// assert_eq!(Number::new(&"9".repeat(1001)).unwrap_err().code, haus::ErrorCode::NumberTooLong);
+/// assert_eq!(Number::new("1e9999").unwrap_err().code, haus::ErrorCode::ExponentTooLarge);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Number(String);
@@ -399,9 +915,23 @@ pub struct Number(String);
 impl Number {
     /// The number of a literal (`1E+05`, `0xFF`, `1_000`), normalized
     /// (`1e5`, `255`, `1000`). Fails if `literal` isn't one number literal
-    /// (`invalid-number`): `01`, `NaN`, `1.`, ` 1`, the empty text. There is
-    /// no limit on its length or exponent: those are the writer's (spec §7).
+    /// (`invalid-number`): `01`, `NaN`, `1.`, ` 1`, the empty text; and if
+    /// its normalized literal is beyond the default number limits:
+    /// longer than 1000 characters (`number-too-long`), or with an exponent
+    /// above 6144 (`exponent-too-large`).
     pub fn new(literal: &str) -> Result<Number, ValueError> {
+        Number::with_limits(literal, &Limits::default())
+    }
+
+    /// [`Number::new`], within the number limits of `limits`.
+    pub fn with_limits(literal: &str, limits: &Limits) -> Result<Number, ValueError> {
+        let n = Number::parse(literal)?;
+        check_number(&n.0, limits)?;
+        Ok(n)
+    }
+
+    /// The number of a literal, normalized, whatever its length.
+    fn parse(literal: &str) -> Result<Number, ValueError> {
         if plain_decimal(literal.as_bytes()) == Some(literal.len()) || is_normalized(literal) {
             return Ok(Number(literal.to_owned()));
         }
@@ -517,8 +1047,8 @@ pub(crate) fn is_normalized(text: &str) -> bool {
 
 // ── tags ──────────────────────────────────────────────────────
 
-/// A tag name: `[A-Z][A-Za-z0-9_]*` (spec §4). It derefs to its `str`, and
-/// compares with one: `tag == "None"`.
+/// A tag name: `[A-Z][A-Za-z0-9_]*` (spec §4), within the string limit. It
+/// derefs to its `str`, and compares with one: `tag == "None"`.
 ///
 /// ```
 /// use haus::Tag;
@@ -530,12 +1060,19 @@ pub(crate) fn is_normalized(text: &str) -> bool {
 pub struct Tag(String);
 
 impl Tag {
-    /// The tag `name`. Fails if it isn't a tag name (`invalid-tag`).
+    /// The tag `name`. Fails if it isn't a tag name (`invalid-tag`, checked
+    /// first), or is longer than 16 Mi characters (`tag-too-long`).
     pub fn new(name: &str) -> Result<Tag, ValueError> {
-        match is_tag(name) {
-            true => Ok(Tag(name.to_owned())),
-            false => Err(invalid_tag(name)),
+        Tag::with_limits(name, &Limits::default())
+    }
+
+    /// [`Tag::new`], within the string limit of `limits`.
+    pub fn with_limits(name: &str, limits: &Limits) -> Result<Tag, ValueError> {
+        if !is_tag(name) {
+            return Err(invalid_tag(name));
         }
+        check_text(name, ErrorCode::TagTooLong, limits)?;
+        Ok(Tag(name.to_owned()))
     }
 
     /// A name the parser read, or one known to be a tag name.
@@ -580,10 +1117,7 @@ impl TryFrom<&str> for Tag {
 impl TryFrom<String> for Tag {
     type Error = ValueError;
     fn try_from(name: String) -> Result<Tag, ValueError> {
-        match is_tag(&name) {
-            true => Ok(Tag(name)),
-            false => Err(invalid_tag(&name)),
-        }
+        Tag::new(&name)
     }
 }
 
@@ -645,7 +1179,8 @@ impl PartialEq<Tag> for &str {
 
 // ── records ───────────────────────────────────────────────────
 
-/// A record: fields in order, each key once (spec §1).
+/// A record: fields in order, each key once (spec §1), each key within the
+/// string limit, the record nested at most the depth limit (spec §7).
 ///
 /// ```
 /// use haus::{Record, Value};
@@ -657,41 +1192,67 @@ impl PartialEq<Tag> for &str {
 /// assert!(r.insert("name", "Grace").is_err());
 /// assert!(Record::from_fields([("a", Value::from(1)), ("a", Value::from(2))]).is_err());
 /// ```
-#[derive(Default)]
 pub struct Record {
     pub(crate) fields: Vec<(String, Value)>,
     /// The keys, chained, once [`Record::insert`] grew the record beyond a
     /// few: each insert then compares its key with a few others only.
     keys: Option<Box<Keys>>,
+    /// One more than its deepest field's depth.
+    depth: u32,
 }
 
 impl Record {
     /// A record without fields.
     pub fn new() -> Record {
-        Record::default()
+        Record { fields: Vec::new(), keys: None, depth: 1 }
     }
 
     /// A record of `fields`, in order. Fails if a key is there twice
-    /// (`duplicate-key`); finding that takes time linear in the keys.
+    /// (`duplicate-key`; finding that takes time linear in the keys), is
+    /// longer than the string limit (`key-too-long`), or the record nests
+    /// deeper than 256 levels (`nesting-too-deep`).
     pub fn from_fields<K: Into<String>>(fields: impl IntoIterator<Item = (K, Value)>) -> Result<Record, ValueError> {
+        Record::from_fields_with(fields, &Limits::default())
+    }
+
+    /// [`Record::from_fields`], within `limits`: the length of each key and
+    /// the depth. The values were checked when they were built.
+    pub fn from_fields_with<K: Into<String>>(
+        fields: impl IntoIterator<Item = (K, Value)>,
+        limits: &Limits,
+    ) -> Result<Record, ValueError> {
+        supported(limits)?;
         let fields: Vec<(String, Value)> = fields.into_iter().map(|(k, v)| (k.into(), v)).collect();
-        match first_repeated(&fields) {
-            Some(i) => Err(duplicate_key(&fields[i].0)),
-            None => Ok(Record { fields, keys: None }),
+        if let Some(i) = first_repeated(&fields) {
+            return Err(duplicate_key(&fields[i].0));
+        }
+        fields.iter().try_for_each(|(k, _)| check_text(k, ErrorCode::KeyTooLong, limits))?;
+        let record = Record::from_unique(fields);
+        match record.depth() > limits.max_depth {
+            true => Err(too_deep(limits)),
+            false => Ok(record),
         }
     }
 
-    /// Fields whose keys are known to be unique (the parser checked them).
+    /// Fields whose keys are known to be unique and within the limits, and
+    /// whose depth was checked (the parser, an encoder): the depth is recorded.
     pub(crate) fn from_unique(fields: Vec<(String, Value)>) -> Record {
-        Record { fields, keys: None }
+        let deepest = fields.iter().map(|(_, v)| v.depth()).max().unwrap_or(0);
+        Record { fields, keys: None, depth: u32::try_from(deepest + 1).unwrap_or(u32::MAX) }
     }
 
     /// Adds a field after the others. Fails if the record has the key
-    /// already (`duplicate-key`), leaving it as it was: it never replaces a
-    /// field's value (use [`Record::get_mut`] for that). Takes time linear
-    /// in the key, not in the record.
-    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Value>) -> Result<(), ValueError> {
-        let key = key.into();
+    /// already (`duplicate-key`), if the key is longer than the string limit
+    /// (`key-too-long`), if the value isn't one ([`IntoValue`]), or if the
+    /// record would nest deeper than 256 levels (`nesting-too-deep`),
+    /// leaving it as it was. It never replaces a field's value. Takes time
+    /// linear in the key, not in the record.
+    pub fn insert(&mut self, key: impl Into<String>, value: impl IntoValue) -> Result<(), ValueError> {
+        let (key, value, limits) = (key.into(), value.into_value()?, Limits::default());
+        check_text(&key, ErrorCode::KeyTooLong, &limits)?;
+        if value.depth() + 1 > limits.max_depth {
+            return Err(too_deep(&limits));
+        }
         let new = match &mut self.keys {
             Some(keys) => keys.insert(&self.fields, &key),
             None if self.fields.len() < FEW => !self.fields.iter().any(|(k, _)| *k == key),
@@ -705,18 +1266,19 @@ impl Record {
         if !new {
             return Err(duplicate_key(&key));
         }
-        self.fields.push((key, value.into()));
+        self.depth = self.depth.max(u32::try_from(value.depth() + 1).unwrap_or(u32::MAX));
+        self.fields.push((key, value));
         Ok(())
+    }
+
+    /// How deep the record nests: one more than its deepest field.
+    pub fn depth(&self) -> usize {
+        self.depth as usize
     }
 
     /// The value of field `key`.
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.fields.iter().find(|(k, _)| k == key).map(|(_, v)| v)
-    }
-
-    /// The value of field `key`, to change.
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        self.fields.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
@@ -746,19 +1308,20 @@ impl Record {
         self.fields.iter().map(|(_, v)| v)
     }
 
-    /// The values, in order, to change.
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        self.fields.iter_mut().map(|(_, v)| v)
-    }
-
     /// The fields, in order.
     pub fn as_slice(&self) -> &[(String, Value)] {
         &self.fields
     }
 
     /// The fields, in order.
-    pub fn into_fields(self) -> Vec<(String, Value)> {
-        self.fields
+    pub fn into_fields(mut self) -> Vec<(String, Value)> {
+        std::mem::take(&mut self.fields)
+    }
+}
+
+impl Default for Record {
+    fn default() -> Record {
+        Record::new()
     }
 }
 
@@ -769,7 +1332,7 @@ fn duplicate_key(key: &str) -> ValueError {
 /// A copy of the fields (the chained keys are made again if needed).
 impl Clone for Record {
     fn clone(&self) -> Record {
-        Record::from_unique(self.fields.clone())
+        Record { fields: self.fields.clone(), keys: None, depth: self.depth }
     }
 }
 
@@ -782,7 +1345,6 @@ impl PartialEq for Record {
 
 impl Eq for Record {}
 
-/// `{"name": String("Ada"), …}`.
 /// The fields, as a map: the first [`crate::DEBUG_DEPTH`] levels (see [`Value`]).
 impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -798,9 +1360,10 @@ impl TryFrom<Vec<(String, Value)>> for Record {
 }
 
 /// The map's entries, in key order: its keys are unique.
-impl From<BTreeMap<String, Value>> for Record {
-    fn from(map: BTreeMap<String, Value>) -> Record {
-        Record::from_unique(map.into_iter().collect())
+impl TryFrom<BTreeMap<String, Value>> for Record {
+    type Error = ValueError;
+    fn try_from(map: BTreeMap<String, Value>) -> Result<Record, ValueError> {
+        Record::from_fields(map)
     }
 }
 
@@ -808,7 +1371,7 @@ impl IntoIterator for Record {
     type Item = (String, Value);
     type IntoIter = std::vec::IntoIter<(String, Value)>;
     fn into_iter(self) -> Self::IntoIter {
-        self.fields.into_iter()
+        self.into_fields().into_iter()
     }
 }
 

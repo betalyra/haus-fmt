@@ -149,27 +149,27 @@ ErrorCode := [].{
 	stray_slash : Str
 	stray_slash = "stray-slash"
 
-	## `nesting-too-deep` (limits): Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16). Reported at: The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Writing a value: its place, or no place; in the i-th value of a stream written, a place that starts with `$[i]` (§11).
+	## `nesting-too-deep` (limits): Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16). Reported at: The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Building a value in code: the constructor of the container too deep, informative (§11). Encoding with a schema: the place of the value (§15).
 	nesting_too_deep : Str
 	nesting_too_deep = "nesting-too-deep"
 
-	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). A writer measures a number built in code on its normalized literal (§11); one over both the number and the exponent limit may fail with either code. Reported at: The literal's first character. In JSON, the number token's first character, or the string's place for a string read as a number (§16).
+	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). A number built in code is measured on its normalized literal when it is built (§11); one over both the number and the exponent limit may fail with either code. Reported at: The literal's first character. In JSON, the number token's first character, or the string's place for a string read as a number (§16). Building a value in code: the constructor, informative (§11).
 	number_too_long : Str
 	number_too_long = "number-too-long"
 
-	## `exponent-too-large` (limits): A number's exponent is larger than the limit (default 6144), in either direction. A writer measures a number built in code on its normalized literal (§11), as for `number-too-long`. Reported at: The literal's first character. In JSON, as `number-too-long`.
+	## `exponent-too-large` (limits): A number's exponent is larger than the limit (default 6144), in either direction. A number built in code is measured on its normalized literal when it is built (§11), as for `number-too-long`. Reported at: The literal's first character. In JSON, and building a value in code, as `number-too-long`.
 	exponent_too_large : Str
 	exponent_too_large = "exponent-too-large"
 
-	## `string-too-long` (limits): A string or byte string has more characters than the limit (default 16 Mi). Reported at: The opening quote; for a byte string, its `x` (§8).
+	## `string-too-long` (limits): A string or byte string has more characters than the limit (default 16 Mi). Reported at: The opening quote; for a byte string, its `x` (§8). Building a value in code: the constructor, informative (§11).
 	string_too_long : Str
 	string_too_long = "string-too-long"
 
-	## `key-too-long` (limits): A record key has more characters than the string limit (default 16 Mi). Reported at: The key's first character.
+	## `key-too-long` (limits): A record key has more characters than the string limit (default 16 Mi). Reported at: The key's first character. Building a value in code: the constructor, informative (§11).
 	key_too_long : Str
 	key_too_long = "key-too-long"
 
-	## `tag-too-long` (limits): A tag has more characters than the string limit (default 16 Mi). Reported at: The tag's first character.
+	## `tag-too-long` (limits): A tag has more characters than the string limit (default 16 Mi). Reported at: The tag's first character. Building a value in code: the constructor, informative (§11).
 	tag_too_long : Str
 	tag_too_long = "tag-too-long"
 
@@ -293,7 +293,7 @@ ErrorCode := [].{
 	import_unavailable : Str
 	import_unavailable = "import-unavailable"
 
-	## `import-not-found` (imports): An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3). Reported at (informative): The import, at its `import`.
+	## `import-not-found` (imports): An imported package or file can't be found: no package of that name was given to the build, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package given names another package in its manifest (§13.3). Reported at (informative): The import, at its `import`.
 	import_not_found : Str
 	import_not_found = "import-not-found"
 
@@ -301,7 +301,7 @@ ErrorCode := [].{
 	import_outside_root : Str
 	import_outside_root = "import-outside-root"
 
-	## `import-version` (imports): An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf). Reported at (informative): The import, at its `import`.
+	## `import-version` (imports): An import asks for a major version (`@org/name@2`) and the package given to the build has another one, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf). Reported at (informative): The import, at its `import`.
 	import_version : Str
 	import_version = "import-version"
 
@@ -309,27 +309,31 @@ ErrorCode := [].{
 	import_cycle : Str
 	import_cycle = "import-cycle"
 
-	## `duplicate-package` (imports): One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package. Reported at (informative): The import that reaches the second package, at its `import`.
+	## `duplicate-package` (imports): One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package. Also a copy of an official package (`@haus-fmt/…`) given to a compile, as a value, by its directory or in a folder, that isn't byte for byte the one built into the binding, whether a schema imports it or not: an official package can't be replaced (packages.md §3). Reported at (informative): The import that reaches the second package, at its `import`. A copy of an official package: no place; the message names where it was given.
 	duplicate_package : Str
 	duplicate_package = "duplicate-package"
 
-	## `undeclared-package` (imports): A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for. Reported at (informative): The import, at its `import`.
+	## `undeclared-package` (imports): No longer reported. A build is never searched for packages: every package a schema imports is one given to the build (packages.md), so no import can reach a package its project didn't declare, and an import of a package that wasn't given is `import-not-found`. The code is kept, unused, until the catalogue's 1.0, so that it isn't reused for another mistake. Reported at (informative): Never reported.
 	undeclared_package : Str
 	undeclared_package = "undeclared-package"
 
-	## `package-manifest` (imports): A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB. Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory: no place.
+	## `package-manifest` (imports): A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB. Also a `rules` field that breaks its rules (packages.md §4), checked on each package a schema reaches: not a record of strings, a type the package's `schema.haus` doesn't define without parameters (or defines as a `Stream`), a rule name that isn't `[a-z][a-z0-9-]*`, or, for a package read from files, a rule without its regular file `rules/<name>.md`. Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory, and a `rules` field: no place.
 	package_manifest : Str
 	package_manifest = "package-manifest"
+
+	## `missing-codec` (imports): The schema reaches a type that its package gives a rule (its manifest's `rules`, packages.md §4, §6), and the program has no implementation of that rule: neither built in (the official packages' rules), nor carried by the package's bundle, nor supplied by the program. Compiling fails, unless the program takes the package shape-only (packages.md §7). Only types the schema's definitions reach count, directly or through other types; a rule on a type nothing decodes is not required. Tools that check data without a program (`haus check`, editors) report it instead as a hint, once per import of such a package. Reported at (informative): Nowhere: it is about the program's rules, reported once per type id. From a tool: the import of the package, as a hint.
+	missing_codec : Str
+	missing_codec = "missing-codec"
 
 	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (packages.md §4), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation. Reported at (informative): The import that reaches the package; the message names both versions.
 	package_version : Str
 	package_version = "package-version"
 
-	## `package-path` (imports): A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. Reported at (informative): The import that reaches the file; the message names the file.
+	## `package-path` (imports): A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus` or `schema.haus` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. Reported at (informative): The import that reaches the file; the message names the file.
 	package_path : Str
 	package_path = "package-path"
 
-	## `package-name` (imports): A package manager's name for a schema package differs from its manifest's: the `name` of its `package.json` isn't the `name` of its `package.haus`. On npm, imports find a package by that name, so it must be the manifest's (§13.3). Reported by package checks such as `haus package check`. Reported at (informative): No place in text: the message names the package and its files.
+	## `package-name` (imports): A package manager's name for a schema package differs from its manifest's: the `name` of the `package.json` it is published with isn't the `name` of its `package.haus`. Imports name a package by its manifest's name, so a package published under another name would be given to builds under a name its imports don't use (§13.3). Reported by package checks such as `haus package check`. Reported at (informative): No place in text: the message names the package and its files.
 	package_name : Str
 	package_name = "package-name"
 
@@ -341,11 +345,11 @@ ErrorCode := [].{
 	package_install_script : Str
 	package_install_script = "package-install-script"
 
-	## `package-files` (imports): A package manager's configuration doesn't ship a file of the schema package: `package.haus`, `schema.haus`, or a profile's vectors or rule. Read from the configuration (`files` of `package.json`, `include` of `Cargo.toml`, a wheel's build configuration), without packing anything. Reported at (informative): No place in text: the message names the package and the file.
+	## `package-files` (imports): A package manager's configuration doesn't ship a file of the schema package: `package.haus`, `schema.haus`, or a rule's prose or vectors. Read from the configuration (`files` of `package.json`, `include` of `Cargo.toml`, a wheel's build configuration), without packing anything. Reported at (informative): No place in text: the message names the package and the file.
 	package_files : Str
 	package_files = "package-files"
 
-	## `profile-vectors` (imports): A profile of a schema package is malformed (§13.3): it has no rule (`profiles/<name>.md`) next to its vectors; a vector isn't `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with string fields and no others (only an `Accept` has an `output`); its `type` isn't a type of the package without parameters; its `value` or `output` isn't one haus value; or an accepted value or its output isn't valid for its type, which a codec running after the schema can't accept. Also a profile name that isn't lowercase, and a vectors file with no vectors. Reported at (informative): The vector's place in its file, or the profile when its rule is missing.
+	## `profile-vectors` (imports): A rule's test vectors of a schema package are malformed (packages.md §6): the rule has no prose (`rules/<name>.md`) next to its vectors; a vector isn't `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with string fields and no others (only an `Accept` has an `output`); its `type` isn't a type of the package without parameters; its `value` or `output` isn't one haus value; or an accepted value or its output isn't valid for its type, which a rule checked after the schema can't accept. Also a rule name that isn't `[a-z][a-z0-9-]*`, and a vectors file with no vectors. Reported at (informative): The vector's place in its file, or the rule when its prose is missing.
 	profile_vectors : Str
 	profile_vectors = "profile-vectors"
 
@@ -357,7 +361,7 @@ ErrorCode := [].{
 	codec_unreachable : Str
 	codec_unreachable = "codec-unreachable"
 
-	## `file-too-large` (imports): A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read. Reported at (informative): The import that reaches the file.
+	## `file-too-large` (imports): A schema file is larger than the tool allows (1 MiB by default). It is not read. Reported at (informative): The import that reaches the file.
 	file_too_large : Str
 	file_too_large = "file-too-large"
 
@@ -393,7 +397,7 @@ ErrorCode := [].{
 	wrong_payload : Str
 	wrong_payload = "wrong-payload"
 
-	## `invalid-time` (decoding): A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md). Reported at: The string: `$[0]` for `Date("2026-02-30")`.
+	## `invalid-time` (decoding): A std/time value whose text the std/time rule rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md). Reported at: The string: `$[0]` for `Date("2026-02-30")`.
 	invalid_time : Str
 	invalid_time = "invalid-time"
 
@@ -401,11 +405,11 @@ ErrorCode := [].{
 	invalid_secret : Str
 	invalid_secret = "invalid-secret"
 
-	## `codec-rejected` (decoding): A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type. Reported at: The place of the codec's type: of the innermost codec that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
+	## `codec-rejected` (decoding): A value its type's schema accepts and a codec or a package's rule rejects (§13.4, packages.md §6), such as an amount whose currency the rule `iso` of `@haus-fmt/money` doesn't accept. At the place of the codec's or the rule's type. Reported at: The place of the codec's or the rule's type: of the innermost that rejects (§13.4). Inside a `Secret` the error is `invalid-secret`, at the secret.
 	codec_rejected : Str
 	codec_rejected = "codec-rejected"
 
-	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. A decoded `Secret` given to a writer that doesn't apply its schema (haus or JSON from the binding's values, the canonical form, the hash; §15, "Hiding"). Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type; for a secret, the secret. Building a value in code: informative (§11).
+	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`, or a host value a codec rejects (§13.4). A decoded `Secret`, which an encoder writes only when told to reveal secrets (`revealSecrets`, §15, "Encoding a secret"). Building a value in code (§11): a string or key with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built. Reported at: The place of the value in the type being encoded; for a codec's rejection, the place of the codec's type; for a secret, the secret, never a place inside it. Building a value in code: the constructor, informative (§11).
 	cannot_encode : Str
 	cannot_encode = "cannot-encode"
 
@@ -413,11 +417,15 @@ ErrorCode := [].{
 	cyclic_value : Str
 	cyclic_value = "cyclic-value"
 
+	## `value-changed` (decoding): A value was changed after it was built, or made without the binding's constructors (a cast), in a language that can't keep code from changing it (§11, "Values don't change"): a writer, the canonical form, the hash, equality or order found a container that contains itself, or whose size differs from the one recorded when it was built (§7). A value used as it was built never has this error. Reported at: `$`: the value given to the writer, the canonical form or the hash; `$[i]` for the i-th value of a stream written, or of `hashAll`, also when there is one value (`$[0]`). From `equals` or `compare`: `$`, and the message says which operand.
+	value_changed : Str
+	value_changed = "value-changed"
+
 	## `step-budget` (decoding): Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8). Reported at: `$`: the whole decode or encode.
 	step_budget : Str
 	step_budget = "step-budget"
 
-	## `too-many-nodes` (decoding): A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it. Reported at: `$`: the value given to the writer, the canonical form or the hash, or to an encoder or decoder with a schema (§15); `$[i]` for the i-th value of a stream written, or of `hashAll`, also when the stream has one value (`$[0]`). From `equals` or `compare`: `$`, and the message says which operand.
+	## `too-many-nodes` (decoding): A value built in code (not parsed) has a size over the node limit (default 64 Mi, §7): its parts share each other so much that it would expand beyond the limit when written out. Raised when the value is built: by the constructor of the container that goes over the limit (§11), or by an encoder with a schema given objects of the program that share parts (§15). Never by parsing, decoding, the writers, the canonical form, the hash, equality or order. Reported at: Building a value in code: the constructor, informative (§11). Encoding with a schema: `$`, the value given; `$[i]` for the i-th item of a stream encoded (§15).
 	too_many_nodes : Str
 	too_many_nodes = "too-many-nodes"
 
@@ -481,17 +489,13 @@ ErrorCode := [].{
 	unlisted_tag : Str
 	unlisted_tag = "unlisted-tag"
 
-	## `missing-codec` (hints): A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (packages.md §7). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
-	missing_codec : Str
-	missing_codec = "missing-codec"
-
-	## `unused-codec` (hints): A warning: a codec is set for an id that no type has (packages.md §7): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. Reported at: Nowhere: it is about the codecs the application set, reported once per id, where the binding learns which codecs are set or on request, through a function of the binding's.
+	## `unused-codec` (hints): A warning: a codec is set for an id that no type has (packages.md §7): not a type of the prelude or a standard module, nor of the schema's files and the packages they import. It never runs, so the values it was meant to check pass unchecked. Decoding is unchanged. A codec for the id of a type that can't have one (a generic type, `prelude#Maybe`, a `Stream` definition) is not this warning: the binding rejects it as a mistake of its configuration, with no code, as two codecs for one id (packages.md §7). Reported at: Nowhere: it is about the codecs the application set, reported once per id, where the binding learns which codecs are set or on request, through a function of the binding's.
 	unused_codec : Str
 	unused_codec = "unused-codec"
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag", "missing-codec", "unused-codec"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "missing-codec", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "value-changed", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag", "unused-codec"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -567,20 +571,21 @@ ErrorCode := [].{
 		"unknown-import" => "Import a type the module defines; the message lists them."
 		"duplicate-import" => "Import each name once."
 		"import-unavailable" => "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
-		"import-not-found" => "Install the package, or fix the path."
+		"import-not-found" => "Give the package to the build (packages.md), or fix the path."
 		"import-outside-root" => "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package."
-		"import-version" => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
+		"import-version" => "Give the build the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
 		"import-cycle" => "Move the shared types to a file both import."
-		"duplicate-package" => "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."
-		"undeclared-package" => "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`)."
-		"package-manifest" => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version."
+		"duplicate-package" => "Give one copy of the package: align the versions of the libraries that carry it. Don't give copies of the official packages: they are built in. On npm, a library declares the libraries of the schema packages its schema imports as `peerDependencies`."
+		"undeclared-package" => "Give the package to the build."
+		"package-manifest" => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version. Give a rule only to a type the schema defines without parameters, as `rules: { \"Code\": \"iso\" }`, with its prose in `rules/iso.md`."
+		"missing-codec" => "Use the library that publishes the package (its bundle carries the rule), supply the rule (`Package.withRule`), or take the package shape-only (`Package.shapeOnly`) if your program checks its values itself."
 		"package-version" => "Release both with the same version: change them together."
 		"package-path" => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."
 		"package-name" => "Publish the package under its manifest's name: make the `name` of `package.json` the same."
 		"package-crate" => "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names."
-		"package-install-script" => "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run."
-		"package-files" => "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships."
-		"profile-vectors" => "Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: \"T\", value: \"…\" }` or `Reject { type: \"T\", value: \"…\" }`, with values valid for `T`."
+		"package-install-script" => "Remove the script: a schema package is its manifest, its schema and its rules, and needs nothing run."
+		"package-files" => "List `package.haus`, `schema.haus` and `rules` in what the package manager ships."
+		"profile-vectors" => "Write the rule in `rules/<name>.md`, and each vector as `Accept { type: \"T\", value: \"…\" }` or `Reject { type: \"T\", value: \"…\" }`, with values valid for `T`."
 		"package-wrapper" => "Fix the file so that its package manager can read it."
 		"codec-unreachable" => "Give the codec's type a place of its own (a field), or decode the outer type yourself; the message names where the type occurs."
 		"file-too-large" => "Split the schema into several files, or raise the limit if you trust the file."
@@ -592,13 +597,14 @@ ErrorCode := [].{
 		"unknown-field" => "Remove the field, fix its spelling, or add it to the schema."
 		"unknown-tag" => "Use one of the variant's tags, fix the spelling, or add the tag to the schema."
 		"wrong-payload" => "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which."
-		"invalid-time" => "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."
+		"invalid-time" => "Write the date or time as the std/time rule says (spec/std/time.md); the message names the type."
 		"invalid-secret" => "Write a value of the secret's type; the value isn't shown, so check it where it comes from."
-		"codec-rejected" => "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."
-		"cannot-encode" => "Pass a value of the host type the binding documents for the type."
+		"codec-rejected" => "Write a value the codec accepts; the package's rule (rules/<name>.md) or the codec's documentation says which."
+		"cannot-encode" => "Pass a value of the host type the binding documents for the type. For a secret, encode with `revealSecrets` if the program means to write it."
 		"cyclic-value" => "Break the cycle before encoding."
+		"value-changed" => "Don't change a value after it is built: build a new one from its parts."
 		"step-budget" => "Simplify the schema, or raise the step limit if the work is expected."
-		"too-many-nodes" => "Build a smaller value, or raise the limit."
+		"too-many-nodes" => "Build a value whose parts share each other less, or raise the limit where the binding lets you."
 		"json-syntax" => "Write valid JSON; the message says what was expected."
 		"unpaired-surrogate" => "Write both halves of the surrogate pair, or the character itself."
 		"haus-json-form" => "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead."
@@ -614,7 +620,6 @@ ErrorCode := [].{
 		"deprecated" => "Use what the deprecation note says instead."
 		"unlisted-field" => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
 		"unlisted-tag" => "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
-		"missing-codec" => "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."
 		"unused-codec" => "Fix the codec's id: the package's name and major version, and the type's name, as the schema imports them."
 		_ => ""
 	}
@@ -700,6 +705,7 @@ ErrorCode := [].{
 		"duplicate-package" => "imports"
 		"undeclared-package" => "imports"
 		"package-manifest" => "imports"
+		"missing-codec" => "imports"
 		"package-version" => "imports"
 		"package-path" => "imports"
 		"package-name" => "imports"
@@ -723,6 +729,7 @@ ErrorCode := [].{
 		"codec-rejected" => "decoding"
 		"cannot-encode" => "decoding"
 		"cyclic-value" => "decoding"
+		"value-changed" => "decoding"
 		"step-budget" => "decoding"
 		"too-many-nodes" => "decoding"
 		"json-syntax" => "json"
@@ -740,7 +747,6 @@ ErrorCode := [].{
 		"deprecated" => "hints"
 		"unlisted-field" => "hints"
 		"unlisted-tag" => "hints"
-		"missing-codec" => "hints"
 		"unused-codec" => "hints"
 		_ => ""
 	}

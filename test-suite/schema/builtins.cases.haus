@@ -63,7 +63,7 @@ Err { type: "Counts", input: { "a\nb\u{7f}": "1" }, code: "type-mismatch", path:
 Err { type: "Counts", input: { "x\u{202E}y\u{1}": "1" }, code: "type-mismatch", path: "$[\"x\\u{202E}y\\u{1}\"]" },
 Err { type: "Counts", input: [1], code: "type-mismatch", path: "$" },
 
-// ── std/time: the type's own tag around a string the profile accepts ──
+// ── std/time: the type's own tag around a string the std/time rule accepts ──
 Ok { type: "Day", input: Date("2026-11-13") },
 Ok { type: "Day", input: Date("2024-02-29") },
 Err { type: "Day", input: Date("2026-02-30"), code: "invalid-time", path: "$[0]" },
@@ -90,13 +90,18 @@ Ok { type: "Payload", input: Invoice { total: 19.90, lines: [Line(1, "A1")] } },
 Ok { type: "Payload", input: -0 },
 
 // ── Secret: the same data as its type ──
-Ok { type: "Key", input: "sk-123" },
+// `secrets`: encoding without revealSecrets fails with cannot-encode at one of these
+// places (spec §15, "Encoding a secret"); with it, encoding gives `output` (or `input`).
+Ok { type: "Key", input: "sk-123", secrets: ["$"] },
 Err { type: "Key", input: 123, code: "invalid-secret", path: "$" },
 Err { type: "Key", input: Secret("sk-123"), code: "invalid-secret", path: "$" },
-Ok { type: "Config", input: { name: "a", key: "sk-1", extra: {} } },
-Ok { type: "Config", input: { name: "a", key: "sk-1", pin: 1234, extra: [1, X(2)] } },
+Ok { type: "Config", input: { name: "a", key: "sk-1", extra: {} }, secrets: ["$.key"] },
+Ok { type: "Config", input: { name: "a", key: "sk-1", pin: 1234, extra: [1, X(2)] }, secrets: ["$.key", "$.pin"] },
 Err { type: "Config", input: { name: "a", key: "sk-1", pin: "1234", extra: 1 }, code: "invalid-secret", path: "$.pin" },
 Err { type: "Config", input: { name: "a", key: "sk-1" }, code: "missing-field", path: "$" },
-Ok { type: "Vault", input: { a: { id: 1 } } },
+Ok { type: "Vault", input: { a: { id: 1 } }, secrets: ["$.a"] },
+Ok { type: "Vault", input: { b: { id: 2 }, a: { id: 1 } }, secrets: ["$.a", "$.b"] },
+// No secret in the value, though the type has one: encoding needs no option.
+Ok { type: "Vault", input: {} },
 Err { type: "Vault", input: { a: { id: "x" } }, code: "invalid-secret", path: "$.a" },
 Err { type: "Vault", input: { a: { } }, code: "invalid-secret", path: "$.a" },

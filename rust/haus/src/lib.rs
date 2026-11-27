@@ -4,7 +4,7 @@
 //!
 //! ```
 //! let values = haus::parse(r#"{ name: "Ada", born: Date("1815-12-10") }"#).unwrap();
-//! assert_eq!(values[0].get("name"), Some(&haus::Value::String("Ada".into())));
+//! assert_eq!(values[0].get("name"), Some(&haus::Value::string("Ada").unwrap()));
 //! ```
 //!
 //! That's a parser in the sense of spec §13.1: it reads the syntax and knows
@@ -12,22 +12,33 @@
 //!
 //! With a schema, `haus-fmt-build` generates Rust types that implement [`Decode`]
 //! and [`Encode`], and [`from_str`] / [`to_string`] check every rule of the
-//! schema: closed records and variants, integer ranges, the std/time profile.
+//! schema: closed records and variants, integer ranges, the std/time profile,
+//! and the rules of the packages it imports ([`Rule`]).
 //!
 //! A [`Value`] built in code (the raw value of an `Any`, say) is a haus value
-//! too: its constructors reject what isn't one, with the code of the mistake
-//! ([`ValueError`]), and normalize numbers as the parser reads them.
-//! Constructors check only that a value is valid, never a limit: writing it
-//! fails only beyond the limits of the reader it is for ([`Limits`]); its
-//! canonical form, equality and hash can't fail (spec §11, §12):
+//! too: building is the one step that can fail. Its constructors reject what
+//! isn't one and what is beyond the default limits of spec §7, with the code
+//! of the mistake ([`ValueError`]), and normalize numbers as the parser reads
+//! them. A value that exists is written ([`ser::write`], [`to_haus_json`]),
+//! and has a canonical form, a hash, equality and order, without any error
+//! (spec §11, §12):
 //!
 //! ```
 //! use haus::{ErrorCode, Value};
 //! let fine = Value::number("1E5").unwrap();
-//! assert_eq!(haus::to_string(&fine).unwrap(), "1e5");
+//! assert_eq!(haus::ser::write(&fine), "1e5");
 //! assert_eq!(Value::number("abc").unwrap_err().code, ErrorCode::InvalidNumber);
+//! assert_eq!(Value::number("1e9999").unwrap_err().code, ErrorCode::ExponentTooLarge);
 //! assert_eq!(Value::variant("lower", vec![]).unwrap_err().code, ErrorCode::InvalidTag);
 //! ```
+//!
+//! Values don't change once built (spec §11): their parts are reached by
+//! shared reference only. So the safety net of spec §11, `value-changed`,
+//! which other bindings raise for a value changed after it was built, never
+//! arises in Rust, and no function here returns it.
+//!
+//! Encoding a [`Secret`] is refused (`cannot-encode`, at the secret) unless
+//! the encoder reveals secrets ([`Encoder::reveal_secrets`], spec §15).
 //!
 //! [`json`] connects haus and JSON (spec §16): generated types implement
 //! [`ToJson`] / [`FromJson`] for the schema-based JSON of their type,
@@ -48,6 +59,7 @@ mod formatter;
 pub mod json;
 mod keys;
 mod parser;
+mod rule;
 mod scan;
 mod secret;
 pub mod ser;
@@ -66,9 +78,10 @@ pub use error::{
 pub use formatter::{FormatOptions, Style, format, has_comments};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{DEBUG_DEPTH, Limits, MAX_SUPPORTED_DEPTH, parse_with};
+pub use rule::Rule;
 pub use secret::Secret;
 pub use ser::{Encode, Encoder};
-pub use value::{Number, Record, Tag, Value};
+pub use value::{ByteString, IntoValue, List, Number, Record, Tag, Text, Value};
 
 // Every type a program shares between threads is Send and Sync (checked
 // here, at compile time): values, options and limits are plain data, and
@@ -81,6 +94,9 @@ const _: () = {
     shared::<Value>();
     shared::<Number>();
     shared::<Tag>();
+    shared::<Text>();
+    shared::<ByteString>();
+    shared::<List>();
     shared::<Record>();
     shared::<ValueError>();
     shared::<Limits>();
@@ -189,42 +205,50 @@ pub fn from_str_all<T: Decode>(src: &str) -> Result<Vec<T>, Error> {
     parse(src)?.iter().enumerate().map(|(i, v)| T::decode(v).map_err(|e| e.index(i).into())).collect()
 }
 
-/// Write one value on one line (the compact layout, spec §11). Fails if the
-/// value isn't one a reader with the default limits takes: one nested deeper
-/// than the depth limit (checked while encoding, so a deep native value fails
-/// at the limit), or a number, string, key or tag longer than its limit, such
-/// as in the raw value of an `Any` or an unknown variant (spec §9.8): see
-/// [`ser::write_with`]. An error inside a [`Secret`] names only the secret.
+/// Encode a value and write it on one line (the compact layout, spec §11).
+/// Encoding fails for a value beyond the default limits (checked as it is
+/// encoded, so a deep native value fails at the limit), and for a
+/// [`Secret`], which is written only by an encoder that reveals secrets
+/// ([`to_string_with`], [`Encoder::reveal_secrets`]); an error inside a
+/// secret names only the secret. A [`Value`] is written as it is: writing
+/// it can't fail ([`ser::write`]).
 pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
-    to_string_with(value, &Limits::default())
+    to_string_with(value, Encoder::default())
 }
 
-/// [`to_string`], for a reader with `limits`: the value must be within them,
-/// integers included, which are written in decimal.
-pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
+/// [`to_string`], encoded with `e`: the limits of the reader it is for
+/// (`Encoder::new(&limits)`, integers included, which are written in
+/// decimal), and whether secrets are written (`.reveal_secrets()`).
+///
+/// ```
+/// let key = haus::Secret::new("sk-123".to_owned());
+/// let e = haus::Encoder::default().reveal_secrets();
+/// assert_eq!(haus::to_string_with(&key, e).unwrap(), r#""sk-123""#);
+/// ```
+pub fn to_string_with<T: Encode + ?Sized>(value: &T, e: Encoder) -> Result<String, EncodeError> {
     match value.as_value() {
-        Some(v) => ser::write_line(v, limits, true),
-        None => ser::write_with(&value.encode_with(Encoder::new(limits))?, limits),
+        Some(v) => Ok(ser::write(v)),
+        None => Ok(ser::write(&value.encode_with(e.restarted())?)),
     }
 }
 
-/// Write one value on one line in the minimised layout (spec §11): the
-/// compact layout of [`to_string`] without the whitespace between tokens,
-/// for the wire and storage. Fails as [`to_string`] does.
+/// Encode a value and write it on one line in the minimised layout (spec
+/// §11): the compact layout of [`to_string`] without the whitespace between
+/// tokens, for the wire and storage. Fails as [`to_string`] does.
 ///
 /// ```
 /// let v = haus::parse(r#"Person { name: "Ada", tags: [1, 2] }"#).unwrap();
 /// assert_eq!(haus::to_string_minimised(&v[0]).unwrap(), r#"Person{name:"Ada",tags:[1,2]}"#);
 /// ```
 pub fn to_string_minimised<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
-    to_string_minimised_with(value, &Limits::default())
+    to_string_minimised_with(value, Encoder::default())
 }
 
-/// [`to_string_minimised`], for a reader with `limits` (see [`to_string_with`]).
-pub fn to_string_minimised_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
+/// [`to_string_minimised`], encoded with `e` (see [`to_string_with`]).
+pub fn to_string_minimised_with<T: Encode + ?Sized>(value: &T, e: Encoder) -> Result<String, EncodeError> {
     match value.as_value() {
-        Some(v) => ser::write_line(v, limits, false),
-        None => ser::write_minimised_with(&value.encode_with(Encoder::new(limits))?, limits),
+        Some(v) => Ok(ser::write_minimised(v)),
+        None => Ok(ser::write_minimised(&value.encode_with(e.restarted())?)),
     }
 }
 
@@ -249,10 +273,10 @@ pub fn import_json(text: &str) -> Result<Value, Error> {
 
 /// Write a value as self-describing JSON (spec §16.2), in its envelope:
 /// `19.90` is `{"_haus":1,"_value":{"_num":"19.90"}}`, `Some(1)` is
-/// `{"_haus":1,"_value":{"_tag":"Some","_args":[{"_num":"1"}]}}`. Fails,
-/// saying where, for a value beyond the limits.
-pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
-    json::to_haus_json_with(value, &Limits::default())
+/// `{"_haus":1,"_value":{"_tag":"Some","_args":[{"_num":"1"}]}}`. It can't
+/// fail: a value that exists is within the limits it was built with.
+pub fn to_haus_json(value: &Value) -> String {
+    json::write_unchecked(&json::to_self_describing(value))
 }
 
 /// Read self-describing JSON (spec §16.2), and nothing else: a text without

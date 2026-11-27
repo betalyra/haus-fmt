@@ -1,14 +1,20 @@
-/** The package suite (test-suite/packages, spec §13.3): file trees resolved with the Node resolver. */
+/**
+ * The package suite (test-suite/packages, spec §13.3, packages.md): file
+ * trees read with `readSources` and compiled with `Schema.compile`. Runs
+ * cases.haus (where packages come from, the file rules) and rules.haus (the
+ * built-in official packages, the manifest's `rules` field, `missing-codec`,
+ * `shapeOnly` and `withRule`).
+ */
 import { spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, it } from "vitest"
-import { canonical, HausSchemaFileError, ModuleError, parseAll, parseSchemaFile, type Value } from "../src/index.js"
-import { readSchemaFile, type NodeResolverOptions } from "../src/node.js"
+import { canonical, money, OFFICIAL, Package, parseAll, Result, Schema, Sources, sourcesOf, type HausError, type Value } from "../src/index.js"
+import { readSourcesSync, type ReadSourcesOptions } from "../src/node.js"
 
-const CASES = join(import.meta.dirname, "../../../../test-suite/packages/cases.haus")
+const SUITE = join(import.meta.dirname, "../../../../test-suite/packages")
 
 type Entry =
   | { readonly kind: "File"; readonly path: string; readonly text: string }
@@ -19,9 +25,8 @@ type Entry =
   | { readonly kind: "Large"; readonly path: string; readonly bytes: number }
   | { readonly kind: "Mode"; readonly path: string; readonly mode: number }
 
-/** How packages are found: given explicitly, and with `Npm` also from node_modules. */
+/** The packages given explicitly (no other kind is left: no implementation searches, packages.md §2). */
 interface Mode {
-  readonly kind: "Npm" | "Explicit"
   readonly packages: readonly string[]
   readonly folders: readonly string[]
 }
@@ -30,45 +35,40 @@ type Expect =
   | { readonly ok: true; readonly packages: readonly string[] }
   | { readonly ok: false; readonly code: string; readonly mentions: readonly string[]; readonly hides: readonly string[] }
 
-type Ecosystem = "core" | "npm" | "cargo"
+type Ecosystem = "core" | "cargo"
 
 interface Case {
+  readonly file: string
   readonly name: string
   readonly files: readonly Entry[]
-  /** The entry file. */
   readonly root: string
-  /** The build's root option, relative to the temporary directory. */
   readonly rootDir: string | undefined
   readonly ecosystem: Ecosystem
-  /** Only on Unix (a Fifo or Mode entry). */
   readonly unix: boolean
   readonly mode: Mode
-  /** A case for the version check, which implementations SHOULD make (this one does). */
   readonly should: boolean
+  /** rules.haus: the packages the program takes shape-only, and the type ids whose rule it supplies. */
+  readonly shapeOnly: readonly string[]
+  readonly withRule: readonly string[]
   readonly expect: Expect
 }
 
-/** The number of cases in cases.haus, and of each ecosystem: a reader that drops some fails. */
-const TOTAL = 136
-const ECOSYSTEMS: Readonly<Record<Ecosystem, number>> = { core: 90, npm: 46, cargo: 0 }
+/** The number of cases in each file: a reader that drops some fails. */
+const TOTALS: Readonly<Record<string, number>> = { "cases.haus": 93, "rules.haus": 22 }
 
-/**
- * Cases that are wrong in the suite, and why: they are expected to fail here
- * until the suite is fixed (and then fail this test, so the list is kept short).
- */
+/** Cases that are wrong in the suite, and why (kept short: they fail this test once fixed). */
 const BROKEN: Readonly<Record<string, string>> = {}
 
 // ── reading the cases ────────────────────────────────────────
 
 const bad = (v: Value | undefined): never => {
-  throw new Error(`unexpected value in cases.haus: ${v === undefined ? "none" : canonical(v)}`)
+  throw new Error(`unexpected value in the package suite: ${v === undefined ? "none" : canonical(v)}`)
 }
 const fields = (v: Value | undefined): ReadonlyMap<string, Value> => (v?.kind === "record" ? v.fields : v ? bad(v) : new Map())
 const string = (v: Value | undefined): string => (v?.kind === "string" ? v.value : bad(v))
 const strings = (v: Value | undefined): string[] => (v === undefined ? [] : v.kind === "array" ? v.items.map(string) : bad(v))
 const variant = (v: Value | undefined) => (v?.kind === "variant" ? v : bad(v))
 
-/** `Npm`'s dependency lists become objects from the names to "*". */
 const DEPENDENCIES = ["dependencies", "peerDependencies", "devDependencies", "optionalDependencies"]
 const packageJson = (v: Value | undefined): Record<string, unknown> =>
   Object.fromEntries([...fields(v)].map(([k, x]) => [k, DEPENDENCIES.includes(k) ? Object.fromEntries(strings(x).map((n) => [n, "*"])) : string(x)]))
@@ -96,11 +96,10 @@ const entry = (v: Value): Entry => {
   }
 }
 
-/** `Npm`, `Npm { packages?, folders? }` or `Explicit { packages?, folders? }`. */
 const mode = (v: Value | undefined): Mode => {
-  if (v?.kind === "variant" && (v.tag === "Npm" || v.tag === "Explicit")) {
+  if (v?.kind === "variant" && v.tag === "Explicit") {
     const f = fields(v.args[0])
-    return { kind: v.tag, packages: strings(f.get("packages")), folders: strings(f.get("folders")) }
+    return { packages: strings(f.get("packages")), folders: strings(f.get("folders")) }
   }
   return bad(v)
 }
@@ -115,26 +114,30 @@ const expectation = (v: Value | undefined): Expect => {
   return bad(e)
 }
 
-const cases: Case[] = parseAll(readFileSync(CASES, "utf8")).map((v) => {
-  const c = variant(v)
-  if (c.tag !== "Case") bad(c)
-  const f = fields(c.args[0])
-  const ecosystem = string(f.get("ecosystem"))
-  if (ecosystem !== "core" && ecosystem !== "npm" && ecosystem !== "cargo") bad(f.get("ecosystem"))
-  const os = f.get("os")
-  if (os !== undefined && string(os) !== "unix") bad(os)
-  return {
-    name: string(f.get("name")),
-    files: (f.get("files")?.kind === "array" ? (f.get("files") as Extract<Value, { kind: "array" }>).items : []).map(entry),
-    root: string(f.get("root")),
-    rootDir: f.get("rootDir") === undefined ? undefined : string(f.get("rootDir")),
-    ecosystem: ecosystem as Ecosystem,
-    unix: os !== undefined,
-    mode: mode(f.get("mode")),
-    should: bool(f.get("should")),
-    expect: expectation(f.get("expect")),
-  }
-})
+const readCases = (file: string): Case[] =>
+  parseAll(readFileSync(join(SUITE, file), "utf8")).map((v) => {
+    const c = variant(v)
+    if (c.tag !== "Case") bad(c)
+    const f = fields(c.args[0])
+    const ecosystem = string(f.get("ecosystem"))
+    if (ecosystem !== "core" && ecosystem !== "cargo") bad(f.get("ecosystem"))
+    const os = f.get("os")
+    if (os !== undefined && string(os) !== "unix") bad(os)
+    return {
+      file,
+      name: string(f.get("name")),
+      files: (f.get("files")?.kind === "array" ? (f.get("files") as Extract<Value, { kind: "array" }>).items : []).map(entry),
+      root: string(f.get("root")),
+      rootDir: f.get("rootDir") === undefined ? undefined : string(f.get("rootDir")),
+      ecosystem: ecosystem as Ecosystem,
+      unix: os !== undefined,
+      mode: mode(f.get("mode")),
+      should: bool(f.get("should")),
+      shapeOnly: strings(f.get("shapeOnly")),
+      withRule: strings(f.get("withRule")),
+      expect: expectation(f.get("expect")),
+    }
+  })
 
 // ── running a case ───────────────────────────────────────────
 
@@ -171,8 +174,6 @@ const write = (files: readonly Entry[]): string => {
         break
     }
   }
-  // Links last, once their targets exist: on Windows a link to a directory
-  // must be made as one ("dir"), which Node only does when it sees the target.
   for (const e of files) {
     if (e.kind !== "Link") continue
     const at = join(root, e.path)
@@ -181,81 +182,74 @@ const write = (files: readonly Entry[]): string => {
     const text = process.platform === "win32" ? e.target.replaceAll("/", "\\") : e.target
     symlinkSync(text, at, existsSync(target) && statSync(target).isDirectory() ? "dir" : "file")
   }
-  // Permissions after the whole tree is written.
   for (const e of files) if (e.kind === "Mode") chmodSync(join(root, e.path), e.mode)
   return root
 }
 
-/** Give the owner back what Mode took (`chmod u+rwx`), so the tree can be removed. */
 const restore = (root: string, files: readonly Entry[]): void => {
   for (const e of files) if (e.kind === "Mode") chmodSync(join(root, e.path), e.mode | 0o700)
 }
 
-/** The resolver options of a case written to `dir`. Explicit: only the packages given, node_modules is never read. */
-const optionsOf = (c: Case, dir: string): NodeResolverOptions => ({
+/** The read options of a case written to `dir`: the packages and folders given, the root option. */
+const optionsOf = (c: Case, dir: string): ReadSourcesOptions => ({
   packages: c.mode.packages.map((p) => join(dir, p)),
   folders: c.mode.folders.map((f) => join(dir, f)),
-  npm: c.mode.kind === "Npm",
   ...(c.rootDir === undefined ? {} : { root: join(dir, c.rootDir) }),
 })
 
 const DIST = join(import.meta.dirname, "../dist")
 
-/**
- * Load the schema in a child process (the built package, dist/) that is
- * killed after a few seconds: a FIFO opened blocking would hang the build,
- * and a hang in this process could not be stopped (test-suite/README.md).
- */
-const loadsWithoutBlocking = (path: string, options: NodeResolverOptions): void => {
-  const index = pathToFileURL(join(DIST, "index.js")).href
+/** Read and compile in a child process (the built package) killed after a few seconds: a FIFO opened blocking would hang. */
+const readsWithoutBlocking = (path: string, options: ReadSourcesOptions): void => {
+  const internal = pathToFileURL(join(DIST, "index.js")).href
   const node = pathToFileURL(join(DIST, "node.js")).href
-  expect(existsSync(join(DIST, "node.js")), "build the package first (pnpm build): the FIFO cases load it in a child process").toBe(true)
-  const code = `const [{ parseSchemaFile }, { readSchemaFile }] = await Promise.all([import(${JSON.stringify(index)}), import(${JSON.stringify(node)})]);
-try { const { text, options } = readSchemaFile(${JSON.stringify(path)}, JSON.parse(process.argv[1])); parseSchemaFile(text, options) } catch {}`
+  expect(existsSync(join(DIST, "node.js")), "build the package first (pnpm build): the FIFO cases read in a child process").toBe(true)
+  const code = `const [{ Result, Schema }, { readSourcesSync }] = await Promise.all([import(${JSON.stringify(internal)}), import(${JSON.stringify(node)})]);
+Result.flatMap(readSourcesSync(${JSON.stringify(path)}, JSON.parse(process.argv[1])), Schema.compile)`
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", code, JSON.stringify(options)], { timeout: 5000, killSignal: "SIGKILL" })
   expect(child.signal, "the build blocked (killed after 5 s)").toBeNull()
   expect(child.status, String(child.stderr)).toBe(0)
 }
+
+/** The program's choices of a rules.haus case: packages taken shape-only, rules supplied (each accepting every value). */
+const programOf = (c: Case) => (p: Package): Package => {
+  let out = c.shapeOnly.includes(p.name) ? Package.shapeOnly(p) : p
+  for (const id of c.withRule.filter((i) => i.startsWith(`${p.name}@`))) {
+    const r = Package.withRule(out, id, () => Result.succeed(undefined))
+    if (r._tag === "Failure") throw r.failure
+    out = r.success
+  }
+  return out
+}
+
+/** Read and compile the case: the schema, or the first error. */
+const compileCase = (c: Case, path: string, options: ReadSourcesOptions): Result<Schema, HausError> =>
+  Result.flatMap(readSourcesSync(path, options), (sources) => {
+    const program = programOf(c)
+    // Official packages taken shape-only are given as values (they are built in, never read).
+    const official = c.shapeOnly.filter((n) => OFFICIAL.has(n)).map((n) => Package.shapeOnly(n === money.name ? money : OFFICIAL.get(n)!))
+    return Schema.compile(sourcesOf({
+      ...sources,
+      packages: [...sources.packages.map(program), ...official],
+      folders: sources.folders.map((f) => ({ ...f, packages: f.packages.map(program) })),
+    }))
+  })
 
 const run = (c: Case): void => {
   const dir = write(c.files)
   try {
     const path = join(dir, c.root)
     const options = optionsOf(c, dir)
-    if (c.files.some((e) => e.kind === "Fifo")) loadsWithoutBlocking(path, options)
-    // Every package the schema reaches, as name@version.
-    const reached = new Set<string>()
-    const load = () => {
-      // The entry file is read as every file of the schema is: a regular file, opened without blocking.
-      const { text, options: base } = readSchemaFile(path, options)
-      const resolver = base.resolver!
-      return parseSchemaFile(text, {
-        ...base,
-        resolver: {
-          resolve(module, from) {
-            const r = resolver.resolve(module, from)
-            if (r.package !== undefined) reached.add(`${r.package}@${r.version}`)
-            return r
-          },
-        },
-      })
-    }
+    if (c.files.some((e) => e.kind === "Fifo")) readsWithoutBlocking(path, options)
+    const result = compileCase(c, path, options)
     if (c.expect.ok) {
-      load()
-      expect([...reached].sort()).toEqual(c.expect.packages)
+      if (result._tag === "Failure") throw result.failure
+      expect([...result.success.packages.values()].map((p) => `${p.name}@${p.version}`).sort()).toEqual([...c.expect.packages].sort())
       return
     }
-    let error: unknown
-    try {
-      load()
-    } catch (e) {
-      error = e
-    }
-    // At an import (HausSchemaFileError), or at no place (ModuleError: a root option that doesn't contain the entry file).
-    expect(error instanceof HausSchemaFileError || error instanceof ModuleError, `the schema loads, but should fail: ${String(error)}`).toBe(true)
-    const e = error as HausSchemaFileError | ModuleError
+    expect(result._tag, "the schema compiles, but should fail").toBe("Failure")
+    const e = (result as Extract<typeof result, { _tag: "Failure" }>).failure
     expect(e.code, e.message).toBe(c.expect.code)
-    // Paths in messages are compared with "/", whatever the OS writes.
     for (const m of c.expect.mentions) expect(e.message.replaceAll("\\", "/")).toContain(m)
     for (const h of c.expect.hides) expect(e.message).not.toContain(h)
     // Messages show paths relative to the root, never the temporary directory's (spec §13.3).
@@ -265,7 +259,6 @@ const run = (c: Case): void => {
   }
 }
 
-/** Why this binding skips a case here, if it does: the npm ecosystem runs core and npm cases. */
 const skipped = (c: Case): string | undefined => {
   if (c.ecosystem === "cargo") return "cargo"
   if (c.unix && process.platform === "win32") return "Unix only"
@@ -273,37 +266,42 @@ const skipped = (c: Case): string | undefined => {
   return undefined
 }
 
-const ran: Record<Ecosystem, number> = { core: 0, npm: 0, cargo: 0 }
-const skips: string[] = []
-const count = (e: Ecosystem) => cases.filter((c) => c.ecosystem === e).length
-
-describe("package suite (test-suite/packages)", () => {
-  for (const c of cases) {
-    const name = `${c.name} (${c.ecosystem}, ${c.mode.kind}${c.should ? ", should" : ""})`
-    const skip = skipped(c)
-    if (skip !== undefined) {
-      skips.push(`${c.name} (${skip})`)
-      it.skip(`${name}: ${skip}`, () => {})
-    } else if (c.name in BROKEN) {
-      it.fails(`${name}: broken in the suite: ${BROKEN[c.name]}`, () => run(c))
-    } else {
-      it(name, () => {
-        run(c)
-        ran[c.ecosystem]++
-      })
+for (const file of Object.keys(TOTALS)) {
+  const cases = readCases(file)
+  let ran = 0
+  const skips: string[] = []
+  describe(`package suite (test-suite/packages/${file})`, () => {
+    for (const c of cases) {
+      const name = `${c.name}${c.should ? " (should)" : ""}`
+      const skip = skipped(c)
+      if (skip !== undefined) {
+        skips.push(`${c.name} (${skip})`)
+        it.skip(`${name}: ${skip}`, () => {})
+      } else if (c.name in BROKEN) {
+        it.fails(`${name}: broken in the suite: ${BROKEN[c.name]}`, () => run(c))
+      } else {
+        it(name, () => {
+          run(c)
+          ran++
+        })
+      }
     }
-  }
+    it(`ran the cases of ${file}`, () => {
+      expect(cases.length).toBe(TOTALS[file])
+      expect(ran).toBe(cases.filter((c) => skipped(c) === undefined && !(c.name in BROKEN)).length)
+      console.log(`package suite ${file}: ${ran} of ${cases.length} cases run, ${skips.length} skipped${skips.length ? `: ${skips.join(", ")}` : ""}`)
+    })
+  })
+}
 
-  // This binding is of the npm ecosystem and makes the version check: it runs the core and npm cases, should ones too.
-  it(`ran the core and npm cases of ${TOTAL}: ${count("core")} core, ${count("npm")} npm, ${count("cargo")} cargo (${cases.filter((c) => c.should).length} should)`, () => {
-    expect(cases.length).toBe(TOTAL)
-    expect({ core: count("core"), npm: count("npm"), cargo: count("cargo") }).toEqual(ECOSYSTEMS)
-    const broken = cases.filter((c) => c.name in BROKEN && skipped(c) === undefined)
-    const expected = (e: Ecosystem) => cases.filter((c) => c.ecosystem === e && skipped(c) === undefined && !(c.name in BROKEN)).length
-    expect(ran).toEqual({ core: expected("core"), npm: expected("npm"), cargo: 0 })
-    console.log(
-      `package suite: ${ran.core + ran.npm} of ${cases.length} cases run (${ran.core} core, ${ran.npm} npm), ` +
-        `${broken.length} broken in the suite (${broken.map((c) => c.name).join(", ") || "none"}), ${skips.length} skipped${skips.length ? `: ${skips.join(", ")}` : ""}`,
-    )
+// Sources and Package values from plain data compile as files do (packages.md §3).
+describe("packages as values", () => {
+  it("compiles sources and a package made from data, with no file system", () => {
+    const acme = Package.make({ manifest: `{ name: "@acme/ids", version: "1.2.0" }`, schema: "type Id = String" })
+    const sources = Result.map(Sources.make("app.schema.haus", { "app.schema.haus": "import @acme/ids (Id)\nimport ./shared (Tag)\ntype Root = { id: Id, tag: Tag }", "shared.schema.haus": "type Tag = String" }), (s) =>
+      Result.match(acme, { onSuccess: (p) => Sources.withPackage(s, p), onFailure: () => s }))
+    const schema = Result.flatMap(sources, Schema.compile)
+    expect(schema._tag).toBe("Success")
+    expect([...(schema as Extract<typeof schema, { _tag: "Success" }>).success.packages.keys()]).toEqual(["@acme/ids"])
   })
 })
