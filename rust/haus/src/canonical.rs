@@ -8,20 +8,21 @@
 //! assert_eq!(haus::canonical(&v), r#"Order{id:255,total:19.90,"x-y":1e5}"#);
 //! ```
 //!
-//! None of them fails: every [`Value`] is a haus value, also one built in
-//! code, whose constructors reject what isn't (spec §11, "Values built in
+//! They are total (spec §12): every [`Value`] is a haus value, also one built
+//! in code, whose constructors reject what isn't (spec §11, "Values built in
 //! code"), and normalize a number literal as the parser does, so
-//! `Number::new("1E+05")` hashes as the `1e5` parsed from it. The canonical
-//! form has no limits: a value deeper or longer than a writer's limits still
-//! has one.
+//! `Number::new("1E+05")` hashes as the `1e5` parsed from it. They apply no
+//! limit: a value parsed with larger limits than the defaults has a
+//! canonical form too.
 //!
 //! Nor do they need the node limit (spec §7): a [`Value`] owns its parts, so
 //! it can't share them (a DAG) or contain itself, and its canonical form is
 //! linear in the memory it takes, whether it was parsed or built in code. A
 //! native value whose parts are shared (`Rc`) expands when it is encoded,
 //! which the encoder's node limit bounds. Writing takes a stack rather than
-//! recursion, so a value built in code may nest any depth. [`equals`]
-//! compares the values themselves, without writing them.
+//! recursion, so it takes no call stack per level. [`equals`] compares the
+//! values themselves, without writing them, and agrees with the canonical
+//! forms (spec §12, "Computing them").
 
 use crate::Value;
 use crate::ser::{key, quote};
@@ -207,7 +208,7 @@ fn write(v: &Value, out: &mut String) {
             Next::Value(Value::String(s)) => quote(s, out),
             Next::Value(Value::Bytes(b)) => {
                 out.push_str("x\"");
-                for x in b {
+                for x in b.iter() {
                     let _ = write!(out, "{x:02x}");
                 }
                 out.push('"');

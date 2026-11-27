@@ -1,10 +1,12 @@
-//! The profile `@haus-fmt/geo/wgs84` (profiles/wgs84.md) as codecs (spec §13.4).
+//! Codecs for the types of the rule `wgs84` (profiles/wgs84.md, spec
+//! §13.4): Rust types for the values the rule accepts. The rule itself is
+//! [`crate::rules`], checked before any codec, these included.
 
 use haus::Codec;
 
 use crate::{BBox, LatLng};
 
-/// A point the wgs84 profile accepts: −90 ≤ lat ≤ 90 and −180 ≤ lng ≤ 180,
+/// A point the wgs84 rule accepts: −90 ≤ lat ≤ 90 and −180 ≤ lng ≤ 180,
 /// in degrees. It keeps the floats as decoded: `-0` stays `-0`, and the
 /// poles and the antimeridian are not normalised.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,12 +20,12 @@ impl Point {
     pub fn new(lat: f64, lng: f64) -> Result<Point, String> {
         if !(-90.0..=90.0).contains(&lat) {
             Err(format!(
-                "latitude {} out of range: the wgs84 profile takes -90 to 90",
+                "latitude {} out of range: the wgs84 rule takes -90 to 90",
                 haus::for_message(&lat.to_string())
             ))
         } else if !(-180.0..=180.0).contains(&lng) {
             Err(format!(
-                "longitude {} out of range: the wgs84 profile takes -180 to 180",
+                "longitude {} out of range: the wgs84 rule takes -180 to 180",
                 haus::for_message(&lng.to_string())
             ))
         } else {
@@ -55,7 +57,7 @@ impl From<Point> for LatLng {
     }
 }
 
-/// A box the wgs84 profile accepts, from its south-west corner to its
+/// A box the wgs84 rule accepts, from its south-west corner to its
 /// north-east one: both corners are [`Point`]s and `sw.lat` ≤ `ne.lat`. The
 /// longitudes aren't ordered: `sw.lng` > `ne.lng` crosses the antimeridian.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -104,7 +106,7 @@ impl From<Bounds> for BBox {
     }
 }
 
-/// The wgs84 profile's codec for `@haus-fmt/geo@1#LatLng`: `LatLng(38.7223, -9.1393)` ↔ [`Point`].
+/// The wgs84 rule's codec for `@haus-fmt/geo@1#LatLng`: `LatLng(38.7223, -9.1393)` ↔ [`Point`].
 pub struct Wgs84;
 
 impl Codec for Wgs84 {
@@ -121,8 +123,9 @@ impl Codec for Wgs84 {
     }
 }
 
-/// The wgs84 profile's codec for `@haus-fmt/geo@1#BBox`: `BBox(LatLng(…), LatLng(…))` ↔ [`Bounds`].
-/// It checks the corners too, so it needs no [`Wgs84`] for them.
+/// The wgs84 rule's codec for `@haus-fmt/geo@1#BBox`: `BBox(LatLng(…), LatLng(…))` ↔ [`Bounds`].
+/// It checks the corners too, so it needs no [`Wgs84`] for them (the rule
+/// checks them anyway before it runs).
 pub struct Wgs84BBox;
 
 impl Codec for Wgs84BBox {
@@ -214,8 +217,9 @@ mod tests {
         assert!(bounds("BBox(LatLng(0, 0), LatLng(-0, 0))").is_ok(), "-0 = 0: not south of it");
         let e = bounds("BBox(LatLng(10, 0), LatLng(0, 1))").unwrap_err();
         assert!(e.contains("north of the north-east"), "{e}");
+        // A corner out of range: the rule of LatLng rejects it, at the corner.
         let e = bounds("BBox(LatLng(0, 0), LatLng(91, 1))").unwrap_err();
-        assert!(e.starts_with("a corner: latitude 91"), "{e}");
+        assert!(e.starts_with("(BBox)[1]: latitude 91 out of range"), "{e}");
         assert!(bounds("BBox(LatLng(NaN, 0), LatLng(1, 1))").is_err());
     }
 }

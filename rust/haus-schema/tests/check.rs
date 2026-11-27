@@ -26,9 +26,13 @@ fn issues(schema: &str, data: &str, ty: &str) -> Vec<String> {
 #[test]
 fn accepts_the_examples() {
     let resolver = Explicit::new().package(repo("extensions/money")).unwrap();
+    // As a tool checks them: the money package's rule is pointed out, not required
+    // (its document is still profiles/iso.md, not rules/iso.md).
+    let options =
+        haus_schema::Options { packages: &resolver, require_rules: false, rule_documents: false, ..Default::default() };
     for name in ["thread", "syntax-tour"] {
-        let schema =
-            Schema::load(repo(&format!("examples/{name}.schema.haus")), &resolver).unwrap_or_else(|e| panic!("{e}"));
+        let schema = Schema::load_with(repo(&format!("examples/{name}.schema.haus")), &options)
+            .unwrap_or_else(|e| panic!("{e}"));
         let data = fs::read_to_string(repo(&format!("examples/{name}.haus"))).unwrap();
         let errors: Vec<String> = schema
             .check_text("Root", &data)

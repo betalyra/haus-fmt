@@ -43,11 +43,11 @@ fn build<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Result<Value, Fail> 
     // Every part is built (and every token read) before a mistake is reported.
     match parts[0] {
         "n" => Ok(Value::number(&text(parts[1])?)?),
-        "s" => Ok(Value::String(text(parts[1])?)),
-        "b" => Ok(Value::Bytes(unhex(parts[1]))),
+        "s" => Ok(Value::string(text(parts[1])?)?),
+        "b" => Ok(Value::bytes(unhex(parts[1]))?),
         "a" => {
             let items: Vec<Result<Value, Fail>> = (0..count(parts[1])).map(|_| build(tokens)).collect();
-            Ok(Value::Array(items.into_iter().collect::<Result<_, _>>()?))
+            Ok(Value::array(items.into_iter().collect::<Result<_, _>>()?)?)
         }
         "r" => {
             let fields: Vec<(Result<String, Fail>, Result<Value, Fail>)> = (0..count(parts[1]))

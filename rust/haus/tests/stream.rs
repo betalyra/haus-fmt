@@ -74,9 +74,9 @@ fn emits_each_value_as_soon_as_its_comma_arrives() {
 fn does_not_split_on_commas_inside_strings_comments_or_payloads() {
     let text = "\"a,b\", /* , */ Pair(1, 2), // ,\n\"\"\"\n  x,\n  \"\"\",";
     let all = chunked(text.as_bytes(), 1).unwrap();
-    assert_eq!(all[0], Value::String("a,b".into()));
+    assert_eq!(all[0], Value::string("a,b").unwrap());
     assert!(matches!(&all[1], Value::Variant { tag, args } if tag == "Pair" && args.len() == 2));
-    assert_eq!(all[2], Value::String("x,".into()));
+    assert_eq!(all[2], Value::string("x,").unwrap());
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn limits_apply_to_each_value() {
 #[test]
 fn utf8_split_across_chunks() {
     let bytes = "\"Olá 😀\",".as_bytes();
-    assert_eq!(chunked(bytes, 1).unwrap(), [Value::String("Olá 😀".into())]);
+    assert_eq!(chunked(bytes, 1).unwrap(), [Value::string("Olá 😀").unwrap()]);
 }
 
 #[test]

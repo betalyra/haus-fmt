@@ -43,6 +43,9 @@ pub struct Imported {
     /// closure). For a type with a codec, the copy runs the codecs inside it
     /// first (spec §13.4: from the inside out).
     pub copy: bool,
+    /// Whether it is a struct or an enum, whose own `Decode` checks its
+    /// package rule; an alias can't, so its uses do.
+    pub nominal: bool,
 }
 
 /// A codec: the Rust type (implementing `haus::Codec`) used for the type with this id.
@@ -61,6 +64,10 @@ pub struct Input<'a> {
     /// Imported types by name.
     pub imports: &'a HashMap<String, Imported>,
     pub codecs: &'a [Codec],
+    /// The implementations of package rules (types implementing
+    /// `haus::Rule`), by the id of the type they are the rule of: checked on
+    /// the value the schema decoded, before any codec (packages.md §6).
+    pub rules: &'a [Codec],
     /// Whether to check that each codec is one for its type (once per output file).
     pub check_codecs: bool,
     /// Whether the file is the application's copy of a package's types (the
@@ -84,6 +91,15 @@ pub fn generate(file: &File, input: &Input) -> Result<TokenStream, Error> {
             ))
         })
         .collect::<Result<HashMap<_, _>, Error>>()?;
+    let rules = input
+        .rules
+        .iter()
+        .map(|r| {
+            let path = rust_path(&r.path)
+                .ok_or_else(|| error(input.text, 0, Code::UnknownType, format!("{} is not a Rust path", r.path)))?;
+            Ok((r.id.as_str(), (path, r.path.starts_with("crate::"))))
+        })
+        .collect::<Result<HashMap<_, _>, Error>>()?;
 
     let defs: HashMap<&str, &TypeDef> = file.types.iter().map(|d| (d.name.as_str(), d)).collect();
     let mut g = Gen {
@@ -94,6 +110,7 @@ pub fn generate(file: &File, input: &Input) -> Result<TokenStream, Error> {
         defs,
         names: file.types.iter().map(|d| d.name.clone()).collect(),
         codecs,
+        rules,
         items: vec![],
     };
     file.types.iter().try_for_each(|def| g.define_named(def))?;
@@ -138,6 +155,32 @@ fn coded(codec: &TokenStream, inside: Option<&TokenStream>) -> Rs {
         from_json: Fun::Path(from_json),
         to_json: Fun::Path(quote!(::haus::json::ser::codec::<#codec>)),
         shadow: quote!(<#codec as ::haus::Codec>::Base),
+    }
+}
+
+/// A type with the codec at `codec` and the package rule at `rule`, which
+/// is checked on its base type before the codec runs (packages.md §6).
+fn coded_ruled(codec: &TokenStream, rule: &TokenStream) -> Rs {
+    Rs {
+        ty: quote!(<#codec as ::haus::Codec>::Target),
+        de: Fun::Path(quote!(::haus::de::codec_ruled::<#codec, #rule>)),
+        en: Fun::Path(quote!(::haus::ser::codec_ruled::<#codec, #rule>)),
+        from_json: Fun::Path(quote!(::haus::json::de::codec_ruled::<#codec, #rule>)),
+        to_json: Fun::Path(quote!(::haus::json::ser::codec_ruled::<#codec, #rule>)),
+        shadow: quote!(<#codec as ::haus::Codec>::Base),
+    }
+}
+
+/// `rs` with the package rule at `rule` checked on the values it decodes
+/// and encodes (packages.md §6): `codec-rejected` and `cannot-encode`.
+fn ruled(rs: Rs, rule: &TokenStream) -> Rs {
+    let (de, en, from) = (rs.de.call(quote!(x)), rs.en.encode(quote!(x)), rs.from_json.read(quote!(x)));
+    Rs {
+        de: Fun::Expr(quote!(#de.and_then(|__v| ::haus::de::ruled::<#rule, _>(__v, __d)))),
+        en: Fun::Expr(quote!(#en.and_then(::haus::ser::ruled::<#rule>))),
+        from_json: Fun::Expr(quote!(#from.and_then(|__v| ::haus::de::ruled::<#rule, _>(__v, __d)))),
+        to_json: Fun::Expr(quote!(::haus::json::ser::ruled::<#rule, _>(x, __e))),
+        ..rs
     }
 }
 
@@ -484,6 +527,9 @@ struct Gen<'a> {
     /// The `Maybe`s that always use the tagged form in JSON, by position.
     tagged_maybes: HashSet<usize>,
     codecs: HashMap<&'a str, TokenStream>,
+    /// The implementations of package rules by type id, and whether the
+    /// program supplies it (its path starts with `crate::`).
+    rules: HashMap<&'a str, (TokenStream, bool)>,
     /// Names of generated types, so names for inline types don't clash.
     names: HashSet<String>,
     items: Vec<TokenStream>,
@@ -524,6 +570,9 @@ struct Item<'a> {
     /// Its attributes: `@deprecated` becomes `#[deprecated]`.
     attrs: &'a [Attribute],
     at: At<'a>,
+    /// The implementation of its package rule, if it has one: its `Decode`
+    /// and `Encode` check it (packages.md §6).
+    rule: Option<TokenStream>,
 }
 
 impl Item<'_> {
@@ -561,6 +610,28 @@ impl Item<'_> {
         let (de_g, en_g) = (self.bounded("Decode"), self.bounded("Encode"));
         let (from_g, to_g) = (self.bounded("FromJson"), self.bounded("ToJson"));
         let Json { from, to, nullable } = json;
+        // The package rule, on the value the schema decoded (packages.md §6).
+        let (decode, encode, from, to) = match &self.rule {
+            None => (decode, encode, from, to),
+            Some(rule) => (
+                quote! {
+                    let shape: ::std::result::Result<Self, ::haus::DecodeError> = { #decode };
+                    ::haus::de::ruled::<#rule, Self>(shape?, __d)
+                },
+                quote! {
+                    let value: ::std::result::Result<::haus::Value, ::haus::EncodeError> = { #encode };
+                    ::haus::ser::ruled::<#rule>(value?)
+                },
+                quote! {
+                    let shape: ::std::result::Result<Self, ::haus::DecodeError> = { #from };
+                    ::haus::de::ruled::<#rule, Self>(shape?, __d)
+                },
+                quote! {
+                    ::haus::Encode::encode_with(self, __e)?;
+                    #to
+                },
+            ),
+        };
         let (from_null, to_null) = match nullable {
             Some((from, to)) => (quote!(const NULLABLE: bool = #from;), quote!(const NULLABLE: bool = #to;)),
             None => (quote!(), quote!()),
@@ -650,6 +721,8 @@ impl<'a> Gen<'a> {
             doc: docs(def.doc.lines().chain(["", &note]).skip_while(|l| l.is_empty())),
             attrs: &def.attrs,
             at: At { owner: def, hint: def.name.clone(), contained: false },
+            // A struct or enum checks its package rule itself (an alias's uses do).
+            rule: self.rules.get(id.as_str()).filter(|_| def.params.is_empty()).map(|(rule, _)| rule.clone()),
         };
         self.define(&item, &def.ty, Some(&id))?;
         if let Some((codec, base)) = codec {
@@ -728,14 +801,21 @@ impl<'a> Gen<'a> {
         let arity = |params: usize| {
             (args.len() != params).then(|| format!("{name} takes {params} argument(s), found {}", args.len()))
         };
-        let (id, path, params, copy) = if let Some(def) = self.defs.get(name) {
+        let (id, path, params, copy, checks_itself) = if let Some(def) = self.defs.get(name) {
             let ident = format_ident!("{name}");
-            (format!("{}#{name}", self.input.id), quote!(#ident), def.params.len(), false)
+            let nominal = match &def.ty {
+                Ty::Record { .. } => true,
+                Ty::Variant { closed, cases, .. } => *closed || !cases.is_empty(),
+                Ty::Name { .. } | Ty::Param { .. } => self.cyclic.contains(name),
+            };
+            (format!("{}#{name}", self.input.id), quote!(#ident), def.params.len(), false, nominal)
         } else if let Some(imp) = self.input.imports.get(name) {
             let path = rust_path(&imp.path).ok_or_else(|| {
                 error(self.input.text, pos, Code::UnknownType, format!("{} is not a Rust path", imp.path))
             })?;
-            (imp.id.clone(), path, imp.params, imp.copy)
+            // A package's type checks the rule its crate carries; the program's own it can't.
+            let carried = self.rules.get(imp.id.as_str()).is_some_and(|(_, program)| !program);
+            (imp.id.clone(), path, imp.params, imp.copy, imp.nominal && (carried || imp.copy))
         } else if let Some(&(_, params)) = PRELUDE.iter().find(|(n, _)| *n == name) {
             // A codec for a prelude type applies to every use of it (spec §13.4: `prelude#Decimal`).
             let codec = self.codecs.get(format!("prelude#{name}").as_str()).filter(|_| params == 0);
@@ -750,10 +830,15 @@ impl<'a> Gen<'a> {
         if let Some(reason) = arity(params) {
             return self.fail(pos, Code::WrongArity, reason);
         }
+        // The package rule, where the type doesn't check it itself (packages.md §6).
+        let rule = self.rules.get(id.as_str()).filter(|_| args.is_empty() && !checks_itself).map(|(r, _)| r.clone());
         if let Some(codec) = self.codecs.get(id.as_str()).filter(|_| args.is_empty()) {
             // A package's type that contains other codecs' types is copied: the
             // copy runs those codecs first, at their own places (spec §13.4).
-            return Ok(coded(codec, copy.then_some(&path)));
+            return Ok(match rule {
+                Some(rule) => coded_ruled(codec, &rule),
+                None => coded(codec, copy.then_some(&path)),
+            });
         }
         // An inline type in an argument is named after its place, as in Roc: `Inner1`.
         let args = args
@@ -762,9 +847,10 @@ impl<'a> Gen<'a> {
             .map(|(i, a)| self.lower(a, &at.inner(&(i + 1).to_string())))
             .collect::<Result<Vec<_>, _>>()?;
         let (tys, shadows) = (args.iter().map(|r| &r.ty), args.iter().map(|r| &r.shadow));
-        let rs = match args.is_empty() {
-            true => Rs::plain(path),
-            false => Rs::named(quote!(#path<#(#tys),*>), quote!(#path<#(#shadows),*>)),
+        let rs = match (args.is_empty(), rule) {
+            (true, Some(rule)) => ruled(Rs::plain(path), &rule),
+            (true, None) => Rs::plain(path),
+            (false, _) => Rs::named(quote!(#path<#(#tys),*>), quote!(#path<#(#shadows),*>)),
         };
         let recursive = self.reach.get(name).is_some_and(|r| r.contains(at.owner.name.as_str()));
         Ok(if recursive && !at.contained { rs.boxed() } else { rs })
@@ -867,6 +953,7 @@ impl<'a> Gen<'a> {
             doc: docs([format!("`{name}`, inline in {}.", at.owner.name).as_str()].into_iter()),
             attrs: &[],
             at: At { hint: name, ..at.clone() },
+            rule: None,
         };
         self.define(&item, ty, None)?;
         let (ident, g) = (&item.name, item.generics());

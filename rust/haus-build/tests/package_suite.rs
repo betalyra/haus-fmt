@@ -290,6 +290,6 @@ fn package_suite() {
         npm.len(),
         cargo.len(),
     );
-    assert_eq!((cases.len(), core.len(), npm.len(), cargo.len()), (136, 90, 46, 0), "the suite's cases");
+    assert_eq!((cases.len(), core.len(), npm.len(), cargo.len()), (93, 93, 0, 0), "the suite's cases");
     assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), run.len(), failures.join("\n"));
 }

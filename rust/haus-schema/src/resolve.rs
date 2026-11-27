@@ -11,6 +11,7 @@
 
 use crate::files::{self, FileCache, Found};
 use crate::locator::{Locator, NoImports, duplicate};
+use crate::sources::Sources;
 use crate::syntax::{self, Attribute, STD_TIME, Ty, deprecation, unknown_type};
 use crate::types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 use crate::{Error, Result, Warning, quote, shown};
@@ -21,7 +22,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 const MAX_INSTANCES: usize = 10_000;
-const MAX_FILES: usize = 256;
+pub(crate) const MAX_FILES: usize = 256;
 
 /// The prelude's types with parameters, and how many.
 const GENERIC: [(&str, usize); 6] =
@@ -59,11 +60,60 @@ pub struct Options<'a> {
     /// Leave the attributes of every file out, as if they weren't written:
     /// decoding is the same (spec §15). For tests of that.
     pub without_attributes: bool,
+    /// The implementations of package rules this program has (packages.md
+    /// §6, §7): decoding checks them on the values of their types, and a
+    /// type the schema reaches whose package gives it a rule must have one,
+    /// else the schema is `missing-codec`.
+    pub rules: &'a [PackageRule],
+    /// The packages taken shape-only (packages.md §7, by name): the rules of
+    /// their types are not checked, and not required.
+    pub shape_only: &'a [&'a str],
+    /// Whether a rule the schema reaches without an implementation is an
+    /// error (`missing-codec`, the default). Tools without a program to
+    /// supply rules (`haus check`, editors) set it to false and point the
+    /// rules out instead ([`SchemaPackage::rules`], packages.md §7, "Tools").
+    pub require_rules: bool,
+    /// Whether packages read from directories must have the document of
+    /// each rule their manifest names, `rules/<name>.md` (packages.md §4;
+    /// the default). haus-fmt-build leaves it to `haus package check` for
+    /// package crates, whose files Cargo gives.
+    pub rule_documents: bool,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { packages: &NoImports, path: None, id: None, project: None, root: None, without_attributes: false }
+        Options {
+            packages: &NoImports,
+            path: None,
+            id: None,
+            project: None,
+            root: None,
+            without_attributes: false,
+            rules: &[],
+            shape_only: &[],
+            require_rules: true,
+            rule_documents: true,
+        }
+    }
+}
+
+/// The implementation of a package's rule for one type (packages.md §6): a
+/// check of the value the schema decoded, which decoding runs on every
+/// value of the type, before any codec.
+#[derive(Debug, Clone)]
+pub struct PackageRule {
+    /// The type's id: `@haus-fmt/money@1#Currency`.
+    pub id: String,
+    /// The rule's name, as the package's manifest gives it: `iso`.
+    pub name: String,
+    /// Ok if the rule accepts the value, else why not.
+    pub check: fn(&haus::Value) -> std::result::Result<(), String>,
+}
+
+impl PackageRule {
+    /// The rule `R` implements.
+    pub fn of<R: haus::Rule>() -> PackageRule {
+        PackageRule { id: R::ID.to_owned(), name: R::NAME.to_owned(), check: R::check }
     }
 }
 
@@ -91,6 +141,11 @@ pub struct SchemaPackage {
     pub version: String,
     /// Its directory (a real path).
     pub dir: PathBuf,
+    /// Its types that have a rule, with the rule's name (its manifest's
+    /// `rules`, packages.md §4, checked): `("Currency", "iso")`.
+    pub rules: Vec<(String, String)>,
+    /// Whether the program takes it shape-only ([`Options::shape_only`]).
+    pub shape_only: bool,
 }
 
 /// A schema file, its imports resolved and every rule of spec §14 checked.
@@ -105,6 +160,9 @@ pub struct Schema {
     warnings: Vec<Warning>,
     packages: Vec<SchemaPackage>,
     files: Vec<SchemaFile>,
+    /// The package rules decoding checks, by type id: those the program
+    /// implements, of packages not taken shape-only.
+    rules: HashMap<String, PackageRule>,
 }
 
 /// A file a schema loaded: the root, or a file or package it imports,
@@ -162,6 +220,16 @@ impl Schema {
         Schema::load_with(path, &Options { packages, ..Options::default() })
     }
 
+    /// The schema of `sources`, with `options` (their packages, rules and
+    /// root): compiled without reading any file (see [`Schema::compile`]).
+    pub(crate) fn compile_sources(sources: &Sources, options: &Options) -> Result<Schema> {
+        let text = sources.files.get(&sources.entry).cloned().unwrap_or_default();
+        let shown = files::relative(&sources.root, &sources.entry);
+        let mut loader = Loader::new(options, FileCache::new());
+        loader.sources = Some(sources);
+        loader.run(&text).map_err(|e| if e.path().is_some() { e } else { e.in_file(&shown) })
+    }
+
     /// [`Schema::load`] with options; `options.path` is `path`.
     pub fn load_with(path: impl AsRef<Path>, options: &Options) -> Result<Schema> {
         let path = path.as_ref();
@@ -180,6 +248,40 @@ impl Schema {
     /// Every schema package the schema reaches, by name.
     pub fn packages(&self) -> &[SchemaPackage] {
         &self.packages
+    }
+
+    /// The package rule decoding checks on values of `instance`, if any:
+    /// a named type without parameters whose rule the program implements.
+    pub fn rule_of(&self, instance: &Instance) -> Option<&PackageRule> {
+        self.rules.get(&instance.id).filter(|_| instance.args.is_empty())
+    }
+
+    /// The rules of the types the schema reaches (packages.md §7): each type
+    /// id, its rule's name, and whether the program implements it, sorted by
+    /// id. A type of a package taken shape-only is left out.
+    pub fn reached_rules(&self) -> Vec<(String, String, bool)> {
+        let ruled: HashMap<String, &str> = self
+            .packages
+            .iter()
+            .filter(|p| !p.shape_only)
+            .flat_map(|p| {
+                let id = format!("{}@{}", p.name, p.version.split('.').next().unwrap_or_default());
+                p.rules.iter().map(move |(ty, rule)| (format!("{id}#{ty}"), rule.as_str()))
+            })
+            .collect();
+        let roots = self.files.iter().enumerate().filter(|(i, f)| *i == 0 || f.package.is_none());
+        let roots = roots.flat_map(|(_, f)| f.definitions().iter().map(|d| d.template));
+        let mut found: Vec<(String, String, bool)> = reached(&self.instances, roots)
+            .into_iter()
+            .map(|id| &self.instances[id.0])
+            .filter(|i| i.args.is_empty())
+            .filter_map(|i| {
+                ruled.get(&i.id).map(|rule| (i.id.clone(), (*rule).to_owned(), self.rules.contains_key(&i.id)))
+            })
+            .collect();
+        found.sort();
+        found.dedup();
+        found
     }
 
     /// Every file the schema loaded: the root first, then the files and
@@ -267,6 +369,67 @@ impl Schema {
     }
 }
 
+/// `missing-codec` (packages.md §7) for the types `schema` reaches whose
+/// package gives them a rule the program has no implementation of, once per
+/// type id, at no place.
+fn missing_rules(schema: &Schema) -> Result<()> {
+    let missing: Vec<String> = schema
+        .reached_rules()
+        .into_iter()
+        .filter(|(_, _, implemented)| !implemented)
+        .map(|(id, rule, _)| missing_rule(&id, &rule))
+        .collect();
+    match missing.is_empty() {
+        true => Ok(()),
+        false => Err(Error::new(Code::MissingCodec, missing.join("; "))),
+    }
+}
+
+/// The message of `missing-codec` for the type `id` with the rule `rule`.
+pub fn missing_rule(id: &str, rule: &str) -> String {
+    format!(
+        "{id} has the rule {rule}, and this program has no implementation of it: add the package's rule \
+         (with_rule), or take the package shape-only (shape_only)"
+    )
+}
+
+/// The named types reachable from the instances `roots`, through any type,
+/// in any package (packages.md §7): each instance once.
+pub(crate) fn reached(instances: &[Instance], roots: impl IntoIterator<Item = InstanceId>) -> HashSet<InstanceId> {
+    let mut seen: HashSet<InstanceId> = HashSet::new();
+    // Records and variants are shared (an argument used twice): each is walked once.
+    let mut shared: HashSet<*const ()> = HashSet::new();
+    let mut stack: Vec<&Type> = vec![];
+    for id in roots {
+        if seen.insert(id) {
+            stack.push(&instances[id.0].body);
+            stack.extend(&instances[id.0].args);
+        }
+    }
+    while let Some(ty) = stack.pop() {
+        match ty {
+            Type::Ref(id) if seen.insert(*id) => {
+                stack.push(&instances[id.0].body);
+                stack.extend(&instances[id.0].args);
+            }
+            Type::Array(t) | Type::Map(t) | Type::Maybe(t) | Type::Secret(t) => stack.push(t),
+            Type::Record(r) if shared.insert(Arc::as_ptr(r).cast()) => stack.extend(r.fields.iter().map(|f| &f.ty)),
+            Type::Variant(v) if shared.insert(Arc::as_ptr(v).cast()) => {
+                for case in &v.cases {
+                    match &case.payload {
+                        Payload::None => {}
+                        Payload::Record(r) => stack.extend(r.fields.iter().map(|f| &f.ty)),
+                        Payload::Named(t) => stack.push(t),
+                        Payload::Positional(ts) => stack.extend(ts),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    seen
+}
+
 /// The tags of a variant, for messages: `one of A, B`, or `any tag` for `< >`.
 pub(crate) fn tags(v: &Variant) -> String {
     let names: Vec<&str> = v.cases.iter().map(|c| c.tag.as_str()).collect();
@@ -334,6 +497,8 @@ struct Loader<'a> {
     /// The `schema.haus` of copies of packages (identical to the one
     /// loaded), whose imports were resolved too.
     copies: HashSet<PathBuf>,
+    /// The files and packages compiled, as values: no file is read.
+    sources: Option<&'a Sources>,
     instances: Vec<Instance>,
     /// Per instance: the definition it applies.
     def_of: Vec<(usize, usize)>,
@@ -361,6 +526,7 @@ impl<'a> Loader<'a> {
             loading: vec![],
             files,
             copies: HashSet::new(),
+            sources: None,
             instances: vec![],
             def_of: vec![],
             state: vec![],
@@ -371,6 +537,20 @@ impl<'a> Loader<'a> {
             queue: VecDeque::new(),
             refs: vec![],
         }
+    }
+
+    /// The file a relative import `module` of the file at `from` (of `unit`)
+    /// names, among `sources`: compiled without reading files.
+    fn memory_file(&self, sources: &Sources, module: &str, from: Option<&Path>, unit: usize) -> Result<files::Source> {
+        if let Some(name) = &self.units[unit].package {
+            let reason = format!("the schema of {name} can't import files, only packages by name");
+            return Err(Error::new(Code::PackagePath, reason));
+        }
+        let from = from.ok_or_else(|| {
+            Error::new(Code::ImportUnavailable, "a schema read from text imports no files (give its files as sources)")
+        })?;
+        let (path, text) = sources.file(module, from)?;
+        Ok(files::Source { path, text, package: None })
     }
 
     /// An error in a file, as an error of the root file: errors inside an
@@ -394,15 +574,22 @@ impl<'a> Loader<'a> {
     }
 
     fn run(mut self, text: &str) -> Result<Schema> {
-        let path = self.options.path.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_owned()));
-        if let Some(path) = &path {
-            self.files.set_root(files::build_root(path, self.options.root)?);
+        // Compiling sources reads no file: their paths are real already, or made from data.
+        let memory = self.sources.is_some();
+        let real = |dir: &Path| match memory {
+            true => dir.to_owned(),
+            false => dir.canonicalize().unwrap_or_else(|_| dir.to_owned()),
+        };
+        let path = self.options.path.map(real);
+        match (self.sources, &path) {
+            (Some(sources), _) => self.files.set_root(sources.root.clone()),
+            (None, Some(path)) => self.files.set_root(files::build_root(path, self.options.root)?),
+            (None, None) => {}
         }
         let package = match &path {
-            Some(path) => files::package_of(path, &mut self.files)?,
-            None => None,
+            Some(path) if !memory => files::package_of(path, &mut self.files)?,
+            _ => None,
         };
-        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
         self.base = match self.options.project {
             Some((name, dir)) => Some((format!("{name}/"), real(dir))),
             None => path.as_deref().and_then(Path::parent).map(|dir| (String::new(), dir.to_owned())),
@@ -426,14 +613,66 @@ impl<'a> Loader<'a> {
         let (definitions, own) = (files[root].definitions.clone(), files[root].own);
         let packages = self
             .packages
-            .into_values()
-            .map(|r| SchemaPackage { name: r.found.manifest.name, version: r.found.manifest.version, dir: r.found.dir })
-            .collect();
+            .values()
+            .map(|r| {
+                Ok(SchemaPackage {
+                    name: r.found.manifest.name.clone(),
+                    version: r.found.manifest.version.clone(),
+                    dir: r.found.dir.clone(),
+                    rules: self.package_rules(r)?,
+                    shape_only: self.options.shape_only.contains(&r.found.manifest.name.as_str()),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let shape_only = |id: &str| {
+            let package = id.split_once('#').and_then(|(m, _)| m.rsplit_once('@')).map_or(id, |(p, _)| p);
+            self.options.shape_only.contains(&package)
+        };
+        let rules = self.options.rules.iter().filter(|r| !shape_only(&r.id)).map(|r| (r.id.clone(), r.clone()));
+        let rules = rules.collect();
         let mut by_name = HashMap::with_capacity(definitions.len());
         for (i, d) in definitions.iter().enumerate() {
             by_name.entry(d.name.clone()).or_insert(i);
         }
-        Ok(Schema { instances: self.instances, own, definitions, by_name, warnings, packages, files })
+        let schema = Schema { instances: self.instances, own, definitions, by_name, warnings, packages, files, rules };
+        match self.options.require_rules {
+            true => missing_rules(&schema).map(|()| schema),
+            false => Ok(schema),
+        }
+    }
+
+    /// The rules of the package reached as `r`, its manifest's `rules`
+    /// field checked (packages.md §4): each type defined in its schema,
+    /// without parameters and not a `Stream`, and for a package read from a
+    /// directory each rule's document, `rules/<name>.md`, a regular file.
+    /// Otherwise `package-manifest`, naming the package and the type or file.
+    fn package_rules(&self, r: &Reached) -> Result<Vec<(String, String)>> {
+        let manifest = &r.found.manifest;
+        let invalid = |reason: String| Error::new(Code::PackageManifest, reason);
+        let rules = manifest.rules().map_err(invalid)?;
+        let unit = &self.units[self.by_path[&r.path]];
+        let name = quote(&manifest.name);
+        for (ty, rule) in &rules {
+            let def = unit.own.get(ty).map(|&d| &unit.file.types[d]);
+            let wrong = match def {
+                None => Some("which its schema doesn't define"),
+                Some(d) if !d.params.is_empty() => Some("which has parameters: a rule is for a type without them"),
+                Some(d) if matches!(&d.ty, Ty::Name { name, .. } if name == "Stream") => {
+                    Some("which is a Stream: a rule decides on one value of its type")
+                }
+                Some(_) => None,
+            };
+            if let Some(why) = wrong {
+                return Err(invalid(format!("the rules of {name} name the type {}, {why}", quote(ty))));
+            }
+            if self.options.rule_documents && !r.found.has_document(rule) {
+                return Err(invalid(format!(
+                    "{name} gives {} the rule {rule}, but has no rules/{rule}.md, a regular file, that defines it",
+                    quote(ty)
+                )));
+            }
+        }
+        Ok(rules)
     }
 
     /// A loaded file: its own definitions in source order, then the imported ones by name.
@@ -719,9 +958,10 @@ impl<'a> Loader<'a> {
             }
             _ => (module, None),
         };
-        let found = match name.starts_with('@') {
-            true => files::package(self.options.packages, name, from.as_deref(), &mut self.files),
-            false => files::file(name, from.as_deref(), self.units[unit].package.as_deref(), &mut self.files),
+        let found = match (name.starts_with('@'), self.sources) {
+            (true, _) => files::package(self.options.packages, name, from.as_deref(), &mut self.files),
+            (false, None) => files::file(name, from.as_deref(), self.units[unit].package.as_deref(), &mut self.files),
+            (false, Some(sources)) => self.memory_file(sources, name, from.as_deref(), unit),
         };
         // A locator's error without a code (an application's locator) leaves the import unavailable.
         let found = found.map_err(|e| {

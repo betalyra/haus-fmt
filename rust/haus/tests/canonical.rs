@@ -14,7 +14,7 @@ fn c(src: &str) -> String {
 /// `src`'s one value, read with a number limit of 2000: an integer longer
 /// than the default limit.
 fn parse_long(src: &str) -> Value {
-    let limits = Limits { max_number_length: 2000, ..Limits::default() };
+    let limits = Limits { max_number_length: 3000, ..Limits::default() };
     haus::parse_with(src, &limits).unwrap().remove(0)
 }
 
@@ -75,7 +75,7 @@ fn writes_a_huge_hex_integer_in_decimal() {
     assert_eq!(text.len(), 1000);
     assert_eq!(parse(&text), parse(&big));
     // and the compact writer does the same (spec §11), so its output parses again
-    assert_eq!(haus::ser::write(&parse(&big)), Ok(text));
+    assert_eq!(haus::ser::write(&parse(&big)), text);
 }
 
 #[test]
@@ -86,8 +86,8 @@ fn writes_an_integer_of_any_size_with_all_its_digits() {
         canonical(&parse_long(&format!("[1, Pair(2, {{ b: -{huge} }})]"))),
         format!("[1,Pair(2,{{b:-{huge}}})]")
     );
-    let built = num(&"1".repeat(100_000));
-    assert_eq!(canonical(&built), "1".repeat(100_000));
+    let built = Number::with_limits(&"1".repeat(100_000), &Limits { max_number_length: 100_000, ..Limits::default() });
+    assert_eq!(canonical(&built.unwrap().into()), "1".repeat(100_000));
 }
 
 #[test]
@@ -155,7 +155,8 @@ fn values_that_are_not_haus_values_cannot_be_built() {
 #[test]
 fn values_built_in_code_have_a_canonical_form() {
     let boxed = Value::variant("Box", vec![Value::record([("y", num("1E+05"))]).unwrap()]).unwrap();
-    let v = Value::record([("z", num("1")), ("a", boxed), ("b", Value::from(vec![Value::from(true), "s".into()]))]);
+    let array = Value::array(vec![Value::from(true), Value::string("s").unwrap()]).unwrap();
+    let v = Value::record([("z", num("1")), ("a", boxed), ("b", array)]);
     let v = v.unwrap();
     let parsed = parse(r#"{ b: [True, "s"], z: 1, a: Box { y: 1e+05 } }"#);
     assert_eq!(canonical(&v), r#"{a:Box{y:1e5},b:[True,"s"],z:1}"#);
@@ -184,26 +185,31 @@ fn number_literals_built_in_code_are_normalized() {
         #[cfg(feature = "hash")]
         assert_eq!(haus::hash(&num(built)), haus::hash(&parse(built)), "{built}");
     }
-    // No limits: a number has all its digits, and so has its canonical form.
+    // No limit applies to the canonical form: a number parsed with larger
+    // limits has all its digits there.
     let long = format!("1{}e+0", "0".repeat(2000));
-    assert_eq!(canonical(&num(&long)), format!("1{}e0", "0".repeat(2000)));
+    assert_eq!(canonical(&parse_long(&long)), format!("1{}e0", "0".repeat(2000)));
+    // Built in code, it is beyond the number limit (spec §11).
+    assert_eq!(Number::new(&long).unwrap_err().code, haus::ErrorCode::NumberTooLong);
 }
 
 /// A value built in code `levels` deep: arrays and variants with record payloads, in turn.
 fn deep(levels: usize, innermost: &str) -> Value {
-    (0..levels).fold(Value::String(innermost.into()), |v, i| match i % 2 {
-        0 => Value::Array(vec![v]),
+    (0..levels).fold(Value::string(innermost).unwrap(), |v, i| match i % 2 {
+        0 => Value::array(vec![v]).unwrap(),
         _ => Value::variant("T", vec![Value::record([("a", v)]).unwrap()]).unwrap(),
     })
 }
 
-/// Spec §12: the canonical form, hashing, equality and order work at any
-/// depth, with no maximum; building and dropping such a value takes no call
-/// stack per level either (on a test thread's small stack).
+/// Spec §12: the canonical form, hashing, equality and order work at the
+/// deepest a value can be (256 levels, which constructors allow and no
+/// value exceeds), without a call stack per level (on a test thread's small
+/// stack).
 #[test]
 fn any_depth() {
-    let (a, b, c) = (deep(100_000, "x"), deep(100_000, "x"), deep(100_000, "y"));
-    assert_eq!(canonical(&a), format!("{}\"x\"{}", "T{a:[".repeat(50_000), "]}".repeat(50_000)));
+    let (a, b, c) = (deep(256, "x"), deep(256, "x"), deep(256, "y"));
+    assert_eq!(a.depth(), 256);
+    assert_eq!(canonical(&a), format!("{}\"x\"{}", "T{a:[".repeat(128), "]}".repeat(128)));
     assert!(equals(&a, &b));
     assert!(!equals(&a, &c));
     assert_eq!(haus::compare(&a, &b), std::cmp::Ordering::Equal);

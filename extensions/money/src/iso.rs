@@ -1,4 +1,6 @@
-//! The profile `@haus-fmt/money/iso` (profiles/iso.md) as codecs (spec §13.4).
+//! Codecs for the types of the rule `iso` (profiles/iso.md, spec §13.4):
+//! Rust types for what the rule accepts. The rule itself is checked before
+//! them, by the generated code ([`crate::rules::Iso`]).
 
 use std::fmt;
 use std::str::FromStr;
@@ -7,7 +9,7 @@ use haus::{AnyTag, Codec, Decimal, Tag};
 
 use crate::{Currency, Money};
 
-/// A currency the iso profile accepts: three letters `A`–`Z`, the shape of
+/// A currency the iso rule accepts: three letters `A`–`Z`, the shape of
 /// an ISO 4217 code (whether the code is assigned is not checked).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CurrencyCode([u8; 3]);
@@ -17,9 +19,7 @@ impl CurrencyCode {
     pub fn new(code: &str) -> Result<CurrencyCode, String> {
         match code.as_bytes() {
             &[a, b, c] if [a, b, c].iter().all(u8::is_ascii_uppercase) => Ok(CurrencyCode([a, b, c])),
-            _ => {
-                Err(format!("\"{}\" is not a currency of the iso profile: three letters A–Z", haus::for_message(code)))
-            }
+            _ => Err(format!("\"{}\" is not a currency of the iso rule: three letters A–Z", haus::for_message(code))),
         }
     }
 
@@ -28,7 +28,7 @@ impl CurrencyCode {
         match currency {
             AnyTag::Bare(code) => CurrencyCode::new(code),
             AnyTag::Other(_) => Err(format!(
-                "{} is not a currency of the iso profile: a tag of three letters A–Z, without payload",
+                "{} is not a currency of the iso rule: a tag of three letters A–Z, without payload",
                 haus::for_message(&currency.to_string())
             )),
         }
@@ -59,7 +59,7 @@ impl From<CurrencyCode> for Currency {
     }
 }
 
-/// A `Money` the iso profile accepts. It keeps the value: the amount is the
+/// A `Money` the iso rule accepts. It keeps the value: the amount is the
 /// exact `Decimal`, its scale included (`19.90` stays `19.90`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IsoMoney {
@@ -67,7 +67,7 @@ pub struct IsoMoney {
     pub currency: CurrencyCode,
 }
 
-/// The iso profile's codec for `@haus-fmt/money@1#Money`: `Money(19.90, EUR)`
+/// The iso rule's codec for `@haus-fmt/money@1#Money`: `Money(19.90, EUR)`
 /// ↔ [`IsoMoney`]. It rejects a currency that isn't three letters `A`–`Z`,
 /// and any amount is accepted.
 pub struct Iso;
@@ -86,7 +86,7 @@ impl Codec for Iso {
     }
 }
 
-/// The iso profile's codec for `@haus-fmt/money@1#Currency`: `EUR` ↔ [`CurrencyCode`].
+/// The iso rule's codec for `@haus-fmt/money@1#Currency`: `EUR` ↔ [`CurrencyCode`].
 pub struct IsoCurrency;
 
 impl Codec for IsoCurrency {
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn messages_quote_the_code_escaped_and_short() {
         let e = CurrencyCode::new(&"A".repeat(100)).unwrap_err();
-        assert_eq!(e, format!("\"{}…\" is not a currency of the iso profile: three letters A–Z", "A".repeat(39)));
+        assert_eq!(e, format!("\"{}…\" is not a currency of the iso rule: three letters A–Z", "A".repeat(39)));
         let e = CurrencyCode::new("E\u{202E}R").unwrap_err();
         assert!(e.starts_with(r#""E\u{202E}R""#), "{e}");
     }

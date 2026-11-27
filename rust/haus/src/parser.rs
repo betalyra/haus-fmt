@@ -3,7 +3,7 @@
 
 use crate::keys::Keys;
 use crate::scan::{Special, ident_end, is_bidi, is_control, is_ident, next_special, plain_decimal, shown};
-use crate::{ErrorCode as Code, Number, Record, SyntaxError as Error, Tag, Value};
+use crate::{ByteString, ErrorCode as Code, List, Number, Record, SyntaxError as Error, Tag, Text, Value};
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
@@ -26,14 +26,17 @@ pub const MAX_SUPPORTED_DEPTH: usize = 256;
 /// a value built in code of any depth takes a bounded stack (spec §7).
 pub const DEBUG_DEPTH: usize = 64;
 
-/// Resource limits (spec §7): enforced while parsing, and by the writers,
-/// which check a value against the limits of the reader it is for (§11).
-/// The canonical form and hashing apply none of them (§12).
+/// Resource limits (spec §7): enforced while parsing, when a value is built
+/// in code (its constructors apply the defaults, `with_limits` others), and
+/// by encoders, which check what they build against the limits of the reader
+/// it is for (§11, §15). A value that exists is within the limits it was
+/// built with: the writers, the canonical form and hashing apply none.
 ///
 /// ```
 /// let limits = haus::Limits { max_nodes: 3, ..haus::Limits::default() };
 /// let v = haus::parse("[1, [2, 3]]").unwrap().remove(0);
-/// let e = haus::to_string_with(&v, &limits).unwrap_err();
+/// // An encoder counts the values it makes, an `Any` included.
+/// let e = haus::Encode::encode_with(&vec![v], haus::Encoder::new(&limits)).unwrap_err();
 /// assert_eq!(e.code, haus::ErrorCode::TooManyNodes);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,13 +55,13 @@ pub struct Limits {
     /// Characters (code points) in one decoded string, record key or tag,
     /// or between the quotes of a byte string.
     pub max_string_length: usize,
-    /// Values written for one value (spec §7, "Values written"): the value
-    /// itself and every element, field value and argument in it, each as
-    /// often as it is written. Writers of values and encoding fail with
-    /// `too-many-nodes` beyond it, for each top-level value on its own: it
-    /// ends a native value whose parts are shared (an `Rc`), which expands
-    /// when written. Parsing, the canonical form and hashing don't use it: a
-    /// [`Value`] owns its parts, so it can't share them. 64 Mi (67,108,864).
+    /// The size of one value (spec §7, "Size"): the value itself and every
+    /// element, field value and argument in it, each as often as it is
+    /// written. Encoding fails with `too-many-nodes` beyond it, for each
+    /// top-level value on its own: it ends a native value whose parts are
+    /// shared (an `Rc`), which expands when written. Nothing else uses it: a
+    /// [`Value`] owns its parts, so it can't share them, and is as large in
+    /// memory as it is written out. 64 Mi (67,108,864).
     pub max_nodes: usize,
 }
 
@@ -293,9 +296,11 @@ impl<'a> Parser<'a> {
     fn value(&mut self) -> R<Value> {
         match self.peek() {
             Some(b'{') => self.record(),
-            Some(b'[') => self.list(b']').map(Value::Array),
-            Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => self.block_string().map(Value::String),
-            Some(b'"') => self.basic_string().map(Value::String),
+            Some(b'[') => self.list(b']').map(|items| Value::Array(List::from_checked(items))),
+            Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => {
+                self.block_string().map(|s| Value::String(Text::from_checked(s)))
+            }
+            Some(b'"') => self.basic_string().map(|s| Value::String(Text::from_checked(s))),
             Some(b'-' | b'0'..=b'9') => match self.plain_number() {
                 Some(n) => Ok(Value::Number(n)),
                 None => self.number().map(Value::Number),
@@ -527,7 +532,7 @@ impl<'a> Parser<'a> {
             }
             None => Vec::new(),
         };
-        Ok(Value::Variant { tag: Tag::from_valid(tag), args })
+        Ok(Value::Variant { tag: Tag::from_valid(tag), args: List::from_checked(args) })
     }
 
     /// After a tag: `(` or `{` if a payload starts here, at it. The payload
@@ -738,7 +743,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.pos += 1; // "
-        Ok(Value::Bytes(out))
+        Ok(Value::Bytes(ByteString::from_checked(out)))
     }
 
     // ── strings ────────────────────────────────────────────────

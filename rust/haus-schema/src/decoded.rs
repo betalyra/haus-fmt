@@ -12,8 +12,9 @@ use std::fmt;
 /// `{:?}` and `{}` show each secret as `<redacted>`. The canonical form, the
 /// hash, comparing and the writers take a [`haus::Value`], which can't hold a
 /// secret: [`Decoded::reveal`] gives one, with every secret in it, and only
-/// when asked. Encoding with the schema ([`crate::Schema::encode`]) writes the
-/// secrets in full: the receiver needs them.
+/// when asked. Encoding with the schema ([`crate::Schema::encode`]) refuses a
+/// secret (`cannot-encode`), unless asked to reveal secrets
+/// ([`crate::EncodeOptions::reveal_secrets`], spec §15).
 ///
 /// ```
 /// use haus_schema::{Decoded, Schema};
@@ -59,15 +60,41 @@ impl Decoded {
     /// The value with every secret in it, in full: what the canonical form,
     /// the hash and the writers take. Call it only where the secrets may be seen.
     pub fn reveal(self) -> Value {
+        // Built from the parts of a value decoded, no deeper than it.
+        const DECODED: &str = "a decoded value's parts make a value again";
         match self {
             Decoded::Value(v) => v,
             Decoded::Secret(s) => s.into_inner(),
-            Decoded::Array(items) => Value::Array(items.into_iter().map(Decoded::reveal).collect()),
-            Decoded::Record(fields) => Value::record(fields.into_iter().map(|(k, x)| (k, x.reveal())))
-                .expect("the keys of a decoded record are unique"),
-            Decoded::Variant { tag, args } => {
-                Value::Variant { tag, args: args.into_iter().map(Decoded::reveal).collect() }
+            Decoded::Array(items) => Value::array(items.into_iter().map(Decoded::reveal).collect()).expect(DECODED),
+            Decoded::Record(fields) => {
+                let read = haus::Limits { max_string_length: usize::MAX, ..haus::Limits::default() };
+                let fields: Vec<(String, Value)> = fields.into_iter().map(|(k, x)| (k, x.reveal())).collect();
+                haus::Record::from_fields_with(fields, &read).expect(DECODED).into()
             }
+            Decoded::Variant { tag, args } => {
+                Value::variant(&tag, args.into_iter().map(Decoded::reveal).collect()).expect(DECODED)
+            }
+        }
+    }
+
+    /// The place of the first secret in it (spec §15), if it holds one.
+    pub fn secret_path(&self) -> Option<Vec<Segment>> {
+        let inside = |step: Segment, x: &Decoded| {
+            x.secret_path().map(|mut path| {
+                path.insert(0, step);
+                path
+            })
+        };
+        match self {
+            Decoded::Value(_) => None,
+            Decoded::Secret(_) => Some(vec![]),
+            Decoded::Array(items) => items.iter().enumerate().find_map(|(i, x)| inside(Segment::Index(i), x)),
+            Decoded::Record(fields) => fields.iter().find_map(|(k, x)| inside(Segment::Field(k.clone()), x)),
+            // `Tag { … }`: the record's fields are at the variant's place.
+            Decoded::Variant { args, .. } => match args.as_slice() {
+                [record @ (Decoded::Record(_) | Decoded::Value(Value::Record(_)))] => record.secret_path(),
+                _ => args.iter().enumerate().find_map(|(i, x)| inside(Segment::Index(i), x)),
+            },
         }
     }
 }
@@ -90,7 +117,14 @@ impl fmt::Display for Decoded {
             Decoded::Record(fields) => {
                 f.write_str("{")?;
                 for (i, (k, x)) in fields.iter().enumerate() {
-                    let key = if is_word(k) { k.clone() } else { haus::canonical(&Value::String(k.clone())) };
+                    let key = match is_word(k) {
+                        true => k.clone(),
+                        // `["pt-BR"]`, the path's form: the quoted key inside.
+                        false => {
+                            let path = haus::Segment::Field(k.clone()).to_string();
+                            path.trim_start_matches('[').trim_end_matches(']').to_owned()
+                        }
+                    };
                     write!(f, "{}{key}:{x}", if i > 0 { "," } else { "" })?;
                 }
                 f.write_str("}")

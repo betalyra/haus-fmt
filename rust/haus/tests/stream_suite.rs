@@ -27,8 +27,8 @@ struct Case {
 fn outcome(v: &Value) -> Option<Outcome> {
     match v {
         Value::Variant { tag, args } => match (tag.as_str(), args.as_slice()) {
-            ("Ok", [Value::Array(values)]) => Some(Ok(values.clone())),
-            ("Err", [Value::String(code)]) => Some(Err(code.clone())),
+            ("Ok", [Value::Array(values)]) => Some(Ok(values.to_vec())),
+            ("Err", [Value::String(code)]) => Some(Err(code.to_string())),
             _ => None,
         },
         _ => None,
@@ -51,7 +51,7 @@ fn case(v: &Value) -> Case {
     }
     let whole = v.get("whole").map(|w| outcome(w).unwrap_or_else(|| fail()));
     let strict = matches!(v.get("strict"), Some(Value::Variant { tag, .. }) if tag == "True");
-    Case { text: text.clone(), max_value_length: max.parse().unwrap(), strict, result, whole }
+    Case { text: text.to_string(), max_value_length: max.parse().unwrap(), strict, result, whole }
 }
 
 /// The error's code, with its place if the case gives one.
@@ -154,7 +154,7 @@ fn single_documents() {
             };
             let want: Result<Value, String> = match (tag.as_str(), args.as_slice()) {
                 ("Ok", [value]) => Ok(value.clone()),
-                ("Err", [Value::String(code)]) => Err(code.clone()),
+                ("Err", [Value::String(code)]) => Err(code.to_string()),
                 _ => panic!("not a case: {}", canonical(c)),
             };
             let got = haus::from_str::<Value>(text);

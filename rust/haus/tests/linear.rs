@@ -136,10 +136,11 @@ fn record_value(n: usize, key: impl Fn(usize) -> String) -> Value {
 fn writing() {
     linear("ordinary keys", 20_000, |n| record_value(n, |i| format!("k{i}")), written);
     linear("colliding keys", 20_000, |n| record_value(n, colliding), written);
-    let string = |piece: &'static str| move |n: usize| Value::String(piece.repeat(n));
+    let string = |piece: &'static str| move |n: usize| Value::string(piece.repeat(n)).unwrap();
     linear("a long string", 200_000, string("abcdefgh"), written);
     linear("a string to escape", 50_000, string("a\"b\\c\nd\u{7}\u{202E}é中"), written);
-    let numbers = |n: usize| Value::Array((0..n).map(|i| Value::number(&format!("-{i}.5")).unwrap()).collect());
+    let numbers =
+        |n: usize| Value::array((0..n).map(|i| Value::number(&format!("-{i}.5")).unwrap()).collect()).unwrap();
     linear("numbers", 100_000, numbers, written);
     // Equality compares records of keys in another order sorted.
     let both = |n: usize| {

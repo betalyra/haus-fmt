@@ -1,6 +1,7 @@
 //! Codecs: the application chooses Rust types for named haus types. Each one
-//! decodes the type's base value first, so the schema's rules always run,
-//! and encodes back to it, so the haus text never changes (spec §13.4).
+//! decodes the type's base value first, so the schema's rules always run (and
+//! a package's rule, money's iso, before any codec), and encodes back to it,
+//! so the haus text never changes (spec §13.4).
 
 use haus::{AnyTag, Codec, Decimal, Tag, time};
 use haus_geo::LatLng;
@@ -14,8 +15,9 @@ pub struct Amount {
     pub currency: Tag,
 }
 
-/// `Money(44.40, EUR)` ↔ `Amount { cents: 4440, currency: "EUR" }`. More than
-/// 2 decimal places, or a currency that isn't ISO-shaped, is an error.
+/// `Money(44.40, EUR)` ↔ `Amount { cents: 4440, currency: "EUR" }`. The
+/// currency passed money's iso rule already; more than 2 decimal places is
+/// an error of this codec's: a codec may reject more than the rule.
 pub struct Cents;
 
 impl Codec for Cents {
@@ -25,19 +27,13 @@ impl Codec for Cents {
 
     fn decode(Money(amount, currency): Money) -> Result<Amount, String> {
         let cents = amount.scaled(2).ok_or_else(|| format!("{} has more than 2 decimal places", amount.as_str()))?;
-        Ok(Amount { cents, currency: iso(currency)? })
+        // The rule took only a tag without payload.
+        let AnyTag::Bare(currency) = currency else { return Err(format!("{currency} is not a currency")) };
+        Ok(Amount { cents, currency })
     }
 
     fn encode(amount: &Amount) -> Money {
         Money(Decimal::from_scaled(amount.cents, 2), AnyTag::Bare(amount.currency.clone()))
-    }
-}
-
-/// The @haus-fmt/money iso profile: a currency is three letters A–Z.
-fn iso(currency: AnyTag) -> Result<Tag, String> {
-    match currency {
-        AnyTag::Bare(code) if code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()) => Ok(code),
-        other => Err(format!("{other} is not a currency: three letters A–Z (ISO 4217)")),
     }
 }
 
@@ -67,7 +63,7 @@ impl Codec for JiffDate {
     type Target = jiff::civil::Date;
 
     fn decode(date: time::Date) -> Result<jiff::civil::Date, String> {
-        // The std/time profile already ran: this can't fail for a valid Date.
+        // std/time's checks already ran: this can't fail for a valid Date.
         date.as_str().parse().map_err(|e: jiff::Error| e.to_string())
     }
 

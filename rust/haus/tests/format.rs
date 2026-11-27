@@ -170,8 +170,9 @@ fn pretty_output_survives_trimming_trailing_whitespace() {
         check_trimmed(&case.name, &input, &mut failures);
     }
     for (i, s) in strings_with_blanks().into_iter().enumerate() {
-        let note = Value::variant("Note", vec![Value::String(s.clone())]).unwrap();
-        let value = Value::record([("s", Value::String(s.clone())), ("nested", Value::Array(vec![note]))]).unwrap();
+        let note = Value::variant("Note", vec![Value::string(s.clone()).unwrap()]).unwrap();
+        let nested = Value::array(vec![note]).unwrap();
+        let value = Value::record([("s", Value::string(s.clone()).unwrap()), ("nested", nested)]).unwrap();
         // From a value (written compact, so every string is a `"…"` string) ...
         check_trimmed(&format!("generated {i} {s:?}"), &haus::to_string(&value).unwrap(), &mut failures);
         // ... and from a block string whose source lines end in blanks.
@@ -252,7 +253,7 @@ fn line_and_paragraph_separators_are_escaped_in_every_layout() {
         format(text, Style::Minimised),
         "{\"k\\u{2028}\":\"a\\u{2028}b\\u{2029}\",b:\"x\\u{2029}\\ny\",e:\"\\u{2028}\"}\n"
     );
-    let value = Value::String("a\u{2028}b\u{2029}".into());
+    let value = Value::string("a\u{2028}b\u{2029}").unwrap();
     assert_eq!(haus::to_string(&value).unwrap(), "\"a\\u{2028}b\\u{2029}\"");
 }
 
@@ -347,7 +348,7 @@ fn format_options() {
                 ..defaults
             };
             match (haus::format(input, &options), expected) {
-                (Ok(out), Some(text)) if &out == text => None,
+                (Ok(out), Some(text)) if out == **text => None,
                 (Ok(out), Some(text)) => Some(format!("{input:?} {options:?}: got {out:?}, expected {text:?}")),
                 (Err(e), Some(_)) => Some(format!("{input:?} {options:?}: {e}")),
                 (got, None) => Some(format!("{input:?} {options:?}: {got:?}, expected it to be rejected")),

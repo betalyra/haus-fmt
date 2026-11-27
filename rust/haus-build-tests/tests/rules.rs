@@ -1,12 +1,14 @@
-//! The official profiles' codecs (spec §13.3, §13.4): `haus_money::Iso`,
-//! `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox` and
-//! `haus_uuid::Rfc9562`.
+//! The official packages' rules (packages.md §6), checked by the generated
+//! code before any codec, and their crates' codecs (spec §13.4):
+//! `haus_money::Iso`, `haus_money::IsoCurrency`, `haus_geo::Wgs84`,
+//! `haus_geo::Wgs84BBox` and `haus_uuid::Rfc9562`.
 //!
-//! Every test vector of extensions/*/profiles/*.vectors.haus, and the codecs
-//! in an application (travel.schema.haus) whose package (packages/travel)
-//! uses the official packages: they apply inside that package's types too.
+//! Every test vector of the rules (read from extensions/*/profiles/ until
+//! that folder is renamed rules/), and the codecs in an application
+//! (travel.schema.haus) whose package (packages/travel) uses the official
+//! packages: they apply inside that package's types too.
 
-/// travel.schema.haus with the profiles' codecs (see build.rs).
+/// travel.schema.haus with the crates' codecs (see build.rs).
 mod travel {
     haus::include_schema!("travel");
 }
@@ -21,7 +23,7 @@ use haus_geo::{Bounds, Point, Wgs84, Wgs84BBox};
 use haus_money::{CurrencyCode, Iso, IsoCurrency, IsoMoney};
 
 /// An application's codec for `Currency` that accepts every value of its
-/// schema: looser than the iso profile (the vectors' `looser`).
+/// schema: looser than the iso rule (the vectors' `looser`).
 pub struct LooseCurrency;
 
 impl Codec for LooseCurrency {
@@ -55,14 +57,14 @@ struct Vector {
 
 fn vectors(text: &str) -> Vec<Vector> {
     let string = |v: &Value, key: &str| match v.get(key) {
-        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::String(s)) => Some(s.to_string()),
         _ => None,
     };
     let strings = |v: &Value, key: &str| match v.get(key) {
         Some(Value::Array(items)) => items
             .iter()
             .map(|t| match t {
-                Value::String(s) => s.clone(),
+                Value::String(s) => s.to_string(),
                 other => panic!("not a type name: {other:?}"),
             })
             .collect(),
@@ -84,9 +86,10 @@ fn vectors(text: &str) -> Vec<Vector> {
         .collect()
 }
 
-/// `text` decoded with the schema alone, in the one spelling of its type (spec §15).
+/// `text` decoded as the codec's base type (the schema and the package's
+/// rule), in the one spelling of its type (spec §15).
 fn normal<C: Codec>(text: &str) -> Result<String, String> {
-    let base: C::Base = haus::from_str(text).map_err(|e| format!("the schema rejects it: {e}"))?;
+    let base: C::Base = haus::from_str(text).map_err(|e| format!("the base type rejects it: {e}"))?;
     haus::to_string(&base).map_err(|e| e.to_string())
 }
 
@@ -100,14 +103,15 @@ fn check<C: Codec>(v: &Vector) -> Result<(), String>
 where
     C::Target: PartialEq + std::fmt::Debug,
 {
-    // Every vector is valid under the schema: what the codec rejects, the profile rejects.
-    let written = normal::<C>(&v.value)?;
+    // Every vector is valid under the schema: what is rejected, the rule
+    // rejects (packages.md §6), before the codec, as `codec-rejected`.
     match (v.accept, decode::<C>(&v.value)) {
         (false, Err(haus::Error::Decode(e))) if e.code == haus::ErrorCode::CodecRejected => Ok(()),
         (false, Err(e)) => Err(format!("rejected with {:?}: {e}", e.code())),
         (false, Ok(x)) => Err(format!("accepted: {x:?}")),
         (true, Err(e)) => Err(format!("rejected: {e}")),
         (true, Ok(x)) => {
+            let written = normal::<C>(&v.value)?;
             let encoded = haus::to_string(&C::encode(&x)).map_err(|e| e.to_string())?;
             let want = normal::<C>(v.output.as_deref().unwrap_or(&v.value))?;
             if encoded != want {
@@ -129,8 +133,9 @@ where
 
 /// A Reject vector with `looser: ["Currency"]`, run again with
 /// [`LooseCurrency`] and iso's codec for `Money`, inside an application's
-/// type (looser.schema.haus): the profile's rule is checked on the values
-/// the schema decoded, so the value is still rejected (spec §13.4).
+/// type (looser.schema.haus): the package's rule is checked on the values
+/// the schema decoded, so the value is still rejected (packages.md §6), at
+/// the place of the `Currency` (`$.value[1]`).
 fn check_looser(v: &Vector) -> Result<(), String> {
     if v.looser.is_empty() {
         return Ok(());
@@ -139,7 +144,7 @@ fn check_looser(v: &Vector) -> Result<(), String> {
         return Err(format!("no application type for {} with looser {:?}", v.ty, v.looser));
     }
     match haus::from_str::<looser::Root>(&format!("{{ value: {} }}", v.value)) {
-        Err(haus::Error::Decode(e)) if e.code == haus::ErrorCode::CodecRejected && e.place() == "$.value" => Ok(()),
+        Err(haus::Error::Decode(e)) if e.code == haus::ErrorCode::CodecRejected && e.place() == "$.value[1]" => Ok(()),
         other => Err(format!("with a looser Currency codec: {other:?}")),
     }
 }
@@ -211,7 +216,7 @@ fn code(text: &str) -> CurrencyCode {
 }
 
 #[test]
-fn the_profiles_codecs_apply_inside_another_packages_types() {
+fn the_crates_codecs_apply_inside_another_packages_types() {
     let travel: travel::Travel = haus::from_str(TRAVEL).unwrap();
     // In the application's own type.
     is::<IsoMoney>(&travel.budget);
@@ -240,7 +245,7 @@ fn the_profiles_codecs_apply_inside_another_packages_types() {
 }
 
 #[test]
-fn the_profiles_reject_inside_another_packages_types() {
+fn the_rules_reject_inside_another_packages_types() {
     let place = |from: &str, to: &str| {
         let text = TRAVEL.replacen(from, to, 1);
         assert_ne!(text, TRAVEL, "{from}");

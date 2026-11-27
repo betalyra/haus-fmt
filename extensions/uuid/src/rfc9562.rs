@@ -1,4 +1,6 @@
-//! The profile `@haus-fmt/uuid/rfc9562` (profiles/rfc9562.md) as a codec (spec §13.4).
+//! A codec for the type of the rule `rfc9562` (profiles/rfc9562.md, spec
+//! §13.4): a Rust type for the values the rule accepts. The rule itself is
+//! [`crate::rules`], checked before any codec, this one included.
 
 use std::fmt;
 use std::str::FromStr;
@@ -7,11 +9,10 @@ use haus::Codec;
 
 use crate::Uuid;
 
-/// Why the profile rejects a text. It doesn't quote the text, which can be anything.
-const REJECTED: &str =
-    "not a UUID of the rfc9562 profile: 32 digits 0–9, a–f in groups of 8-4-4-4-12, joined by hyphens";
+/// Why the rule rejects a text. It doesn't quote the text, which can be anything.
+const REJECTED: &str = "not a UUID of the rfc9562 rule: 32 digits 0–9, a–f in groups of 8-4-4-4-12, joined by hyphens";
 
-/// A UUID the rfc9562 profile accepts, as its text: 32 digits `0`–`9`,
+/// A UUID the rfc9562 rule accepts, as its text: 32 digits `0`–`9`,
 /// `a`–`f` in groups 8-4-4-4-12, joined by hyphens, lowercase only. Any
 /// version and variant, the nil and the max UUID included. The text is the
 /// UUID's one spelling, so equal UUIDs have equal texts.
@@ -65,7 +66,7 @@ impl From<UuidText> for Uuid {
     }
 }
 
-/// The rfc9562 profile's codec for `@haus-fmt/uuid@1#Uuid`: `Uuid("0190c7a8-…")` ↔ [`UuidText`].
+/// The rfc9562 rule's codec for `@haus-fmt/uuid@1#Uuid`: `Uuid("0190c7a8-…")` ↔ [`UuidText`].
 pub struct Rfc9562;
 
 impl Codec for Rfc9562 {
@@ -127,7 +128,11 @@ mod tests {
             "0190c7a805b6e-7d3f-9a41-6c2e8f1b0d57",
         ] {
             assert!(UuidText::new(bad).is_err(), "{bad:?}");
-            assert!(decode(&haus::to_string(&Uuid(bad.to_owned())).unwrap()).is_err(), "{bad:?}");
+            // The rule refuses it both ways, before any codec.
+            let refused = haus::to_string(&Uuid(bad.to_owned())).unwrap_err();
+            assert_eq!(refused.code, haus::ErrorCode::CannotEncode, "{bad:?}");
+            let value = haus::Value::variant("Uuid", vec![haus::Value::string(bad).unwrap()]).unwrap();
+            assert!(decode(&haus::ser::write(&value)).is_err(), "{bad:?}");
         }
     }
 

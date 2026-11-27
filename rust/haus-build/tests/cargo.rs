@@ -104,7 +104,7 @@ fn package_crates_and_their_dependents() {
     let graph = fs::read_to_string(orders_out.join("haus_graph.haus")).unwrap();
     let ids_dir = ids.canonicalize().unwrap();
     let entry = format!(
-        "[{{ dir: {:?}, krate: \"haus_ids\", name: \"@acme/ids\", version: \"1.0.0\" }}]",
+        "[{{ dir: {:?}, krate: \"haus_ids\", name: \"@acme/ids\", rules: \"\", version: \"1.0.0\" }}]",
         ids_dir.display().to_string()
     );
     assert_eq!(graph, entry);

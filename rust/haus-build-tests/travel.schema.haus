@@ -1,5 +1,5 @@
 // An application that uses @haus-test/travel, which uses the official
-// packages: build.rs registers their profiles' codecs (tests/profiles.rs).
+// packages: build.rs registers their crates' codecs (tests/rules.rs).
 import @haus-test/travel@1 (Trip, Traveller)
 import @haus-fmt/money@1 (Money)
 

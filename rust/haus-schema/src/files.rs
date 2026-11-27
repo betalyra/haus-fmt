@@ -372,6 +372,38 @@ pub(crate) struct Found {
     pub dir: PathBuf,
     /// The manifest's text: copies of a package have the same.
     pub manifest_text: String,
+    /// The documents of its rules it has (packages.md §4).
+    pub documents: Documents,
+}
+
+/// Which documents of its rules a package has (`rules/<name>.md`).
+pub(crate) enum Documents {
+    /// In its directory, looked at when they are needed.
+    OnDisk,
+    /// Noted when it was read, by rule name.
+    Noted(std::collections::BTreeSet<String>),
+    /// Not known: a package made from data has no files, and isn't checked.
+    Unchecked,
+}
+
+impl Found {
+    /// Whether it has the document of its rule `rule`.
+    pub fn has_document(&self, rule: &str) -> bool {
+        match &self.documents {
+            Documents::OnDisk => rule_document(&self.dir, rule),
+            Documents::Noted(documents) => documents.contains(rule),
+            Documents::Unchecked => true,
+        }
+    }
+}
+
+/// Whether the package in `dir` has the document of its rule `rule`,
+/// `rules/<rule>.md` (packages.md §4): a regular file, not a symbolic link,
+/// listed with that spelling. It is looked at, not read.
+pub(crate) fn rule_document(dir: &Path, rule: &str) -> bool {
+    let (rules, file) = (dir.join("rules"), format!("{rule}.md"));
+    let is_dir = rules.symlink_metadata().is_ok_and(|m| m.is_dir());
+    is_dir && listed(&rules, file.as_ref()) && rules.join(&file).symlink_metadata().is_ok_and(|m| m.is_file())
 }
 
 /// The package `name` for the file at `from` (a real path), found by
@@ -387,6 +419,9 @@ pub(crate) fn package(
     files: &mut FileCache,
 ) -> Result<Source> {
     let location = packages.locate_in(name, from, files)?;
+    if let Some(value) = &location.value {
+        return value_package(&location.dir, name, value);
+    }
     let source = open_package(&location.dir, name, location.version.as_deref(), files)?;
     if let Some(copy) = &location.same_as {
         let other = open_package(copy, name, None, files)?;
@@ -396,6 +431,20 @@ pub(crate) fn package(
         }
     }
     Ok(source)
+}
+
+/// The package given as the value `value`, known by `dir`: nothing is read.
+fn value_package(dir: &Path, name: &str, value: &crate::sources::PackageText) -> Result<Source> {
+    let manifest = Manifest::parse(&value.manifest).map_err(|reason| Error::new(ErrorCode::PackageManifest, reason))?;
+    if manifest.name != name {
+        return Err(not_found(format!("the package given names itself {}, not {name}", quote(&manifest.name))));
+    }
+    let documents = match &value.documents {
+        Some(noted) => Documents::Noted(noted.clone()),
+        None => Documents::Unchecked,
+    };
+    let found = Found { manifest, dir: dir.to_owned(), manifest_text: value.manifest.clone(), documents };
+    Ok(Source { path: dir.join(SCHEMA), text: value.schema.clone(), package: Some(found) })
 }
 
 /// The package in `dir`, which must be called `name`, with `version` from its package manager.
@@ -427,7 +476,7 @@ fn open_package(dir: &Path, name: &str, version: Option<&str>, files: &mut FileC
     let shown_dir = files.shown(&dir);
     let text = files
         .schema(&path, Kind::PackageSchema, || format!("{name} has no {SCHEMA} next to its manifest ({shown_dir})"))?;
-    Ok(Source { path, text, package: Some(Found { manifest, dir, manifest_text }) })
+    Ok(Source { path, text, package: Some(Found { manifest, dir, manifest_text, documents: Documents::OnDisk }) })
 }
 
 /// The file `module` (`./common`, `../shared/money`, a path of grammar
@@ -633,7 +682,7 @@ pub(crate) fn package_of(path: &Path, files: &mut FileCache) -> Result<Option<Fo
         return Ok(None);
     };
     let (manifest, manifest_text) = files.manifest(dir)?;
-    Ok(Some(Found { manifest, dir: dir.to_owned(), manifest_text }))
+    Ok(Some(Found { manifest, dir: dir.to_owned(), manifest_text, documents: Documents::OnDisk }))
 }
 
 /// The id of a file outside packages: its path from `base`, `/`-separated,

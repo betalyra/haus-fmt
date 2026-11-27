@@ -1,5 +1,5 @@
 //! `haus package check`: a schema package before it is published (spec
-//! §13.3). Its manifest and schema, its profiles' test vectors, and the
+//! §13.3, packages.md). Its manifest and schema, its rules' test vectors, and the
 //! wrappers of package managers next to them (`package.json`, `Cargo.toml`,
 //! `pyproject.toml`): versions, names, the files they ship, the
 //! dependencies they declare, install scripts. The files are only read:
@@ -443,9 +443,10 @@ impl Package<'_> {
         }
     }
 
-    // ── profiles ────────────────────────────────────────────────
+    // ── rules' vectors ──────────────────────────────────────────
+    // Read from `profiles/` until the folder is renamed `rules/`.
 
-    /// The profiles' test vectors: `profiles/<name>.vectors.haus`, sorted.
+    /// The rules' test vectors: `profiles/<name>.vectors.haus`, sorted.
     fn profile_files(&self) -> Vec<String> {
         let Ok(entries) = fs::read_dir(self.dir.join("profiles")) else { return vec![] };
         let mut files: Vec<String> = entries
@@ -457,7 +458,7 @@ impl Package<'_> {
         files
     }
 
-    /// A profile's vectors (each one as [`vector`] says), and its rule,
+    /// A rule's vectors (each one as [`vector`] says), and its prose,
     /// `profiles/<name>.md`, next to them.
     fn vectors(&mut self, file: &str, schema: Option<&Schema>) {
         let path = self.dir.join(file);
@@ -467,7 +468,7 @@ impl Package<'_> {
                 ErrorCode::ProfileVectors,
                 file,
                 None,
-                format!("{profile} is not a profile name: like a package name's parts, a-z, 0-9, -, . and _"),
+                format!("{profile} is not a rule name: like a package name's parts, a-z, 0-9, -, . and _"),
                 "Rename the file: profiles/<name>.vectors.haus, the name in lowercase.",
             );
         }
@@ -477,9 +478,9 @@ impl Package<'_> {
                 ErrorCode::ProfileVectors,
                 file,
                 None,
-                format!("the profile {profile} has no rule: no {rule} next to its vectors"),
-                "Write the rule in prose in profiles/<name>.md: a profile is defined by its rule, and the vectors \
-                 are examples of it (spec §13.3).",
+                format!("the rule {profile} has no prose: no {rule} next to its vectors"),
+                "Write the rule in prose in profiles/<name>.md: a rule is defined by its prose, and the vectors \
+                 are examples of it (packages.md §6).",
             );
         }
         let opened = match path.symlink_metadata() {
@@ -495,7 +496,7 @@ impl Package<'_> {
                     ErrorCode::ProfileVectors,
                     file,
                     None,
-                    format!("cannot read the profile's vectors: {why}"),
+                    format!("cannot read the rule's vectors: {why}"),
                     "Ship it as a regular file.",
                 );
                 return;
@@ -516,7 +517,7 @@ impl Package<'_> {
                         ErrorCode::ProfileVectors,
                         file,
                         None,
-                        format!("cannot read the profile's vectors: {e}"),
+                        format!("cannot read the rule's vectors: {e}"),
                         "Fix the file.",
                     );
                     return;
@@ -534,8 +535,8 @@ impl Package<'_> {
                 ErrorCode::ProfileVectors,
                 file,
                 None,
-                "the profile has no vectors".into(),
-                "Write values a codec of the profile accepts and rejects: Accept { type: \"T\", value: \"…\" }, \
+                "the rule has no vectors".into(),
+                "Write values the rule accepts and rejects: Accept { type: \"T\", value: \"…\" }, \
                  Reject { type: \"T\", value: \"…\" }.",
             );
         }
@@ -672,7 +673,8 @@ impl Package<'_> {
                 "Remove it: a schema package is data, and needs no code to install (spec §13.3).",
             );
         }
-        let hint = "List package.haus, schema.haus and profiles (vectors and rules) in the files of package.json.";
+        let hint =
+            "List package.haus, schema.haus and the rules' files (prose and vectors) in the files of package.json.";
         match member(&json, "files") {
             Some(Json::Array(files)) => {
                 let patterns: Vec<String> = files
@@ -813,7 +815,8 @@ impl Package<'_> {
             Some(list.iter().filter_map(|p| p.get_ref().as_str().map(str::to_owned)).collect())
         };
         let dir = self.dir.to_owned();
-        let hint = "List package.haus, schema.haus and profiles (vectors and rules) in the include of Cargo.toml.";
+        let hint =
+            "List package.haus, schema.haus and the rules' files (prose and vectors) in the include of Cargo.toml.";
         match (patterns("include"), patterns("exclude")) {
             (Some(include), _) => self.ships(
                 file,
@@ -901,7 +904,7 @@ impl Package<'_> {
                     "which files the wheel ships can't be told from the files with the build backend {}",
                     other.unwrap_or("of setuptools (none given)")
                 ),
-                "Check that the wheel ships package.haus, schema.haus and the profiles, or use hatchling, whose \
+                "Check that the wheel ships package.haus, schema.haus and the rules' files, or use hatchling, whose \
                  configuration is checked.",
             ),
         }
@@ -1007,9 +1010,10 @@ fn vector(value: &Value, schema: Option<&Schema>) -> Result<(), Box<Diagnostic>>
                     i.code,
                     i.path_string()
                 );
-                return Err(Box::new(Diagnostic::new(Severity::Error, ErrorCode::ProfileVectors, message).with_hint(
-                    "Fix the value, or make it a Reject: profiles add rules to the schema, they don't relax it.",
-                )));
+                return Err(Box::new(
+                    Diagnostic::new(Severity::Error, ErrorCode::ProfileVectors, message)
+                        .with_hint("Fix the value, or make it a Reject: rules add to the schema, they don't relax it."),
+                ));
             }
         }
     }

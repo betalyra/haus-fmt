@@ -10,8 +10,8 @@
 
 use super::{Json, JsonNumber, JsonObject, ToJson, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::ser::{check_bytes, check_key, check_length, check_number, check_tag, check_tag_length};
-use crate::{Codec, EncodeError, Encoder, ErrorCode, Secret, Segment, Value};
+use crate::ser::{check_bytes, check_key, check_length, check_number, check_tag};
+use crate::{Codec, Encode, EncodeError, Encoder, ErrorCode, Rule, Secret, Segment, Value};
 use std::collections::BTreeMap;
 
 type R = Result<Json, EncodeError>;
@@ -69,7 +69,8 @@ fn with_tag(tag: &str, members: JsonObject) -> Result<Json, crate::ValueError> {
 
 /// A case with `N` positional values: `{"_tag": "Empty"}`, `{"_tag": "Wrap",
 /// "value": 3}`, `{"_tag": "Point", "values": [1, 2]}`. The values are
-/// encoded inside the payload, a level of the haus value.
+/// encoded inside the payload, a level of the haus value. An error is at
+/// its place in the haus value (`$[1]`, spec §15), as when encoding to haus.
 pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder) -> [R; N]) -> R {
     check_tag(tag, e.limits())?;
     let tag_member = member("_tag", Json::String(tag.to_owned()));
@@ -77,12 +78,10 @@ pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder
         e.step()?;
         return Ok(Json::Object(JsonObject::from_unique(vec![tag_member])));
     }
-    let mut values = values(if N == 1 { e.payload()? } else { e.nested()? }).into_iter().enumerate().map(|(i, v)| {
-        v.map_err(|e| match N {
-            1 => e.within(Segment::Field("value".into())),
-            _ => e.within(Segment::Index(i)).within(Segment::Field("values".into())),
-        })
-    });
+    let mut values = values(if N == 1 { e.payload()? } else { e.nested()? })
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| v.map_err(|e| e.within(Segment::Index(i)).within(Segment::Tag(tag.to_owned()))));
     Ok(Json::Object(JsonObject::from_unique(match N {
         1 => vec![tag_member, member("value", values.next().unwrap_or(Ok(Json::Null))?)],
         _ => vec![tag_member, member("values", Json::Array(values.collect::<Result<_, _>>()?))],
@@ -109,28 +108,12 @@ pub(crate) fn no_json_form_reason(tag: &str, field: &str) -> String {
 /// An unknown value: `{"_tag": "Hexagon"}`, with `"_args"`, the arguments'
 /// self-describing values (without the envelope), if it has any (spec §16.3).
 pub fn unknown(u: &Unknown, e: Encoder) -> R {
-    check_tag_length(&u.tag, e.limits())?;
+    e.check_unknown(u)?;
     let tag = member("_tag", Json::String(u.tag.to_string()));
     if u.args.is_empty() {
-        e.step()?;
         return Ok(Json::Object(JsonObject::from_unique(vec![tag])));
     }
-    // `Tag { … }`: the record is the payload's only level.
-    let inner = match u.args.as_slice() {
-        [Value::Record(_)] => e,
-        _ => e.nested()?,
-    };
-    let args = u
-        .args
-        .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            super::haus_json::to_value_at(a, inner.limits(), inner.depth())
-                .map_err(|e| e.within(Segment::Index(i)).within(Segment::Field("_args".into())))
-        })
-        .collect::<Result<_, _>>()?;
-    // Checked against the depth limit above, so counting doesn't recurse deeper.
-    e.steps(1 + u.args.iter().map(crate::ser::size).sum::<u64>())?;
+    let args = u.args.iter().map(super::haus_json::to_value).collect();
     Ok(Json::Object(JsonObject::from_unique(vec![tag, member("_args", Json::Array(args))])))
 }
 
@@ -180,11 +163,14 @@ pub fn result<A, E>(
     }
 }
 
-/// `Secret a`: the value in full (the receiver needs it); an error says
-/// only that it isn't a valid `what`, never where in it (spec §15).
+/// `Secret a`: refused unless the encoder reveals secrets (`cannot-encode`,
+/// at the secret, spec §15); revealed, the value in full, and an error says
+/// only that it isn't a valid `what`, never where in it.
 pub fn secret<T>(s: &Secret<T>, e: Encoder, what: &str, f: impl FnOnce(&T, Encoder) -> R) -> R {
-    f(s.expose(), e)
-        .map_err(|_| EncodeError::new(ErrorCode::InvalidSecret, format!("not a valid {what} (the value is hidden)")))
+    match e.reveals_secrets() {
+        true => f(s.expose(), e).map_err(|_| crate::ser::invalid_secret(what)),
+        false => Err(crate::ser::refused_secret(what)),
+    }
 }
 
 /// A type with a codec: back to its base type, then written.
@@ -193,6 +179,23 @@ where
     C::Base: ToJson,
 {
     C::encode(x).to_json_with(e)
+}
+
+/// A value `x` of a type with the package rule `Ru` (packages.md §6): the
+/// rule decides on the haus value `x` encodes to, and a value it rejects is
+/// `cannot-encode`, at the place of the type; then `x` is written.
+pub fn ruled<Ru: Rule, T: Encode + ToJson + ?Sized>(x: &T, e: Encoder) -> R {
+    crate::ser::ruled::<Ru>(x.encode_with(e)?)?;
+    x.to_json_with(e)
+}
+
+/// A type with the package rule `Ru` and the codec `C`: back to its base
+/// type, checked by the rule, then written.
+pub fn codec_ruled<C: Codec, Ru: Rule>(x: &C::Target, e: Encoder) -> R
+where
+    C::Base: ToJson,
+{
+    ruled::<Ru, _>(&C::encode(x), e)
 }
 
 impl<T: ToJson + ?Sized> ToJson for &T {
@@ -240,13 +243,12 @@ impl<A: ToJson, E: ToJson> ToJson for Result<A, E> {
     }
 }
 
-/// `Any`: its self-describing value (spec §16.2), without the envelope,
-/// checked against the limits.
+/// `Any`: its self-describing value (spec §16.2), without the envelope, if
+/// it nests within the depth limit here.
 impl ToJson for Value {
     fn to_json_with(&self, e: Encoder) -> R {
-        let json = super::haus_json::to_value_at(self, e.limits(), e.depth())?;
-        e.steps(crate::ser::size(self))?;
-        Ok(json)
+        e.check(self)?;
+        Ok(super::haus_json::to_value(self))
     }
 }
 impl ToJson for Unknown {

@@ -39,14 +39,16 @@ fn main() -> Result<(), haus::Error> {
     // Encoding with the same codecs gives back the same haus text.
     println!("{}", haus::to_string(&typed)?);
 
-    // Codecs add rules on top of the schema's: Eur is a valid tag, but not ISO-shaped.
+    // The package's rule (money's iso) runs before any codec, with or without
+    // them: Eur is a valid tag, but not a currency of the rule.
     let eur = ORDER.replace("EUR", "Eur");
-    if haus::from_str::<plain::Root>(&eur).is_ok() {
-        println!("Eur without codecs: accepted");
+    if let Err(e) = haus::from_str::<plain::Root>(&eur) {
+        println!("Eur without codecs: {e}");
     }
     if let Err(e) = haus::from_str::<typed::Root>(&eur) {
         println!("Eur with codecs: {e}");
     }
+    // A codec may reject more: Cents takes 2 decimal places at most.
     if let Err(e) = haus::from_str::<typed::Root>(&ORDER.replace("44.40", "44.405")) {
         println!("44.405 with codecs: {e}");
     }

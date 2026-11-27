@@ -28,6 +28,9 @@ struct Case {
     code: String,
     /// For an `Err`, where it fails: `$.items[2].price`.
     path: String,
+    /// For an `Ok`, the places of its secrets: encoding without revealing
+    /// secrets fails with `cannot-encode` at one of them (spec §15).
+    secrets: Vec<String>,
 }
 
 impl Case {
@@ -43,18 +46,22 @@ impl Case {
         match (fields.get("type"), fields.get("input")) {
             (Some(Value::String(ty)), Some(input)) => Ok(Case {
                 ok,
-                ty: ty.clone(),
+                ty: ty.to_string(),
                 input: input.clone(),
                 output: fields.get("output").unwrap_or(input).clone(),
                 code: match fields.get("code") {
-                    Some(Value::String(code)) => code.clone(),
+                    Some(Value::String(code)) => code.to_string(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a code: {}", canonical(v))),
                 },
                 path: match fields.get("path") {
-                    Some(Value::String(path)) => path.clone(),
+                    Some(Value::String(path)) => path.to_string(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a path: {}", canonical(v))),
+                },
+                secrets: match fields.get("secrets") {
+                    Some(Value::Array(places)) => places.iter().filter_map(|p| p.as_str()).map(str::to_owned).collect(),
+                    _ => vec![],
                 },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
@@ -73,15 +80,25 @@ impl Case {
             return Some(format!("no type {}", self.ty));
         };
         match (self.ok, result) {
-            (true, Ok(encoded)) if canonical(&encoded) == canonical(&self.output) => {
-                // The writer takes it too (it checks what it writes).
-                haus::ser::write(&encoded).err().map(|e| format!("encoded, but can't be written: {e}"))
-            }
-            (true, Ok(encoded)) => {
+            (true, Ok((encoded, _))) if canonical(&encoded) != canonical(&self.output) => {
                 Some(format!("encoded as {}, expected {}", canonical(&encoded), canonical(&self.output)))
             }
+            // Without revealSecrets: refused at one of its secrets, or encoded as with it.
+            (true, Ok((_, None))) if self.secrets.is_empty() => None,
+            (true, Ok((_, None))) => Some(format!("encoded without revealing its secrets at {:?}", self.secrets)),
+            (true, Ok((_, Some((code, place))))) if self.secrets.is_empty() => {
+                Some(format!("can't be encoded without revealSecrets: {code} at {place}"))
+            }
+            (true, Ok((_, Some((code, place))))) => {
+                match code == haus::ErrorCode::CannotEncode && self.secrets.contains(&place) {
+                    true => None,
+                    false => Some(format!("refused with {code} at {place}, expected a secret at {:?}", self.secrets)),
+                }
+            }
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
-            (false, Ok(encoded)) => Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded))),
+            (false, Ok((encoded, _))) => {
+                Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded)))
+            }
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
             }

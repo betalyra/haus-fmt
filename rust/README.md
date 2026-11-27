@@ -6,7 +6,7 @@
 | [`haus-fmt-schema`](haus-schema) | Imported as `haus_schema`. Schema files parsed, their imports resolved (std/time, schema packages, relative files) and checked (spec §14); data decoded and checked against them at runtime (spec §15), with positions, hints for unknown and deprecated fields and tags, and `Secret`s never shown. What `haus check` uses. Passes the schema conformance suite. |
 | [`haus-fmt-build`](haus-build) | Imported as `haus_build`. Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. Uses `haus-fmt-schema` for parsing and resolving schemas. |
 | [`haus-build-tests`](haus-build-tests) | Tests of the generated code. |
-| [`haus-fmt-money`, `haus-fmt-geo`](../extensions) | Imported as `haus_money`, `haus_geo`. The official schema packages, as crates. |
+| [`haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-uuid`](../extensions) | Imported as `haus_money`, `haus_geo`, `haus_uuid`. The official schema packages, as crates: their types, their rules (checked by default) and codecs. |
 
 ## Examples
 
@@ -24,8 +24,19 @@ In VS Code, rust-analyzer needs the build scripts to have run. If it reports
 
 ## Checking data at runtime
 
+Reading is apart from compiling (packages.md §2): `Sources::read` reads a
+schema file and the files its relative imports reach, `Package::read` a
+package's directory (`read_folder` a folder of them), and `Sources::make` /
+`Package::make` make the same from data the program has from anywhere (a
+database, a URL, memory). `Schema::compile` takes them and reads no file.
+
 ```rust
-let schema = haus_schema::Schema::load("order.schema.haus", &haus_schema::NoImports)?;
+use haus_schema::{Package, Schema, Sources};
+
+let sources = Sources::read("order.schema.haus")?
+    .with_package(Package::make(haus_money::MANIFEST, haus_money::SCHEMA)?.with_rule::<haus_money::rules::Iso>())?
+    .with_package(Package::read("vendor/acme-ids")?.shape_only())?;  // its rules not checked
+let schema = Schema::compile(&sources)?;                          // missing-codec if a rule is neither
 for issue in schema.check_text("Root", &text) {                  // every problem, with positions and hints
     let at = issue.position.unwrap();
     println!("{}:{}: {} {}", at.line, at.column, issue.severity, issue);
@@ -35,13 +46,24 @@ println!("{decoded}");                                           // its secrets 
 let value = decoded.reveal();                                    // a haus::Value, secrets and all
 ```
 
+A package's rules (its manifest's `rules`, packages.md §4, §6) are checked
+when decoding, on the value the schema decoded: a value one rejects is
+`codec-rejected`. The program supplies the implementation of each rule the
+schema reaches (`Package::with_rule::<R>()`, `R: haus::Rule`; the official
+crates export theirs, `haus_money::rules::Iso`), or takes the package
+shape-only (`Package::shape_only`); otherwise compiling fails with
+`missing-codec`, naming the type and its rule. `Schema::load` (the files and
+packages read and compiled in one step, with a `Locator`) stays for tools.
+
 `decode` gives a `haus_schema::Decoded`: the decoded value, in which every
 `Secret` stays hidden (spec §15, "Secrets"). `Debug` and `Display` show a
 secret as `<redacted>`, and the canonical form, the hash, `compare` and the
 writers take a `haus::Value`, which can't hold one: `reveal()` makes the value
 one, secrets and all, and only when the code asks. `as_value()` gives the
 value of one without secrets. `schema.encode("Root", &decoded)` encodes with
-the schema, the secrets in full (the receiver needs them).
+the schema and refuses a secret (`cannot-encode`, at the secret);
+`schema.encode_with("Root", &decoded, &EncodeOptions { reveal_secrets: true, .. })`
+writes them in full, by the program's choice (spec §15, "Encoding a secret").
 
 `check_text` reports every error (spec §14, "Every error") and the hints, up
 to `MAX_ERRORS` (200) errors, hints not counted: each error once (a record
@@ -85,8 +107,10 @@ let order: order::Root = haus::json::from_str(&json)?;
 | `Secret a` | `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`; `expose()` / `into_inner()` give the value |
 | `@deprecated("why")` on a type, field or tag | `#[deprecated(note = "why")]` |
 
-A `Secret` is written in full when encoded (the receiver needs it), but a
-decode or encode error inside it names only its place and type
+A `Secret` is refused when encoded (`cannot-encode`, at the secret, spec
+§15): a secret leaves the program only by its choice,
+`haus::to_string_with(&x, Encoder::default().reveal_secrets())`, which writes
+it in full. A decode or encode error inside it names only its place and type
 (`.password: not a valid Secret String (the value is hidden)`), never the value
 or a key inside it.
 The generated code allows its own use of deprecated items, so a crate gets
@@ -94,38 +118,43 @@ deprecation warnings only where it touches them. Attributes haus doesn't
 define (`@since`) are accepted and reported as Cargo warnings, as are uses of
 deprecated types in a schema and record cases with a field named `_tag` or
 `_args`, which have no schema-based JSON form (`no-json-form`);
-`Config::quiet()` turns them off. So is `missing-codec` (spec §13.4): the
-schema's types reach a type that an official profile has a rule for
-(`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`,
-`@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`) with no `.codec(…)` for its id, so its values are
-checked for their shape only. A type reached only inside a type with a codec
-doesn't count: a codec for `Money` (`haus_money::Iso`) covers its `Currency`.
-`haus-gen roc` prints the same warning for its `--codec`s.
+`Config::quiet()` turns them off.
 
-Writing checks what it writes, so `haus::to_string` returns a `Result`.
-`haus::to_string_minimised` writes the minimised layout of spec §11
-(`Person{name:"Ada",age:36}`) instead of the compact one, for the wire and
-storage, with the same checks.
+**Package rules** (packages.md §6, §7). A type whose package gives it a rule
+(its manifest's `rules`: `@haus-fmt/money@1#Currency` has `iso`) is checked
+by the generated code on every value the schema decodes, before any codec,
+whatever codecs are set: `Money(19.90, Bitcoin)` is `codec-rejected`, and
+encoding a value the rule rejects is `cannot-encode`. The implementation is
+the package crate's (`haus_build::Config::with_rule` in its build script,
+passed on through Cargo); an application supplies one for a package whose
+crate has none (`.with_rule("@acme/ids@1#Id", "crate::rules::Ulid")`, a type
+implementing `haus::Rule`) or takes the package shape-only
+(`.shape_only("@acme/ids")`). A reached rule with neither fails the build
+with `missing-codec`. A codec only chooses the Rust type (and may reject
+more); a codec for a type that can't have one (a generic type, a `Stream`
+definition) fails the build as a mistake of its configuration (`Log is a
+Stream: set the codec for Entry`). `haus-gen roc` keeps rules as codecs for
+now and warns (`missing-codec`) for each reached rule without a `--codec`.
+
+Encoding a Rust value can fail, so `haus::to_string` returns a `Result`;
+writing a `haus::Value` can't (`haus::ser::write`, `write_minimised`,
+`haus::to_haus_json`, below). `haus::to_string_minimised` writes the
+minimised layout of spec §11 (`Person{name:"Ada",age:36}`) instead of the
+compact one, for the wire and storage.
 `Encode::encode_with` (and `ToJson::to_json_with`) take a `haus::Encoder`,
 which carries the limits and counts the depth while the native value is
-traversed: a value nested deeper than the limit fails there with the writer's
+traversed: a value nested deeper than the limit fails there with the encoder's
 error (`[0][0]…: nesting deeper than 256 levels`), however deep it goes. It
 also counts the values it makes, against the node limit
 (`Limits::max_nodes`, 64 Mi): a value whose parts are shared, an `Rc`
 reached many times (a DAG), fails with `too-many-nodes` instead of expanding
-without bound (spec §7, §9.8). `Decode::decode_with` takes a `haus::Decoder` in
-the same way: a `Value` built in code, which no parser limited, fails with
-`nesting-too-deep` at the depth limit before decoding recurses past it, also
-inside an `Any` or the payload of an unknown tag. Any
-other failure comes from a `haus::Value` built in code, the raw value of an
-`Any` or an unknown variant, beyond the limits (spec §7, §11): nesting
-(`nesting-too-deep`, a record that is a tag's only payload sharing the
-payload's level), the length of strings, keys and tags (`string-too-long`,
-`key-too-long`, `tag-too-long`), the length and exponent of numbers
-(`.extra: number literal longer than 1000 characters`,
-`exponent-too-large`), and the values written (`too-many-nodes`, at `$`).
-For a reader with other limits,
-`haus::to_string_with(&value, &limits)` checks those: integers are written in
+without bound (spec §7, §9.8). It checks the strings, keys, tags and numbers
+it makes against its limits (`string-too-long`, `key-too-long`,
+`tag-too-long`, `number-too-long`, `exponent-too-large`), and a raw value
+(an `Any`, an unknown variant's payload) for its depth where it is put: the
+value keeps the lengths it was built with (spec §7). `Decode::decode_with`
+takes a `haus::Decoder` in the same way. For a reader with other limits,
+`haus::to_string_with(&x, Encoder::new(&limits))`: integers are written in
 decimal, and one longer than its number limit is an `EncodeError`
 (`number-too-long`).
 
@@ -149,12 +178,18 @@ Record::from_fields([("a", Value::from(1)), ("b", Value::from(Tag::new("None")?)
 ```
 
 `Number::new` normalizes the literal as the parser does (`1E+05` is `1e5`,
-`0xFF` is `255`, `1_000` is `1000`), with no limit on its length or
-exponent: constructors check only that a value is valid, and limits are the
-writer's. `Record::insert` rejects a key the record has already
-(`duplicate-key`, leaving the record as it was) rather than replacing its
-value; to change a field, use `Record::get_mut`. It takes time linear in the
-key, also for records with many keys. `Number` and `Tag` deref to their
+`0xFF` is `255`, `1_000` is `1000`). Every constructor checks the default
+limits of spec §7 where the value is built (`string-too-long`,
+`key-too-long`, `tag-too-long`, `number-too-long` on the normalized literal,
+`exponent-too-large`, `nesting-too-deep`; the `with_limits` constructors take
+others), so a value that exists is read back by a reader with the default
+limits, and the writers, `canonical`, `hash`, `hash_all`, `equals` and
+`compare` have no error. A value's parts are reached by shared reference
+only, so a value doesn't change once built (spec §11) and needs no node
+count: its parts can't share each other. `Record::insert` rejects a key the
+record has already (`duplicate-key`, leaving the record as it was) rather
+than replacing its value. It takes time linear in the key, also for records
+with many keys. `Number` and `Tag` deref to their
 text, and a `Tag` compares with a `&str` (`tag == "None"`). The JSON value
 type is checked the same way: `haus::json::JsonNumber::new` takes only a JSON
 number, and a `haus::json::JsonObject` (`Json::Object`) has each member name
@@ -192,7 +227,7 @@ directory there that can't be listed is `import-not-found`). Messages show
 paths relative to the root. Every schema
 file is read as a regular file, opened by its real path without following
 a link and without blocking. Packages are given explicitly or come from
-Cargo: this binding never looks in `node_modules`.
+Cargo: this binding searches for none (no `node_modules`).
 
 Schema packages are ordinary dependencies: a crate with `package.haus` and
 `schema.haus`, `links = "<its library name>"`, `haus_build::package()` in its
@@ -234,8 +269,11 @@ from `Packages::files()`.
   (an error without a code: `Error::code()` is `None`), and one for an id the
   schema has no type for fails it with `unused-codec`.
 - A codec gets the value as the schema decoded it (its `Base`), never what
-  the codecs of its parts made of it, so a profile's rule holds whatever codec
-  you set for a part.
+  the codecs of its parts made of it, and a package's rule is checked before
+  it, so a rule holds whatever codec you set for a type or a part.
+- A codec for a type that can't have one (a generic type, `prelude#Maybe`, a
+  `Stream` definition) fails the build as a mistake of its configuration,
+  naming why: `Log is a Stream: set the codec for Entry`.
 - A codec runs also when a whole value is decoded as its type (spec §13.4).
   The generated name of one of your types with a codec is the codec's host
   type, `pub type Money = haus::Coded<crate::Cents>`, so decoding as `Money`
@@ -243,8 +281,11 @@ from `Packages::files()`.
   `MoneyBase`. A package's types are its crate's: decode one through a codec
   as `haus::Coded<C>`: `haus::from_str::<haus::Coded<haus_money::Iso>>(text)`.
 
-The official profiles (spec §13.3) are codecs of the official crates. They
-reject what the profile rejects and keep the value (spec §13.4):
+The official crates carry their packages' rules (`haus_money::rules::Iso`,
+`haus_geo::rules::{Wgs84, Wgs84BBox}`, `haus_uuid::rules::Rfc9562`, each a
+`haus::Rule`), which the generated code checks wherever the type is decoded or
+encoded, with or without codecs. They also have codecs, which only choose a
+Rust type for the values the rule accepts and keep the value (spec §13.4):
 
 | Crate | Codec | For | Rust type |
 |---|---|---|---|
@@ -264,8 +305,7 @@ haus_build::Config::new()
     .compile("app.schema.haus")?;
 ```
 
-Register both codecs of a package: `Iso` alone leaves a `Currency` outside a
-`Money` unchecked, `Wgs84` alone leaves a `BBox`'s latitude order unchecked.
+Each codec is optional: the rules are checked without them.
 
 Streams (spec §6) are read as the values arrive: `haus::stream::decode::<T, _>(reader)`
 is an iterator over any `std::io::Read`, and `haus::stream::encode` writes one value per
@@ -460,8 +500,10 @@ which Rust keeps as `Circle(Disc)`, writes the same as `Circle { r: Float64 }`),
 arguments' self-describing values, and `Any` its self-describing value, both
 without the envelope. A `Maybe` is
 `null` or the value when its inner JSON can't be `null`, and tagged otherwise:
-each type says so in `ToJson::NULLABLE`. A `Secret` is written in full, and a
-read error inside it names only its place and type. A record payload with a
+each type says so in `ToJson::NULLABLE`. A `Secret` is refused
+(`cannot-encode`, at its place in the haus value) unless the encoder reveals
+secrets (`haus::json::to_string_with(&x, Encoder::default().reveal_secrets())`),
+and a read error inside it names only its place and type. A record payload with a
 field named `_tag` or `_args` has no schema-based form: writing or reading it
 is an error. Writers escape DEL, C1 and bidi controls as well as what JSON
 requires; the self-describing reader rejects them raw.

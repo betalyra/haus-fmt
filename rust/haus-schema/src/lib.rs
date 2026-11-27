@@ -37,7 +37,14 @@
 //!   result is a [`Decoded`]: its secrets print as `<redacted>`, and only
 //!   [`Decoded::reveal`] makes it a [`haus::Value`] again, which the
 //!   canonical form, the hash and the writers take (spec §15, "Secrets").
-//!   [`Schema::encode`] encodes it with the schema, the secrets in full.
+//!   [`Schema::encode`] encodes it with the schema, refusing its secrets
+//!   unless asked to reveal them ([`EncodeOptions::reveal_secrets`]).
+//! - Package rules (packages.md §6, §7): the program's implementations of
+//!   the rules of the packages it uses ([`Options::rules`], [`PackageRule`]),
+//!   checked when decoding on the value the schema decoded; a schema that
+//!   reaches a rule without one is `missing-codec`, unless its package is
+//!   taken shape-only ([`Options::shape_only`]). Each package's manifest
+//!   `rules` field is checked when it is reached.
 //! - [`Schema::check_text`] and [`Schema::check`]: every problem in a data file
 //!   (up to 200 errors; hints don't count), with positions, and hints for
 //!   fields and tags an open type doesn't list and for deprecated ones: what
@@ -47,9 +54,8 @@
 //!   they stopped at the cap. A `Stream` is checked item by item: a syntax
 //!   error ends the check after the items before it. [`Schema::check_stream`]
 //!   checks a stream's values as they arrive, with one cap for all of them.
-//! - [`Schema::missing_codecs`]: the `missing-codec` warnings for code
-//!   generated with a set of codecs, and [`profiles::unchecked_profiles`]
-//!   the notes of tools without codecs (spec §13.4).
+//! - [`rules::unchecked_rules`]: the hints of tools that check data without
+//!   a program to supply rules (packages.md §7, "Tools").
 //! - [`Locator`]: where packages are: [`Explicit`] (packages given by the
 //!   user) and [`Packages`] (a Cargo crate's direct dependencies). This
 //!   binding never looks in `node_modules` (spec §13.3, "Installed packages").
@@ -67,17 +73,22 @@ mod files;
 mod locate;
 mod locator;
 pub mod packages;
-pub mod profiles;
 mod resolve;
+pub mod rules;
+mod sources;
 pub mod syntax;
 mod types;
 
-pub use check::{CheckOptions, CheckReport, Issue, MAX_ERRORS, Position, Segment, Severity, StreamCheck};
+pub use sources::{Folder, Package, PackageText, Sources, read_folder};
+
+pub use check::{
+    CheckOptions, CheckReport, EncodeOptions, Issue, MAX_ERRORS, Position, Segment, Severity, StreamCheck,
+};
 pub use decoded::Decoded;
 pub use files::FileCache;
 pub use locator::{Explicit, Location, Locator, NoImports, Or};
 pub use packages::{Manifest, Packages};
-pub use resolve::{Definition, Options, Schema, SchemaFile, SchemaPackage};
+pub use resolve::{Definition, Options, PackageRule, Schema, SchemaFile, SchemaPackage, missing_rule};
 pub use types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 
 // A built schema, its types and its errors are Send and Sync (checked here,
@@ -100,6 +111,9 @@ const _: () = {
     shared::<Manifest>();
     shared::<Packages>();
     shared::<Explicit>();
+    shared::<Package>();
+    shared::<Sources>();
+    shared::<PackageRule>();
     shared::<syntax::File>();
 };
 

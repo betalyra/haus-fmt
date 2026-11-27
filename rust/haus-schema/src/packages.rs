@@ -37,12 +37,24 @@ pub const GRAPH: &str = "haus_graph.haus";
 /// it: `::haus_orders::__haus_deps::haus_money::Money`.
 pub const DEPS_MODULE: &str = "__haus_deps";
 
-/// `package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0" }`. Other
-/// fields are ignored.
+/// `package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0", rules: {
+/// "Currency": "iso" } }`. Other fields are ignored (packages.md §4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub name: String,
     pub version: String,
+    /// The `rules` field as written, if there is one: which of the
+    /// package's types have a rule (packages.md §4). It is checked when a
+    /// schema that reaches the package is compiled ([`Manifest::rules`]),
+    /// since its types need the package's schema; a broken one doesn't make
+    /// the manifest invalid.
+    pub rules: Option<haus::Value>,
+}
+
+/// A rule's name: `[a-z][a-z0-9-]*` (packages.md §4).
+pub fn is_rule_name(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 impl Manifest {
@@ -71,9 +83,10 @@ impl Manifest {
             return Err("a manifest is one record: { name: \"@org/name\", version: \"1.0.0\" }".into());
         };
         let field = |key: &str| match record.get(key) {
-            Some(haus::Value::String(s)) => Ok(s.clone()),
+            Some(haus::Value::String(s)) => Ok(s.to_string()),
             _ => Err(format!("the manifest needs a string field {key}")),
         };
+        let rules = record.get("rules").cloned();
         let (name, version) = (field("name")?, field("version")?);
         if !is_package_name(&name) {
             return Err(format!(
@@ -85,7 +98,37 @@ impl Manifest {
         if !is_semver(&version) {
             return Err(format!("\"{}\" is not a semantic version, like 1.2.0", quote(&version)));
         }
-        Ok(Manifest { name, version })
+        Ok(Manifest { name, version, rules })
+    }
+
+    /// The `rules` field (packages.md §4): each type's name and its rule's
+    /// name, in the order written; none without the field. Checked here: a
+    /// record, each value a string, each rule's name `[a-z][a-z0-9-]*`;
+    /// the error is the reason. The types are checked against the
+    /// package's schema when it is compiled.
+    pub fn rules(&self) -> Result<Vec<(String, String)>, String> {
+        let name = quote(&self.name);
+        let Some(field) = &self.rules else { return Ok(vec![]) };
+        let Some(record) = field.as_record() else {
+            return Err(format!(
+                "the rules of {name} are not a record from type names to rule names, like rules: {{ \"Currency\": \"iso\" }}"
+            ));
+        };
+        record
+            .iter()
+            .map(|(ty, rule)| match rule.as_str() {
+                Some(rule) if is_rule_name(rule) => Ok((ty.clone(), rule.to_owned())),
+                Some(rule) => Err(format!(
+                    "the rules of {name} give {} the rule \"{}\", which is not a rule's name: [a-z][a-z0-9-]*",
+                    quote(ty),
+                    quote(rule)
+                )),
+                None => Err(format!(
+                    "the rules of {name} give {} something other than one rule's name: a type has one rule, a string",
+                    quote(ty)
+                )),
+            })
+            .collect()
     }
 
     /// The package's schema file, `schema.haus` in its directory `dir`
@@ -151,7 +194,8 @@ pub(crate) fn is_semver(version: &str) -> bool {
         && build.is_none_or(|b| b.split('.').all(ident))
 }
 
-pub struct Package {
+/// A schema package among a crate's dependencies (Cargo, packages.md §3).
+pub struct Crate {
     pub manifest: Manifest,
     /// Its directory, with the manifest.
     pub dir: PathBuf,
@@ -166,15 +210,31 @@ pub struct Package {
     /// dependency's (from its [`GRAPH`]): that dependency's crate. Only
     /// packages' files import it; `krate` is a path through that crate.
     pub through: Option<String>,
+    /// The implementations of its rules its crate has (packages.md §3:
+    /// "the crate's generated code carries the implementations"): each type
+    /// id, and the path in the crate of a type implementing `haus::Rule`
+    /// (`iso::Iso`, for `::haus_money::iso::Iso`).
+    pub rules: Vec<(String, String)>,
+}
+
+/// The rules metadata of a package crate (`haus_rules`): `id=path` pairs
+/// separated by `;`, each path in the crate (`iso::Iso`).
+pub fn rules_metadata<'a>(rules: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
+    rules.into_iter().map(|(id, path)| format!("{id}={path}")).collect::<Vec<_>>().join(";")
+}
+
+/// The rules of [`rules_metadata`] again.
+fn parse_rules(text: &str) -> Vec<(String, String)> {
+    text.split(';').filter_map(|pair| pair.split_once('=')).map(|(id, p)| (id.to_owned(), p.to_owned())).collect()
 }
 
 /// The schema packages among a crate's direct dependencies, and those their
 /// schemas reach: a [`Locator`] for build scripts. The direct ones count as
 /// declared: Cargo lets a crate use only its direct dependencies. The others
-/// only packages' files import (see [`Package::through`]).
+/// only packages' files import (see [`Crate::through`]).
 #[derive(Default)]
 pub struct Packages {
-    packages: Vec<Package>,
+    packages: Vec<Crate>,
     /// The [`GRAPH`]s they were read from.
     graphs: Vec<PathBuf>,
 }
@@ -195,9 +255,10 @@ impl Packages {
         let direct = links
             .iter()
             .map(|(links, dir)| {
-                let package = Package::load(Path::new(dir), var(&format!("DEP_{links}_HAUS_CRATE"))?)?;
+                let package = Crate::load(Path::new(dir), var(&format!("DEP_{links}_HAUS_CRATE"))?)?;
+                let rules = env::var(format!("DEP_{links}_HAUS_RULES")).map(|r| parse_rules(&r)).unwrap_or_default();
                 // Set by haus-fmt-build 0.1.1 and later.
-                Ok(Package { version: env::var(format!("DEP_{links}_HAUS_VERSION")).ok(), ..package })
+                Ok(Crate { version: env::var(format!("DEP_{links}_HAUS_VERSION")).ok(), rules, ..package })
             })
             .collect::<Result<Vec<_>>>()?;
         let mut packages = Packages { packages: direct, graphs: vec![] };
@@ -214,6 +275,7 @@ impl Packages {
                 packages = packages.through(Path::new(&entry.dir), &krate)?;
                 if let Some(p) = packages.packages.last_mut() {
                     p.version = entry.version;
+                    p.rules = entry.rules.as_deref().map(parse_rules).unwrap_or_default();
                 }
             }
         }
@@ -222,7 +284,7 @@ impl Packages {
 
     /// With the package in `dir`, whose types are in the crate `krate`.
     pub fn with(mut self, dir: &Path, krate: &str) -> Result<Packages> {
-        self.packages.push(Package::load(dir, krate.to_owned())?);
+        self.packages.push(Crate::load(dir, krate.to_owned())?);
         Ok(self)
     }
 
@@ -231,7 +293,7 @@ impl Packages {
     /// `haus_orders::__haus_deps::haus_money`. Only packages' files import it.
     pub fn through(mut self, dir: &Path, krate: &str) -> Result<Packages> {
         let via = krate.split("::").next().unwrap_or(krate).to_owned();
-        self.packages.push(Package { through: Some(via), ..Package::load(dir, krate.to_owned())? });
+        self.packages.push(Crate { through: Some(via), ..Crate::load(dir, krate.to_owned())? });
         Ok(self)
     }
 
@@ -247,11 +309,13 @@ impl Packages {
                 let dir = p.dir.to_str().ok_or_else(|| {
                     Error::at(&p.dir, ErrorCode::ImportNotFound, "the directory of a schema package must be UTF-8")
                 })?;
+                let rules = rules_metadata(p.rules.iter().map(|(id, path)| (id.as_str(), path.as_str())));
                 Ok(BTreeMap::from([
                     ("name".to_owned(), name.to_owned()),
                     ("dir".to_owned(), dir.to_owned()),
                     ("krate".to_owned(), p.krate.clone()),
                     ("version".to_owned(), version),
+                    ("rules".to_owned(), rules),
                 ]))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -259,7 +323,7 @@ impl Packages {
     }
 
     /// The one package called `name`.
-    pub fn find(&self, name: &str) -> Result<&Package> {
+    pub fn find(&self, name: &str) -> Result<&Crate> {
         match self.packages.iter().filter(|p| p.manifest.name == name).collect::<Vec<_>>().as_slice() {
             [one] => Ok(one),
             [] => Err(Error::new(
@@ -277,7 +341,7 @@ impl Packages {
     }
 
     /// The packages.
-    pub fn iter(&self) -> impl Iterator<Item = &Package> {
+    pub fn iter(&self) -> impl Iterator<Item = &Crate> {
         self.packages.iter()
     }
 
@@ -313,6 +377,7 @@ struct Entry {
     dir: String,
     krate: String,
     version: Option<String>,
+    rules: Option<String>,
 }
 
 /// The entries of the [`GRAPH`] at `path`, which a dependency's build script wrote.
@@ -324,9 +389,9 @@ fn read_graph(path: &Path) -> Result<Vec<Entry>> {
         .into_iter()
         .map(|mut e| {
             let mut take = |key: &str| e.remove(key);
-            let (dir, krate, version) = (take("dir"), take("krate"), take("version"));
+            let (dir, krate, version, rules) = (take("dir"), take("krate"), take("version"), take("rules"));
             match (dir, krate) {
-                (Some(dir), Some(krate)) => Ok(Entry { dir, krate, version }),
+                (Some(dir), Some(krate)) => Ok(Entry { dir, krate, version, rules }),
                 _ => Err(Error::at(path, ErrorCode::ImportNotFound, "an entry without its dir or krate")),
             }
         })
@@ -338,8 +403,8 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     a == b || b.canonicalize().is_ok_and(|b| a == b)
 }
 
-impl Package {
-    fn load(dir: &Path, krate: String) -> Result<Package> {
+impl Crate {
+    fn load(dir: &Path, krate: String) -> Result<Crate> {
         let dir = &dir.canonicalize().map_err(|e| Error::at(dir, ErrorCode::ImportNotFound, e))?;
         let mut files = FileCache::new();
         let (manifest, _) = files.manifest(dir)?;
@@ -351,7 +416,7 @@ impl Package {
         let file = syntax::parse_with_imported_spreads(&text).map_err(|e| Error::from(e).in_file(&path))?;
         imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&path))?;
         let types = file.types.into_iter().map(|t| (t.name, t.params.len())).collect();
-        Ok(Package { manifest, dir: dir.to_owned(), krate, version: None, types, through: None })
+        Ok(Crate { manifest, dir: dir.to_owned(), krate, version: None, types, through: None, rules: vec![] })
     }
 }
 

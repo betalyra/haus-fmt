@@ -26,7 +26,7 @@ fn text<'a>(fields: &'a Value, key: &str) -> &'a str {
 fn show(v: &Value) -> String {
     let Value::Variant { tag, args } = v else { panic!("not an entry: {}", canonical(v)) };
     let args = args.iter().map(|a| match a {
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Number(n) => n.to_string(),
         other => canonical(other),
     });

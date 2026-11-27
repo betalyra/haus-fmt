@@ -24,8 +24,8 @@
 //! types contain (the codec closure, spec §13.4).
 //!
 //! travel.schema.haus uses a package (packages/travel) that uses the
-//! official packages: tests/profiles.rs uses its types with the codecs of
-//! their profiles (`haus_money::Iso`, `haus_geo::Wgs84`, …), and
+//! official packages: tests/rules.rs uses its types with the codecs of
+//! their crates (`haus_money::Iso`, `haus_geo::Wgs84`, …), and
 //! looser.schema.haus with iso's codec for Money and a looser one of its
 //! own for Currency (the vectors' `looser`).
 
@@ -100,19 +100,25 @@ fn json_module(text: &str) -> String {
 pub mod schema_based {{
     include!(concat!(env!("OUT_DIR"), "/suite_json_schema_based.rs"));
 
-    fn write_as<T: ::haus::Decode + ::haus::ToJson>(v: &::haus::Value) -> Result<String, String> {{
+    /// Written with revealSecrets, and the code and place of the error of
+    /// writing it without (spec §15, "Encoding a secret").
+    pub type Written = (String, Option<(::haus::ErrorCode, String)>);
+
+    fn write_as<T: ::haus::Decode + ::haus::ToJson>(v: &::haus::Value) -> Result<Written, String> {{
         let x = T::decode(v).map_err(|e| format!("can't decode the input: {{e}}"))?;
-        ::haus::json::to_string(&x).map_err(|e| format!("can't write it as JSON: {{e}}"))
+        let revealing = ::haus::Encoder::default().reveal_secrets();
+        let json = ::haus::json::to_string_with(&x, revealing).map_err(|e| format!("can't write it as JSON: {{e}}"))?;
+        Ok((json, ::haus::json::to_string(&x).err().map(|e| (e.code, e.place()))))
     }}
 
     fn read_as<T: ::haus::FromJson + ::haus::Encode>(json: &str) -> Result<::haus::Value, ::haus::Error> {{
         let x = ::haus::json::from_str::<T>(json)?;
-        Ok(::haus::Encode::encode(&x)?)
+        Ok(::haus::Encode::encode_with(&x, ::haus::Encoder::default().reveal_secrets())?)
     }}
 
     /// Decode `x` with the type `ty`, and write the result as schema-based JSON;
     /// None if there is no such type.
-    pub fn write(ty: &str, x: &::haus::Value) -> Option<Result<String, String>> {{
+    pub fn write(ty: &str, x: &::haus::Value) -> Option<Result<Written, String>> {{
         Some(match ty {{
 {write}            _ => return None,
         }})
@@ -161,9 +167,13 @@ fn dispatch(names: &[String]) -> String {
         r#"/// The suite's schema files: `numbers` for numbers.schema.haus.
 pub const FILES: &[&str] = &[{files}];
 
+/// Encoded with revealSecrets, and the code and place of the error of
+/// encoding without (spec §15, "Encoding a secret").
+pub type Encoded = (::haus::Value, Option<(::haus::ErrorCode, String)>);
+
 /// Decode `v` with the type `ty` of the schema `file` (without its attributes
 /// if `bare`), then encode the result; None if there is no such type.
-pub fn roundtrip(file: &str, ty: &str, v: &::haus::Value, bare: bool) -> Option<Result<::haus::Value, ::haus::DecodeError>> {{
+pub fn roundtrip(file: &str, ty: &str, v: &::haus::Value, bare: bool) -> Option<Result<Encoded, ::haus::DecodeError>> {{
     match file {{
 {arms}        _ => None,
     }}
@@ -180,15 +190,19 @@ fn module(name: &str, text: &str) -> String {
         .map(|t| format!("            {t:?} => <{t} as ::haus::Decode>::decode(v).and_then(|x| encode(&x)),\n"))
         .collect();
     let roundtrip = format!(
-        r#"    /// Encode a decoded value again: an error says so, as a decode error.
+        r#"    /// Encode a decoded value again, with revealSecrets (an error says so,
+    /// as a decode error), and the error of encoding it without.
     #[allow(dead_code)]
-    fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{
-        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(e.code, format!("can't encode it again: {{e}}")))
+    fn encode<T: ::haus::Encode>(x: &T) -> Result<crate::suite::Encoded, ::haus::DecodeError> {{
+        let revealing = ::haus::Encoder::default().reveal_secrets();
+        let again = |e: ::haus::EncodeError| ::haus::DecodeError::new(e.code, format!("can't encode it again: {{e}}"));
+        let value = ::haus::Encode::encode_with(x, revealing).map_err(again)?;
+        Ok((value, ::haus::Encode::encode(x).err().map(|e| (e.code, e.place()))))
     }}
 
     /// Decode `v` with the type `ty`, then encode the result; None if the schema has no such type.
     #[allow(deprecated)]
-    pub fn roundtrip(ty: &str, v: &::haus::Value) -> Option<Result<::haus::Value, ::haus::DecodeError>> {{
+    pub fn roundtrip(ty: &str, v: &::haus::Value) -> Option<Result<crate::suite::Encoded, ::haus::DecodeError>> {{
         Some(match ty {{
 {arms}            _ => return None,
         }})

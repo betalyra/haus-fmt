@@ -458,7 +458,7 @@ fn string(i: &mut Input) -> ModalResult<String> {
         .context(expected(STRING_END));
     token(raw)
         .map(|raw: &str| match haus::parse(raw).as_deref() {
-            Ok([Value::String(s)]) => s.clone(),
+            Ok([Value::String(s)]) => s.to_string(),
             _ => raw.to_owned(),
         })
         .parse_next(i)

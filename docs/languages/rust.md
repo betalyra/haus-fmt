@@ -21,11 +21,11 @@ let value = haus::parse_one(r#"{ id: 7, total: 44.40, status: Shipped { tracking
 
 let total = value.get("total").and_then(|v| v.as_number()).unwrap();
 total.as_str();              // "44.40": exact, never a float
-haus::to_string(&value)?;    // { id: 7, total: 44.40, status: Shipped { tracking: "DE-4711" } }
+haus::ser::write(&value);    // { id: 7, total: 44.40, status: Shipped { tracking: "DE-4711" } }
 haus::canonical(&value);     // {id:7,status:Shipped{tracking:"DE-4711"},total:44.40}
 ```
 
-`haus::parse` reads a file of several values (a stream) into a `Vec<Value>`.
+`haus::parse` reads a file of several values (a stream) into a `Vec<Value>`. A `Value` is always a valid haus value: its constructors (`Value::number`, `Value::record`, …) check it when it is built and return a `Result`, so the writers, `canonical`, `hash`, `equals` and `compare` can't fail.
 
 ## With a schema
 
@@ -64,40 +64,42 @@ haus::from_str::<order::Order>(r#"{ id: 7, lines: [{ sku: "TEA-01", qty: -1 }], 
 To report every problem of a file with its position, as an editor does, use `haus_schema`:
 
 ```rust
-let schema = haus_schema::Schema::load("src/order.schema.haus", &haus_schema::NoImports)?;
+use haus_schema::{Schema, Sources};
+
+let schema = Schema::compile(&Sources::read("src/order.schema.haus")?)?;
 for issue in schema.check_text("Order", &text) {
     println!("{issue}");   // missing field qty at $.lines[0]
 }
 ```
 
+Reading is apart from compiling: `Sources::read` reads the schema file and the files it imports, `Package::read` a package's directory, and `Sources::make` and `Package::make` take the same as text from anywhere (a database, a URL). `Schema::compile` reads no file.
+
 What each haus type becomes: [host types](/docs/types#host-types-in-each-language).
 
 ## What else you need to know
 
-**Codecs** choose your Rust type for a haus type, by its id, in `build.rs`. The official profiles are codecs of the `haus-fmt-money` and `haus-fmt-geo` crates:
+**Packages** are crates. For the official ones, add `haus-fmt-money`, `haus-fmt-geo` or `haus-fmt-uuid` (`cargo add haus-fmt-money`), and `import @haus-fmt/money (Money)` works; don't rename the dependency. A package's **rules** come with its crate and are always checked, on the value the schema decoded, before any codec: `Money(19.90, Bitcoin)` is rejected (`codec-rejected`) whatever codecs you set.
+
+**Codecs** choose your Rust type for a haus type, by its id, in `build.rs`. A codec may reject more than the rule, never less:
 
 ```rust
 haus_build::Config::new()
-    .codec("@haus-fmt/money@1#Money", "haus_money::Iso")
-    .codec("@haus-fmt/money@1#Currency", "haus_money::IsoCurrency")
-    .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")
-    .codec("@haus-fmt/geo@1#BBox", "haus_geo::Wgs84BBox")
+    .codec("@haus-fmt/money@1#Money", "crate::codecs::Cents")   // your own, implementing haus::Codec
+    .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")         // the crate's: a Point type
     .compile("src/order.schema.haus")?;
 ```
 
-Without them, the build prints a [`missing-codec`](/docs/errors#missing-codec) Cargo warning for each profiled type, and only the shape is checked. Your own codec implements `haus::Codec` (a `jiff` date for `std/time#Date`, integer cents for `Money`). [What haus checks](/docs/checks)
-
-- **Packages.** A schema package is a crate: depend on it and `import @haus-fmt/money (Money)` works. Don't rename the dependency.
+A third-party package whose manifest gives a type a rule its crate doesn't implement fails the build with [`missing-codec`](/docs/errors#missing-codec): supply one (`.with_rule("@acme/ids@1#Id", "crate::rules::Ulid")`, a type implementing `haus::Rule`) or take the package shape-only (`.shape_only("@acme/ids")`). A codec for a type that can't have one (a generic type, a `Stream`) fails the build too. [What haus checks](/docs/checks)
 - **Streams.** `haus::stream::decode::<T, _>(reader)` iterates over any `std::io::Read`; `haus::stream::Reader` takes byte chunks and does no I/O, for async code. `haus::to_string_all` writes a comma after every value, a single one too; to format a log that holds one value so far as a stream, set `FormatOptions { stream: true, .. }` (`haus fmt --stream`). [Logs and streams](/docs/tours/streams)
 - **JSON.** `haus::json::to_string(&order)` writes schema-based JSON (`{"id":"7",…}`), `haus::json::from_str` reads it. [Coming from JSON](/docs/from-json)
 - **Integers.** `Int` is `haus::Int`, any size, kept as its digits; `to_i64()` and `to_i128()` convert it. Use `Int64` in the schema for a native integer.
-- **Secrets.** `Secret a` is `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`, `expose()` gives the value. Decoded at runtime with `haus_schema`, a value is a `Decoded` that hides its secrets the same way; `reveal()` makes it a `haus::Value`. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** `Secret a` is `haus::Secret<A>`: `Debug` and `Display` print `<redacted>`, `expose()` gives the value. Encoding refuses a secret (`cannot-encode`, at the secret) unless you ask for it: `haus::to_string_with(&config, haus::Encoder::default().reveal_secrets())`. Decoded at runtime with `haus_schema`, a value is a `Decoded` that hides its secrets the same way; `reveal()` makes it a `haus::Value`. [Config and secrets](/docs/tours/secrets)
 - **Limits.** `haus::Limits` holds the spec's limits; the `_with` functions take other ones. The depth is at most 256.
 - **Errors.** Each has a `haus::ErrorCode` with `hint()` and `docs()`, and `to_json()` gives the JSON form. [Error codes](/docs/errors)
 
 ## More
 
 - [README of the Rust crates](https://github.com/betalyra/haus-fmt/tree/main/rust): generated code, packages, limits and threads in full.
-- [Examples](https://github.com/betalyra/haus-fmt/tree/main/rust/examples): `quickstart`, `order` (codecs) and `logs` (a stream). Run `cargo run -p haus-example-order` in `rust/`.
+- [Examples](https://github.com/betalyra/haus-fmt/tree/main/rust/examples): `quickstart`, `order` (packages, rules and codecs) and `logs` (a stream). Run `cargo run -p haus-example-order` in `rust/`.
 - The [`haus` command](/docs/cli) is built on these crates: `brew install betalyra/tap/haus` or `cargo install haus-fmt-cli`.
 - [A tour of haus](/docs/tour) and [From schema to code](/docs/tours/typed).

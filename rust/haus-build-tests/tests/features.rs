@@ -16,6 +16,11 @@ fn decode_error<T: haus::Decode + std::fmt::Debug>(text: &str) -> DecodeError {
     }
 }
 
+/// `v` written with its secrets revealed (spec §15).
+fn revealed(v: &(impl haus::Encode + ?Sized)) -> Result<String, haus::EncodeError> {
+    haus::to_string_with(v, haus::Encoder::default().reveal_secrets())
+}
+
 #[test]
 fn decodes_into_rust_types() {
     let ada: Person = from_str(ADA).unwrap();
@@ -151,8 +156,11 @@ fn secrets_stay_hidden() {
     assert_eq!(login.pin.as_ref().map(|p| *p.expose()), Some(1234));
     let debug = format!("{login:?}");
     assert!(debug.contains("password: <redacted>") && !debug.contains("hunter2") && !debug.contains("1234"), "{debug}");
-    // Encoding writes secrets in full, and Any as it was.
-    assert_eq!(to_string(&login).unwrap(), text);
+    // Encoding refuses a secret, at its place, unless it reveals secrets:
+    // then it writes them in full, and Any as it was.
+    let refused = to_string(&login).unwrap_err();
+    assert_eq!((refused.code, refused.place().as_str()), (haus::ErrorCode::CannotEncode, "$.password"));
+    assert_eq!(revealed(&login).unwrap(), text);
 
     // Errors name the place and the type, never the value.
     let e = decode_error::<Login>(r#"{ user: "ada", password: 4711 }"#);
@@ -178,45 +186,37 @@ fn deprecated_single_tag_variants_still_decode() {
 }
 
 #[test]
-fn raw_values_are_checked_against_the_limits_before_they_are_written() {
-    // Any and unknown variants hold a haus::Value: a haus value, whose
-    // constructors reject what isn't one, but maybe beyond the writer's limits.
+fn raw_values_are_checked_for_their_depth_where_they_are_put() {
+    // Any and unknown variants hold a haus::Value: a haus value within the
+    // limits it was built with (spec §7); encoding checks where it is put.
     let login = |extra: Value| Login { extra: Some(extra), ..from_str(r#"{ user: "ada", password: "x" }"#).unwrap() };
-    let error = |v: &dyn haus::Encode| to_string(v).unwrap_err().to_string();
+    let error = |v: &dyn haus::Encode| revealed(v).unwrap_err().to_string();
     let number = |n: &str| Value::number(n).unwrap();
 
     // Numbers are normalized when they are built, as the parser reads them.
-    assert_eq!(
-        to_string(&login(Value::Array(vec![number("1E5"), number("0xFF"), number("1_000")]))).unwrap(),
-        r#"{ user: "ada", password: "x", extra: [1e5, 255, 1000] }"#
-    );
-    assert_eq!(
-        error(&login(Value::Array(vec![number("1"), number("1e6145")]))),
-        ".extra[1]: exponent larger than 6144"
-    );
-    assert_eq!(error(&login(number(&"1".repeat(1001)))), ".extra: number literal longer than 1000 characters");
-    let deep = (0..256).fold(number("1"), |v, _| Value::Array(vec![v]));
+    let numbers = Value::array(vec![number("1E5"), number("0xFF"), number("1_000")]).unwrap();
+    assert_eq!(revealed(&login(numbers)).unwrap(), r#"{ user: "ada", password: "x", extra: [1e5, 255, 1000] }"#);
+    // What is beyond the limits can't be built.
+    assert_eq!(Value::number("1e6145").unwrap_err().code, haus::ErrorCode::ExponentTooLarge);
+    // 256 levels as the field of a record: one too many.
+    let deep = (0..256).fold(number("1"), |v, _| Value::array(vec![v]).unwrap());
     assert_eq!(
         error(&login(deep)).split_once(": ").map(|(_, why)| why.to_owned()),
         Some("nesting deeper than 256 levels".into())
     );
-    let huge = Value::String("x".repeat(16 * 1024 * 1024 + 1));
-    assert_eq!(error(&login(huge)), ".extra: string longer than 16777216 characters");
 
-    // An unknown variant's tag and payload, inside its own payload's path.
-    let shape = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![number("1"), number("1e9999")] });
-    assert_eq!(error(&shape), "(Hexagon)[1]: exponent larger than 6144");
-    let side = Value::record([("side", Value::String("x".repeat(16 * 1024 * 1024 + 1)))]).unwrap();
-    let shape = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![side] });
-    assert_eq!(error(&shape), "(Hexagon).side: string longer than 16777216 characters");
+    // An unknown variant's tag and payload, at its place.
+    let deep = (0..256).fold(number("1"), |v, _| Value::array(vec![v]).unwrap());
+    let shape = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![number("1"), deep] });
+    assert!(error(&shape).ends_with("nesting deeper than 256 levels"), "{}", error(&shape));
 
-    // A reader with lower limits: an integer longer than its number limit can't be written.
-    let small = haus::Limits { max_number_length: 20, ..haus::Limits::default() };
-    let fits = number(&"9".repeat(20));
-    assert_eq!(haus::to_string_with(&fits, &small).unwrap(), "9".repeat(20));
-    let big = number("4722366482869645213695"); // 2^72 - 1
+    // An encoder for a reader with lower limits: an integer longer than its number limit can't be encoded.
+    let small = haus::Encoder::new(&haus::Limits { max_number_length: 20, ..haus::Limits::default() });
+    let fits = haus::Int::from(99999999999999999999u128 as i128);
+    assert_eq!(haus::to_string_with(&fits, small).unwrap(), "99999999999999999999");
+    let big = haus::Int::from(4722366482869645213695i128); // 2^72 - 1
     assert_eq!(haus::to_string(&big).unwrap(), "4722366482869645213695");
-    assert_eq!(haus::to_string_with(&big, &small).unwrap_err().to_string(), "number literal longer than 20 characters");
+    assert_eq!(haus::to_string_with(&big, small).unwrap_err().to_string(), "number literal longer than 20 characters");
 }
 
 /// A `Vault` whose secret keys hold `value` under the key `hunter2`.
@@ -225,21 +225,24 @@ fn vault(value: Value) -> Vault {
 }
 
 #[test]
-fn encode_errors_inside_a_secret_name_only_the_secret() {
+fn secrets_are_refused_unless_revealed_and_errors_inside_name_only_the_secret() {
     let ok = vault(Value::number("1E5").unwrap());
-    assert_eq!(to_string(&ok).unwrap(), r#"{ owner: "ada", keys: { hunter2: 1e5 } }"#);
+    let refused = to_string(&ok).unwrap_err();
+    assert_eq!((refused.code, refused.place()), (haus::ErrorCode::CannotEncode, "$.keys".to_owned()));
+    assert!(!refused.to_string().contains("1e5") && !refused.to_string().contains("hunter2"));
+    let revealing = haus::Encoder::default().reveal_secrets();
+    assert_eq!(haus::to_string_with(&ok, revealing).unwrap(), r#"{ owner: "ada", keys: { hunter2: 1e5 } }"#);
     let hidden = ".keys: not a valid Secret Map Any (the value is hidden)";
-    let deep = (0..300).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    for bad in [Value::number("1e9999").unwrap(), Value::number(&"1".repeat(1001)).unwrap(), deep] {
-        let v = vault(bad);
-        for e in [to_string(&v).unwrap_err(), haus::json::to_string(&v).unwrap_err()] {
-            assert_eq!(e.to_string(), hidden);
-        }
+    let deep = (0..255).fold(Value::array(vec![]).unwrap(), |v, _| Value::array(vec![v]).unwrap());
+    let v = vault(deep);
+    for e in [haus::to_string_with(&v, revealing).unwrap_err(), haus::json::to_string_with(&v, revealing).unwrap_err()]
+    {
+        assert_eq!(e.to_string(), hidden);
     }
     // A Map key longer than the string limit, for a reader with small limits.
     let small = haus::Limits { max_string_length: 5, ..haus::Limits::default() };
-    let e = haus::to_string_with(&vault(Value::Array(vec![])), &small).unwrap_err();
-    assert_eq!(e.to_string(), hidden);
+    let e = haus::to_string_with(&vault(Value::array(vec![]).unwrap()), haus::Encoder::new(&small).reveal_secrets());
+    assert_eq!(e.unwrap_err().to_string(), hidden);
 }
 
 /// A tree `depth` nodes deep along the first payload value.
@@ -275,23 +278,20 @@ fn deep_native_values_fail_at_the_depth_limit() {
 #[test]
 fn generated_keys_and_tags_count_against_the_string_limit() {
     // Written for a reader whose string limit is lower than a tag or key.
-    let limits = |n: usize| haus::Limits { max_string_length: n, ..haus::Limits::default() };
+    let limits = |n: usize| haus::Encoder::new(&haus::Limits { max_string_length: n, ..haus::Limits::default() });
     let (leaf, tree) = (Tree::Leaf, Tree::Node(Box::new(Tree::Leaf), Box::new(Tree::Leaf)));
-    assert!(haus::to_string_with(&leaf, &limits(4)).is_ok());
-    assert_eq!(haus::to_string_with(&leaf, &limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
-    assert_eq!(haus::to_string_with(&tree, &limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
+    assert!(haus::to_string_with(&leaf, limits(4)).is_ok());
+    assert_eq!(haus::to_string_with(&leaf, limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
+    assert_eq!(haus::to_string_with(&tree, limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
     let item = Item { id: haus::Int::from(1i64), label: String::new() };
-    assert!(haus::to_string_with(&item, &limits(5)).is_ok());
-    assert_eq!(
-        haus::to_string_with(&item, &limits(4)).unwrap_err().to_string(),
-        ".label: key longer than 4 characters"
-    );
+    assert!(haus::to_string_with(&item, limits(5)).is_ok());
+    assert_eq!(haus::to_string_with(&item, limits(4)).unwrap_err().to_string(), ".label: key longer than 4 characters");
 
     // Schema-based JSON counts them alike, on the haus value; the form's
     // member names (`_tag`, `values`) don't count.
     fn json<T: haus::ToJson>(x: &T, n: usize) -> Result<String, String> {
         let limits = haus::Limits { max_string_length: n, ..haus::Limits::default() };
-        haus::json::to_string_with(x, &limits).map_err(|e| e.to_string())
+        haus::json::to_string_with(x, haus::Encoder::new(&limits)).map_err(|e| e.to_string())
     }
     assert!(json(&leaf, 4).is_ok() && json(&tree, 4).is_ok());
     assert_eq!(json(&leaf, 3).unwrap_err(), "tag longer than 3 characters");

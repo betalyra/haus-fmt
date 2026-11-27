@@ -138,7 +138,7 @@ mod tests {
     use crate::Value;
 
     fn fields(keys: &[String]) -> Vec<(String, Value)> {
-        keys.iter().map(|k| (k.clone(), Value::Array(vec![]))).collect()
+        keys.iter().map(|k| (k.clone(), Value::from(0))).collect()
     }
 
     /// The first key that repeats an earlier one, added one at a time, as

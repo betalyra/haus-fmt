@@ -17,7 +17,7 @@
 
 use crate::decoded::{Decoded, hide};
 use crate::locate::{Lines, Node, locate};
-use crate::resolve::{Schema, tags};
+use crate::resolve::{PackageRule, Schema, tags};
 use crate::types::{Builtin, Case, Instance, Payload, Record, Type, Variant};
 use haus::stream::{Options as StreamOptions, Reader};
 use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Number, SyntaxError, Tag, Value};
@@ -39,6 +39,17 @@ pub struct CheckOptions {
     pub first: bool,
     /// The parser's limits, also the depth limit and the limits raw values
     /// are checked against.
+    pub limits: Limits,
+}
+
+/// How to encode ([`Schema::encode_with`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeOptions {
+    /// Write every secret in full (spec §15, `revealSecrets`). Off by
+    /// default: a secret is refused with `cannot-encode`, so that it leaves
+    /// the program only by the program's choice.
+    pub reveal_secrets: bool,
+    /// The limits the value is checked against.
     pub limits: Limits,
 }
 
@@ -183,10 +194,7 @@ impl Issue {
             match s {
                 Segment::Index(i) => out.push_str(&format!("[{i}]")),
                 Segment::Field(k) if is_word(k) => out.push_str(&format!(".{k}")),
-                Segment::Field(k) => {
-                    let quoted = haus::canonical(&Value::String(k.clone()));
-                    out.push_str(&format!("[{quoted}]"))
-                }
+                Segment::Field(k) => out.push_str(&haus::Segment::Field(k.clone()).to_string()),
             }
         }
         out
@@ -237,11 +245,31 @@ impl Schema {
     }
 
     /// Encode a decoded value with the type `name` (spec §15): the value a
-    /// writer writes, its secrets in full (the receiver needs them). It is
-    /// checked with the type as [`Schema::decode`] checks a value, so
-    /// encoding what was decoded gives the same value back.
+    /// writer writes. A secret in it is refused (`cannot-encode`, at the
+    /// secret, spec §15 "Encoding a secret"): see [`Schema::encode_with`].
+    /// It is checked with the type as [`Schema::decode`] checks a value, its
+    /// package rules included, so encoding what was decoded gives the same
+    /// value back.
     pub fn encode(&self, name: &str, value: &Decoded) -> Result<Value, Issue> {
-        self.decode(name, &value.clone().reveal()).map(Decoded::reveal)
+        self.encode_with(name, value, &EncodeOptions::default())
+    }
+
+    /// [`Schema::encode`], with `options`: with
+    /// [`EncodeOptions::reveal_secrets`] every secret is written in full, and
+    /// the value is then ordinary data (its canonical form and hash include it).
+    pub fn encode_with(&self, name: &str, value: &Decoded, options: &EncodeOptions) -> Result<Value, Issue> {
+        if let (false, Some(path)) = (options.reveal_secrets, value.secret_path()) {
+            let message = "a Secret is not written unless secrets are revealed (EncodeOptions::reveal_secrets)";
+            return Err(Issue::new(Severity::Error, Code::CannotEncode, message.into(), path));
+        }
+        // A value a rule rejects can't be encoded (packages.md §6).
+        let rejected = |mut e: Issue| {
+            if e.code == Code::CodecRejected {
+                e.code = Code::CannotEncode;
+            }
+            e
+        };
+        self.decode_with(name, &value.clone().reveal(), &options.limits).map(Decoded::reveal).map_err(rejected)
     }
 
     /// Decode the values of a stream (spec §15): each one, on its own, with
@@ -615,7 +643,20 @@ impl Marks {
 }
 
 /// Nothing: what the walk gives for a value when it only checks.
-const NOTHING: Value = Value::Array(Vec::new());
+const NOTHING: Value = Value::Array(haus::List::empty());
+
+// The values decoding gives are made from the parts of the value decoded,
+// and are no deeper than it: within the limits every value that exists is.
+
+/// An array of `items`, parts of a value decoded.
+fn array(items: Vec<Value>) -> Value {
+    Value::array(items).expect("no deeper than the value decoded")
+}
+
+/// The variant `tag` with `args`, parts of a value decoded.
+fn variant(tag: &haus::Tag, args: Vec<Value>) -> Value {
+    Value::variant(tag, args).expect("no deeper than the value decoded")
+}
 
 impl<'s, 'v> Walker<'s, 'v> {
     fn new(schema: &'s Schema, limits: Limits, mode: Mode, nodes: Option<&[Node]>) -> Walker<'s, 'v> {
@@ -854,10 +895,33 @@ impl<'s, 'v> Walker<'s, 'v> {
             return None;
         }
         self.step()?;
-        let mut t = ty;
+        let schema = self.schema;
+        let (mut t, mut rules) = (ty, vec![]);
         while let Type::Ref(id) = t {
-            t = &self.schema.instance(*id).body;
+            let instance = schema.instance(*id);
+            rules.extend(schema.rule_of(instance));
+            t = &instance.body;
         }
+        let out = self.shape(v, t, ty, loc)?;
+        self.ruled(&rules, v, out, loc)
+    }
+
+    /// The rules of the types `v` was decoded as (packages.md §6), checked
+    /// on the value decoded (`out`); when only checking, on `v` itself. A
+    /// value a rule rejects is `codec-rejected`, at the place of the type.
+    fn ruled(&mut self, rules: &[&PackageRule], v: &Value, out: Value, loc: Loc) -> Option<Value> {
+        for rule in rules {
+            let decoded = if self.decoding() { &out } else { v };
+            if let Err(reason) = (rule.check)(decoded) {
+                let message = format!("{reason} (the rule {} of {})", rule.name, rule.id);
+                return self.error(Code::CodecRejected, message, loc);
+            }
+        }
+        Some(out)
+    }
+
+    /// `v` with the type `t`, which `ty` stands for (no reference).
+    fn shape(&mut self, v: &'v Value, t: &Type, ty: &Type, loc: Loc) -> Option<Value> {
         match t {
             Type::Builtin(b) => self.builtin(v, *b, ty, loc),
             Type::Time(name) => self.time(v, name, ty, loc),
@@ -868,7 +932,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                         .enumerate()
                         .map(|(i, x)| self.child(Step::Index(i), |w| w.value(x, item, item_of(loc, i))))
                         .collect();
-                    out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| Value::Array(xs)))
+                    out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| array(xs)))
                 }
                 _ => self.mismatch(v, ty, loc),
             },
@@ -890,7 +954,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 Value::Variant { tag, args } if tag == "None" && args.is_empty() => Some(self.keep(v)),
                 Value::Variant { tag, args } if tag == "Some" && args.len() == 1 => {
                     let x = self.child(Step::Index(0), |w| w.value(&args[0], item, item_of(loc, 0)))?;
-                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
+                    Some(self.out(|| variant(tag, vec![x])))
                 }
                 _ => {
                     let message =
@@ -1188,7 +1252,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 // `Tag { … }`: the record is at the variant's level and place.
                 [Value::Record(fields)] => {
                     let x = self.record(fields.as_slice(), r, item_of(loc, 0))?;
-                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
+                    Some(self.out(|| variant(tag, vec![x])))
                 }
                 // Anything else, `Circle(1.5)` too, is the wrong payload (spec §15).
                 _ => self.not_one_record(tag, args, case, loc),
@@ -1197,7 +1261,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             Payload::Named(t) => match args {
                 [x @ Value::Record(_)] => {
                     let x = self.value(x, t, item_of(loc, 0))?;
-                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
+                    Some(self.out(|| variant(tag, vec![x])))
                 }
                 _ => self.not_one_record(tag, args, case, loc),
             },
@@ -1216,9 +1280,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                     .enumerate()
                     .map(|(i, (x, t))| self.child(Step::Index(i), |w| w.value(x, t, item_of(loc, i))))
                     .collect();
-                out.into_iter()
-                    .collect::<Option<Vec<_>>>()
-                    .map(|xs| self.out(|| Value::Variant { tag: tag.clone(), args: xs }))
+                out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| variant(tag, xs)))
             }
         }
     }
@@ -1320,7 +1382,9 @@ fn integer(text: &Number, whole: &str) -> Number {
 
 /// A record of fields taken from a record read, whose keys are unique.
 fn unique(fields: Vec<(String, Value)>) -> haus::Record {
-    haus::Record::from_fields(fields).expect("the keys of a record read are unique")
+    // Its keys were read within the reader's limits, which may be larger than the defaults.
+    let read = haus::Limits { max_string_length: usize::MAX, ..haus::Limits::default() };
+    haus::Record::from_fields_with(fields, &read).expect("the keys of a record read are unique, and no deeper than it")
 }
 
 /// Whether the number literal `text` is the one spelling (spec §15) of the

@@ -7,13 +7,14 @@ use crate::diagnostic::{self, Diagnostic, Severity};
 use crate::highlight::{Token, tokens};
 use crate::input::{self, Target};
 use crate::json::{self, Members, b, n, s};
+use crate::official;
 use crate::output::{self, Status, count};
 use crate::pieces::{Piece, Pieces};
 use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
-use haus_schema::profiles::unchecked_profiles;
-use haus_schema::{CheckOptions, Explicit, MAX_ERRORS, Manifest, Schema, StreamCheck};
+use haus_schema::rules::unchecked_rules;
+use haus_schema::{CheckOptions, Explicit, MAX_ERRORS, Manifest, Options, Schema, StreamCheck};
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::io::{self, Read, stdout};
@@ -176,14 +177,18 @@ fn fail(json: bool, failure: Failure) -> Status {
     }
 }
 
-/// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`.
+/// The packages of a check: the official ones, built in, then those given
+/// with `--package [NAME=]DIR` and `--packages FOLDER` (packages.md §2,
+/// "Tools": nothing is searched for).
 pub(crate) fn explicit(args: &PackageArgs) -> Result<Explicit, Failure> {
     let given = |flag: &str, arg: &str, e: haus_schema::Error| Failure {
         code: diagnostic::schema_code(&e),
         message: format!("{flag} {arg}: {e}"),
         hint: e.hint().to_owned(),
     };
-    let explicit = args.package.iter().try_fold(Explicit::new(), |all, arg| {
+    let built_in = official::packages().into_iter().try_fold(Explicit::new(), Explicit::value);
+    let built_in = built_in.map_err(|e| given("(built in)", "official packages", e))?;
+    let explicit = args.package.iter().try_fold(built_in, |all, arg| {
         let named = arg.split_once('=').filter(|(name, _)| name.starts_with('@'));
         let (name, dir) = named.map_or((None, arg.as_str()), |(name, dir)| (Some(name), dir));
         let all = all.package(dir).map_err(|e| given("--package", arg, e))?;
@@ -330,8 +335,8 @@ impl Checker {
     }
 
     /// A schema file: its errors, or its warnings, and a note at each import
-    /// of an official package with profiles, whose rules this tool (it has
-    /// no codecs) doesn't check (`missing-codec`, spec §13.4).
+    /// of a package with a rule the schema reaches that this tool doesn't
+    /// check: one that isn't official (`missing-codec`, packages.md §7, "Tools").
     fn check_schema(&mut self, path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
         let text = String::from_utf8_lossy(bytes);
         match self.load(path) {
@@ -340,8 +345,9 @@ impl Checker {
             Ok(schema) => {
                 let text = &schema.files()[0].text;
                 let warnings = schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(text)));
-                let notes =
-                    unchecked_profiles(text).into_iter().map(|n| Diagnostic::schema(&n, Severity::Hint, Some(text)));
+                let notes = unchecked_rules(text, &schema)
+                    .into_iter()
+                    .map(|n| Diagnostic::schema(&n, Severity::Hint, Some(text)));
                 let mut all: Vec<Diagnostic> = warnings.chain(notes).collect();
                 // In the order of their places (a stable sort: warnings first at one place).
                 all.sort_by_key(|d| d.position);
@@ -534,7 +540,10 @@ impl Checker {
     /// The schema file at `path`, loaded once.
     fn load(&mut self, path: &Path) -> Loaded {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        let load = || Schema::load(path, &self.packages).map(Rc::new).map_err(Rc::new);
+        // The official rules are checked; others are pointed out (packages.md §7, "Tools").
+        let rules = official::rules();
+        let options = Options { packages: &self.packages, rules: &rules, require_rules: false, ..Options::default() };
+        let load = || Schema::load_with(path, &options).map(Rc::new).map_err(Rc::new);
         self.schemas.entry(key).or_insert_with(load).clone()
     }
 }
