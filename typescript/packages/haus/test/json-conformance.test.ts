@@ -7,6 +7,7 @@ import {
   stringifyJson, toHausJson, toHausJsonLines, toHausJsonValue, type Json, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
+import { checkSecrets } from "./secrets.js"
 
 const SUITE = join(import.meta.dirname, "../../../../test-suite")
 const read = (path: string) => readFileSync(join(SUITE, path), "utf8")
@@ -22,6 +23,8 @@ interface Case {
   readonly code?: string
   /** For `Err`, when given: the error's place in the JSON (spec §16.3 "Places"). */
   readonly path?: string
+  /** For `Ok`: the places of the secrets in the decoded value (spec §15, "Encoding a secret"). */
+  readonly secrets: readonly string[]
   readonly name: string
 }
 
@@ -38,7 +41,9 @@ const cases = (text: string): Case[] =>
     const code = field("code")
     const path = field("path")
     if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
+    const secrets = field("secrets")
     return {
+      secrets: secrets?.kind === "array" ? secrets.items.map((s) => (s.kind === "string" ? s.value : "")) : [],
       kind: v.tag as Case["kind"],
       ...(type?.kind === "string" ? { type: type.value } : {}),
       ...(input ? { input } : {}),
@@ -76,14 +81,17 @@ describe("schema-based (spec §16.3)", () => {
     const s = schema(c)
     switch (c.kind) {
       case "Ok": {
+        // Written and encoded with revealSecrets; again without it (spec §15, "Encoding a secret").
+        const reveal = { revealSecrets: true }
         const decoded = h.decode(s, c.input!)
-        expectJson(h.toJsonValue(s, decoded), c.json)
-        expectJson(parseJson(h.toJson(s, decoded)), c.json)
-        expect(canonical(h.encode(s, h.fromJson(s, c.json)))).toBe(canonical(c.output!))
+        expectJson(h.toJsonValue(s, decoded, reveal), c.json)
+        expectJson(parseJson(h.toJson(s, decoded, reveal)), c.json)
+        expect(canonical(h.encode(s, h.fromJson(s, c.json), reveal))).toBe(canonical(c.output!))
+        checkSecrets(() => h.toJson(s, decoded), c.secrets, () => h.toJson(s, decoded, reveal))
         return
       }
       case "Read":
-        expect(canonical(h.encode(s, h.fromJson(s, c.json)))).toBe(canonical(c.output!))
+        expect(canonical(h.encode(s, h.fromJson(s, c.json), { revealSecrets: true }))).toBe(canonical(c.output!))
         return
       case "Err":
         return rejects(() => h.fromJson(s, c.json), c)

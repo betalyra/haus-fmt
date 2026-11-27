@@ -1,172 +1,66 @@
 /**
- * The limits a value built in code must fit to be written (spec §7, §11):
- * writers check every one of them, the canonical form and hashing (§12) only
- * the node limit. A parsed value fits the limits it was parsed with; a value
- * built in code may be deeper, longer, or share its parts with each other (a
- * DAG), which written out expands: every place writes the shared part again.
+ * The safety net of the writers (spec §11, "Values don't change"). A value
+ * that exists is within the limits it was built with (value.ts records each
+ * container's size and depth when it is built), so the writers, the
+ * canonical form, hashing, equality and order check no limit. They check one
+ * thing before they walk a value: that it is still the value that was built.
+ * TypeScript can't stop code from changing a value (a cast, a Map's `set`),
+ * and a changed value could contain itself, or be larger or deeper than its
+ * recorded size and depth; walking it could then hang or overflow the stack.
  *
- * Both checks walk the value once, iteratively (any depth works without the
- * call stack), and count every value as often as it is written: the value
- * itself and every element, field value and argument. The formatter
- * (format.ts) checks the same limits as it writes, and calls
- * `checkWritable` only once it has found one broken, to report it: which
- * error, if there are several, is the one found here.
+ * `checkUnchanged` walks the value with a stack of its own, counting every
+ * value as often as it is written, and stops as soon as the count passes the
+ * size recorded at the root, or a part is deeper than its recorded depth:
+ * HausEncodeError `value-changed`. So it ends, linear in the recorded size,
+ * whatever was done to the value. A change that keeps the size and depth is
+ * not noticed: what the writers make of it is undefined (spec §11).
  */
-import { HausEncodeError, type ErrorCode, type Path } from "./errors.js"
-import { numberLimitIssue } from "./number.js"
-import { longerThan, type Limits } from "./reader.js"
-import type { HVariant, Value } from "./value.js"
+import { HausEncodeError, type Path } from "./errors.js"
+import { isContainer, type Value } from "./value.js"
 
-/** The limits a writer checks. */
-export type WriteLimits = Pick<Limits, "maxDepth" | "maxNumberLength" | "maxExponent" | "maxStringLength" | "maxNodes">
-
-/** `too-many-nodes`, at the value given (`$`, or `$[i]` for value i of several). */
-const tooMany = (max: number, at: Path): never => {
-  throw new HausEncodeError(tooManyNodes(max), at, "too-many-nodes")
+/** `value-changed`, at `at`, naming `which` operand when there are two. */
+const changed = (at: Path, which?: string): never => {
+  throw new HausEncodeError(
+    `${which === undefined ? "the value" : `the ${which} value`} was changed after it was built (a part added, removed, or made to contain itself): values are read-only`,
+    at,
+    "value-changed",
+  )
 }
 
-/** The reason of a `too-many-nodes` error. */
-export const tooManyNodes = (max: number): string => `value has more than ${max} nodes (its parts share each other: written out, it would be larger than the node limit)`
-
 /**
- * Whether `root` has at most `max` values, each counted as often as it is
- * written (spec §7, "Values written"). Stops as soon as the count is over,
- * and ends for a value that contains itself (forged past the constructors).
+ * Throws HausEncodeError `value-changed` (at `at`) when `root` is no longer
+ * the value that was built: it holds more or fewer values than its recorded
+ * size, or nests deeper than its recorded depth. Never hangs: it stops once
+ * it has counted one value more than the recorded size.
  */
-export const nodesWithin = (root: Value, max: number): boolean => {
+export const checkUnchanged = (root: Value, at: Path = [], which?: string): void => {
+  if (!isContainer(root)) return
+  const size = root.size
+  const depth = root.depth
   let count = 1
-  // Only containers are pushed, each counted with its children: the stack holds at most `max` of them.
+  // Containers to look into, each with its level (0 for the root), as value.ts counts depth.
   const stack: Value[] = [root]
+  const levels: number[] = [0]
   while (stack.length > 0) {
     const v = stack.pop()!
-    if (v.kind === "record") {
-      if ((count += v.fields.size) > max) return false
-      for (const x of v.fields.values()) if (isContainer(x)) stack.push(x)
-    } else if (v.kind === "array" || v.kind === "variant") {
-      const children = v.kind === "array" ? v.items : v.args
-      if ((count += children.length) > max) return false
-      for (let i = 0; i < children.length; i++) if (isContainer(children[i]!)) stack.push(children[i]!)
-    }
-  }
-  return count <= max
-}
-
-const isContainer = (v: Value): boolean => v.kind === "record" || v.kind === "array" || (v.kind === "variant" && v.args.length > 0)
-
-/**
- * Fails with `too-many-nodes` (at `at`) if `root` has more than `max`
- * values, each counted as often as it is written (`nodesWithin`). The only
- * limit of the canonical form and hashing (spec §12).
- */
-export const checkNodes = (root: Value, max: number, at: Path = []): void => {
-  if (!nodesWithin(root, max)) tooMany(max, at)
-}
-
-/**
- * Fails with the limit's code if `root` breaks any limit a writer checks
- * (spec §11): the nesting depth (counted as for values built in code: a
- * record payload `Tag { … }` is one level, an empty record, array or payload
- * is a level), the length of each string, key and tag and of each byte
- * string's hex digits, the number and exponent limits, and the node limit.
- * The error is at the place of the value that breaks it (a key's at its
- * record), under `at`; `too-many-nodes` at `at` itself.
- */
-export const checkWritable = (root: Value, limits: WriteLimits, at: Path = []): void => {
-  if (!isContainer(root)) return checkLeaf(root, limits, root, at)
-  const { maxDepth, maxStringLength, maxNodes } = limits
-  // Containers only, each with the levels it is inside (as the parser counts them); counted with their children.
-  let count = 1
-  const containers: Value[] = [root]
-  const depths: number[] = [0]
-  while (containers.length > 0) {
-    const v = containers.pop()!
-    const depth = depths.pop()!
-    if (depth >= maxDepth) fail(root, v, at, "nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
-    let children: readonly Value[]
-    let inner = depth + 1
-    if (v.kind === "record") {
-      if ((count += v.fields.size) > maxNodes) tooMany(maxNodes, at)
-      for (const [k, x] of v.fields) {
-        if (k.length > maxStringLength && longerThan(k, maxStringLength)) fail(root, v, at, "key-too-long", `key longer than ${maxStringLength} characters`)
-        if (isContainer(x)) {
-          containers.push(x)
-          depths.push(inner)
-        } else checkLeaf(x, limits, root, at)
+    const level = levels.pop()!
+    if (level >= depth) changed(at, which)
+    let parts: Iterable<Value>
+    let inner = level + 1
+    if (v.kind === "record") parts = v.fields.values()
+    else if (v.kind === "array") parts = v.items
+    else if (v.kind === "variant") {
+      parts = v.args
+      // `Tag { … }`: the record is the level (spec §7).
+      if (v.args.length === 1 && v.args[0]!.kind === "record") inner = level
+    } else continue
+    for (const p of parts) {
+      if (++count > size) changed(at, which)
+      if (isContainer(p)) {
+        stack.push(p)
+        levels.push(inner)
       }
-      continue
-    } else if (v.kind === "array") children = v.items
-    else {
-      checkLeaf(v, limits, root, at) // the tag
-      children = (v as HVariant).args
-      // `Tag { … }` is one level, the record's: the shorter spelling (spec §7).
-      if (children.length === 1 && children[0]!.kind === "record") inner = depth
-    }
-    if ((count += children.length) > maxNodes) tooMany(maxNodes, at)
-    for (let i = 0; i < children.length; i++) {
-      const x = children[i]!
-      if (isContainer(x)) {
-        containers.push(x)
-        depths.push(inner)
-      } else checkLeaf(x, limits, root, at)
     }
   }
-}
-
-/** A writer's error at `v`, found inside `root` (given at `at`). */
-const fail = (root: Value, v: Value, at: Path, code: ErrorCode, reason: string): never => {
-  throw new HausEncodeError(reason, [...at, ...pathTo(root, v)], code)
-}
-
-/** The limits of a number, string, byte string or tag (spec §7). Hot: most values need one comparison. */
-const checkLeaf = (v: Value, limits: WriteLimits, root: Value, at: Path): void => {
-  switch (v.kind) {
-    case "number":
-      // Most numbers are short and have no exponent: nothing to check.
-      if (v.text.length > limits.maxNumberLength || v.text.includes("e")) {
-        const issue = numberLimitIssue(v.text, limits)
-        if (issue !== undefined) fail(root, v, at, issue.code, issue.reason)
-      }
-      return
-    case "string":
-      if (longerThan(v.value, limits.maxStringLength)) fail(root, v, at, "string-too-long", `string longer than ${limits.maxStringLength} characters`)
-      return
-    case "bytes":
-      if (v.bytes.length * 2 > limits.maxStringLength) fail(root, v, at, "string-too-long", `byte string longer than ${limits.maxStringLength} hex digits`)
-      return
-    case "variant":
-      // Tags are ASCII: their length is their number of characters.
-      if (v.tag.length > limits.maxStringLength) fail(root, v, at, "tag-too-long", `tag longer than ${limits.maxStringLength} characters`)
-  }
-}
-
-/**
- * The path from `root` to `target` (the first place it is found, depth
- * first), for an error's place. Only called once a check has failed, so the
- * value is known to be within reach.
- */
-const pathTo = (root: Value, target: Value): Path => {
-  // Each entry links to its parent, so the path is built once, at the end:
-  // copying it at every level would take quadratic time for a deep value.
-  type Step = { readonly v: Value; readonly key: string | number; readonly parent: Step | undefined }
-  const stack: Step[] = [{ v: root, key: 0, parent: undefined }]
-  while (stack.length > 0) {
-    const step = stack.pop()!
-    const { v } = step
-    if (v === target) {
-      const path: (string | number)[] = []
-      for (let s: Step | undefined = step; s?.parent !== undefined; s = s.parent) path.push(s.key)
-      return path.reverse()
-    }
-    switch (v.kind) {
-      case "array":
-        v.items.forEach((x, i) => stack.push({ v: x, key: i, parent: step }))
-        break
-      case "record":
-        for (const [k, x] of v.fields) stack.push({ v: x, key: k, parent: step })
-        break
-      case "variant":
-        v.args.forEach((x, i) => stack.push({ v: x, key: i, parent: step }))
-    }
-  }
-  return []
+  if (count !== size) changed(at, which)
 }

@@ -261,7 +261,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
         return arg?.kind === "string" ? arg.value : mismatch(`${t.tag}("…")`, v, at)
       }
       case "any":
-        return hausJsonOf(v, l, at)
+        return hausJsonOf(v, at)
       case "array":
         if (v.kind !== "array") return mismatch("an array", v, at)
         return v.items.map((x, i) => write(t.item, x, at.child(i), depth + 1, 0))
@@ -302,7 +302,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
     if (c === undefined) {
       if (!t.open) return fail(`unknown tag ${v.tag}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
       // An unknown value: its tag, and its arguments self-describing (without the envelope).
-      const args = v.args.map((x, i) => hausJsonOf(x, l, at.child(i)))
+      const args = v.args.map((x, i) => hausJsonOf(x, at.child(i)))
       return jsonObject([["_tag", v.tag], ...(args.length > 0 ? [["_args", args] as const] : [])])
     }
     if (isEnum(t)) return v.args.length === 0 ? v.tag : fail(`'${quoteText(v.tag)}' takes no payload`, at, "wrong-payload")

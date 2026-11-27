@@ -3,7 +3,7 @@ title: Effect
 description: Decode and encode haus with Effect schemas, as Effects and Streams.
 ---
 
-Decode haus with the Effect schemas you already write, or with schemas from `.schema.haus` files. Decoding is an `Effect`, a file of values is a `Stream`, and errors land in the error channel with their place and code.
+The recommended way to use haus in TypeScript. Decode haus with the Effect schemas you already write, or with schemas from `.schema.haus` files with their packages and rules. Decoding is an `Effect`, a file of values is a `Stream`, and errors land in the error channel with their place and code.
 
 ## Install
 
@@ -11,7 +11,7 @@ Decode haus with the Effect schemas you already write, or with schemas from `.sc
 npm install @haus-fmt/effect effect
 ```
 
-It builds on [`@haus-fmt/haus`](/docs/languages/typescript).
+It builds on [`@haus-fmt/haus`](/docs/languages/typescript), which decides everything about haus (parsing, schema files, packages, rules, values and their limits); this package gives you Effect schemas, Effects and Streams of it.
 
 ## Decode and encode
 
@@ -54,37 +54,49 @@ Text that isn't haus is a `HausParseError`, with a line and column.
 
 ## Schema files
 
-```ts
-import { readSchemaFile } from "@haus-fmt/haus/node"
+Reading is an `Effect` that needs a file system (the `SchemaFiles` service; `NodeSchemaFiles.layer` for Node). Compiling reads nothing:
 
-const { text: schemaText, options } = readSchemaFile("order.schema.haus")
-const { schemas } = Haus.compileSchemaFile(schemaText, options)
-const order = yield* Haus.decode(schemas.Order!)(data)
+```ts
+import { NodeSchemaFiles } from "@haus-fmt/effect/node"
+
+const program = Effect.gen(function* () {
+  const sources = yield* Haus.readSources("order.schema.haus")
+  const { schemas } = yield* Haus.compile(sources)
+  return yield* Haus.decode(schemas.Order!)(data)
+}).pipe(Effect.provide(NodeSchemaFiles.layer))
 ```
+
+`Haus.Sources.make(entry, { "order.schema.haus": text, … })` makes sources from data you have from anywhere. Compile errors are a `HausCompileError`, at their line and column in a schema file.
 
 Or import them: with [`@haus-fmt/import`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/import) and the target `"effect"`, `import { Order } from "./order.schema.haus"` gives Effect schemas, and `import order from "./order.haus"` the decoded data. `Int` is a `bigint`, `Decimal` and the std/time types their exact text, `Maybe` an `Option`. All of them: [host types](/docs/types#host-types-in-each-language).
 
-## What else you need to know
+## Packages and rules
 
-**Codecs** map a haus type onto your own type, after the schema's checks. The official profiles come as codec groups:
+The official packages (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) are built in, with their rules on: `Money(1, Eur)` and `LatLng(91, 0)` fail with `codec-rejected`, whatever codecs you pass. Nothing is looked for: every other package is given, as a directory (`Haus.readSources(path, { packages, folders })`, `Haus.readPackage`) or a value (`Haus.Package.make({ manifest, schema })`), with `Haus.Sources.withPackage`.
+
+A package whose manifest gives a type a rule (`rules: { "Id": "ulid" }`) needs its implementation in your program, or compiling fails with [`missing-codec`](/docs/errors#missing-codec):
 
 ```ts
-import { iso } from "@haus-fmt/money/effect"   // currencies are three letters A–Z
-import { wgs84 } from "@haus-fmt/geo/effect"   // latitudes and longitudes in range
-
-const order = yield* Haus.decode(Order, iso, wgs84)(text)   // Money(1, Eur) or LatLng(91, 0) fails
+const acme = yield* Haus.readPackage("vendor/acme")
+const checked = yield* Haus.Package.withRule(acme, "Id", (id) => ulid.test(String(id)) || "not a ULID")
+// or Haus.Package.shapeOnly(acme): its types checked for their shape only
+const { schemas } = yield* Haus.compile(Haus.Sources.withPackage(sources, checked))
 ```
 
-Your own: `Haus.codec(money.Money, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))`. A package's rule is checked only where you pass its codec. [What haus checks](/docs/checks)
+A rule is a filter, as Effect's `Schema.makeFilter` takes one, checked on the value the type's schema decoded, before any codec. [What haus checks](/docs/checks)
+
+## What else you need to know
+
+**Codecs** map a haus type onto your own type, an ordinary Effect Schema transformation after the schema's checks and its package's rule: `Haus.codec(schemas.Money!, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))`, then `Haus.decode(schemas.Order!, cents)(text)`. The official packages' modules (`@haus-fmt/effect/money`, `/geo`, `/uuid`) export their package values and codecs for host types: `currencyAsString`, `wgs84Types`, `uuidAsString`.
 
 - **Lossy types, by choice.** `Haus.DecimalAsBigDecimal` gives a `BigDecimal`, `Haus.InstantAsDateTime` a `DateTime.Utc`. Encoding them back can write another value with another hash, so they are opt-in.
 - **Streams.** `Haus.decodeStream(Event)(response.body!)` is a `Stream<Event, HausError>`; `Haus.encodeStream(Event)(events)` writes one value per chunk. [Logs and streams](/docs/tours/streams)
 - **JSON.** `Haus.toJson(Order)(order)` and `Haus.fromJson(Order)(json)` read and write schema-based JSON; `encodeJsonLines` and `decodeJsonLines` do JSON Lines. [Coming from JSON](/docs/from-json)
-- **Secrets.** `Secret a` is a `Redacted`: it shows `<redacted>`, and errors inside never show the value. [Config and secrets](/docs/tours/secrets)
+- **Secrets.** `Secret a` is a `Redacted`: it shows `<redacted>`, and errors inside never show the value. Encoding refuses one (`cannot-encode`) unless you pass `revealSecrets: true`. [Config and secrets](/docs/tours/secrets)
 - **Limits.** Decoders take them with their input: `Haus.decode(Order)(text, { maxDepth: 64 })`. The depth is at most 512.
 
 ## More
 
 - [README of `@haus-fmt/effect`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/effect): the type mapping, JSON and limits in full.
-- [Examples](https://github.com/betalyra/haus-fmt/tree/main/typescript/examples): `quickstart` (typed imports, decode, encode, errors), `order` (packages and codecs), `logs` (a `Stream`).
+- [Examples](https://github.com/betalyra/haus-fmt/tree/main/typescript/examples): `logs` (a `Stream`) with Effect; `quickstart` and `order` with the barebones `@haus-fmt/haus`.
 - [A tour of haus](/docs/tour) and [From schema to code](/docs/tours/typed).

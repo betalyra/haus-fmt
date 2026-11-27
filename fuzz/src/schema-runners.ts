@@ -197,13 +197,14 @@ export async function codecRunner(texts: ReadonlyMap<string, string>, dirs: read
   }
 }
 
-/** @haus-fmt/effect: `Haus.compileSchemaFile`, `decodeValue`, `encodeValue`. */
+/** @haus-fmt/effect: its schema builder (`compileSchemaFile`, the module behind `Haus.compile`), `decodeValue`, `encodeValue`. */
 export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<SchemaRunner> {
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
+  const { compileSchemaFile } = await import(pathToFileURL(join(dir, "dist/schema-file.js")).href)
   const effectEntry = createRequire(join(dir, "package.json")).resolve("effect")
   const { Effect, Exit, Cause, Option } = await import(pathToFileURL(effectEntry).href)
-  const compiled = new Map([...texts].map(([s, t]) => [s, Haus.compileSchemaFile(t).schemas]))
+  const compiled = new Map([...texts].map(([s, t]) => [s, compileSchemaFile(t).schemas]))
   return inProcess("effect", (suite, type, value) => {
     const schema = compiled.get(suite)?.[type]
     if (!schema) return { kind: "crash", reason: `CRASH: no type ${suite}.${type}` }

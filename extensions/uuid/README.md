@@ -31,6 +31,6 @@ h.parse(schemas.Root!, `{ id: Uuid("0190b4f2-6c1e-7a3b-8d2f-4e5a6b7c8d9e") }`)  
 h.parse(schemas.Root!, `{ id: Uuid("0190B4F2-6C1E-7A3B-8D2F-4E5A6B7C8D9E") }`)   // HausDecodeError
 ```
 
-With Effect: `import { rfc9562 } from "@haus-fmt/uuid/effect"`, then `Haus.decode(Root, rfc9562)`.
+With Effect: `@haus-fmt/effect` has the package built in, its rule rfc9562 on by default (`Haus.compile`); `@haus-fmt/effect/uuid` exports the package value (`uuid`, for `Haus.Package.shapeOnly`) and `uuidAsString`, a codec giving every `Uuid` as its text.
 
 Other languages: [extensions](https://github.com/betalyra/haus-fmt/tree/main/extensions).

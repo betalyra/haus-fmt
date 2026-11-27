@@ -44,7 +44,7 @@ const everything = (Order: h.Schema<unknown>, between: () => void = () => {}): s
     between()
     try {
       const r = f()
-      out.push(typeof r === "string" ? r : canonical(h.encode(Order, r)))
+      out.push(typeof r === "string" ? r : canonical(h.encode(Order, r, REVEAL)))
     } catch (e) {
       out.push(`error ${String(e)}`)
     }
@@ -64,12 +64,17 @@ const everything = (Order: h.Schema<unknown>, between: () => void = () => {}): s
     add(() => toHausJson(v))
     add(() => h.decode(Order, v))
     add(() => h.parse(Order, line))
-    add(() => h.toJson(Order, h.parse(Order, line)))
-    add(() => h.fromJson(Order, h.toJson(Order, h.parse(Order, line))))
+    add(() => h.toJson(Order, h.parse(Order, line), REVEAL))
+    add(() => h.fromJson(Order, h.toJson(Order, h.parse(Order, line), REVEAL)))
+    for (const style of STYLES) add(() => h.stringify(Order, h.parse(Order, line), { style, ...REVEAL }))
+    // Without revealSecrets the secret is refused (spec §15): the same error every time.
     for (const style of STYLES) add(() => h.stringify(Order, h.parse(Order, line), { style }))
   }
   return out
 }
+
+/** The orders hold a secret: written back only with revealSecrets (spec §15). */
+const REVEAL = { revealSecrets: true } as const
 
 const fresh = (optimize: boolean): h.Schema<unknown> => {
   const Order = compileSchemaFile(SCHEMA).schemas["Order"] as h.Schema<unknown>
@@ -80,7 +85,7 @@ describe("no call leaves state behind", () => {
   for (const optimize of [false, true]) {
     it(optimize ? "with generated code" : "with the closures", () => {
       const want = everything(fresh(optimize))
-      expect(want.filter((r) => r.startsWith("error"))).toEqual([])
+      expect(want.filter((r) => r.startsWith("error") && !r.includes("revealSecrets"))).toEqual([])
       // A fresh schema whose first uses, and every use after, follow calls that throw halfway.
       const Order = fresh(optimize)
       const calls = failing(Order)
@@ -96,7 +101,7 @@ describe("no call leaves state behind", () => {
 
   it("async streams over one schema, interleaved chunk by chunk", async () => {
     const Order = fresh(false)
-    const want = [...parseAll(TEXT)].map((v) => canonical(h.encode(Order, h.decode(Order, v))))
+    const want = [...parseAll(TEXT)].map((v) => canonical(h.encode(Order, h.decode(Order, v), REVEAL)))
     async function* chunks(): AsyncGenerator<string> {
       for (let i = 0; i < TEXT.length; i += 7) {
         await Promise.resolve()
@@ -105,7 +110,7 @@ describe("no call leaves state behind", () => {
     }
     const read = async (): Promise<string[]> => {
       const out: string[] = []
-      for await (const order of h.decodeStream(Order, chunks())) out.push(canonical(h.encode(Order, order)))
+      for await (const order of h.decodeStream(Order, chunks())) out.push(canonical(h.encode(Order, order, REVEAL)))
       return out
     }
     const results = await Promise.all(Array.from({ length: 8 }, read))

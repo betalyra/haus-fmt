@@ -10,7 +10,7 @@
     "types": ["node"]
   },
   "contentMappers": [
-    { "package": "@haus-fmt/import", "extensions": [".haus"], "options": { "target": "effect" } }
+    { "package": "@haus-fmt/import", "extensions": [".haus"], "options": { "target": "plain" } }
   ],
   "include": ["src"]
 }

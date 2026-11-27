@@ -4,7 +4,8 @@
  *   // vite.config.ts
  *   import haus from "@haus-fmt/import/vite"
  *   export default { plugins: [haus({ target: "effect" })] }
- *   export default { plugins: [haus({ packages: ["vendor/money"], folders: ["schemas"] })] }   // relative to Vite's root
+ *   export default { plugins: [haus({ packages: ["vendor/acme"], folders: ["schemas"] })] }    // relative to Vite's root
+ *   export default { plugins: [haus({ bundles: ["@acme/orders"] })] }                       // a library's bundle, imported
  *   export default { plugins: [haus({ optimize: { "src/github.schema.haus": ["Issue"] } })] }  // Issue optimized, code built ahead
  *
  * Use the same target as in tsconfig.json, so the types match the values.

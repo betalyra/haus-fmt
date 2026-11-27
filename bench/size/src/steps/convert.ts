@@ -28,8 +28,8 @@
  */
 import {
   equals, equalsJson, HausDecodeError, importJsonValue, isJsonObject, jsonObject, JsonNumber, normalizeNumber, parse, parseJson, stringify, type Json,
-} from "@haus-fmt/haus"
-import * as h from "@haus-fmt/haus/schema"
+} from "@haus-fmt/haus/internal"
+import { h } from "@haus-fmt/haus/internal"
 import { Array as Arr, Console, Effect, FileSystem, Option, Path, Result } from "effect"
 import { gunzipSync } from "node:zlib"
 import {

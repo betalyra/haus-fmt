@@ -28,7 +28,7 @@ Format on save is not switched on by the extension. If you have it on globally a
 "[haus]": { "editor.formatOnSave": false }
 ```
 
-Schema packages are found in `node_modules`, from the real path of the schema file (pnpm and workspace links work), when the nearest `package.json` declares them. Packages outside `node_modules` (vendored, or from a Cargo or Python project) can be given with `haus.packages`, as paths relative to the workspace folder: a package's directory (with `package.haus`), or a folder whose subdirectories are packages.
+The official packages (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) are built in, and their rules are checked. Every other schema package is given with `haus.packages`, as paths relative to the workspace folder: a package's directory (with `package.haus`), or a folder whose subdirectories are packages. Packages are never looked for, not in `node_modules` either. The rules of a package given this way are not checked in the editor: a hint at its import says so.
 
 ```jsonc
 "haus.packages": ["vendor/money", "schemas"]

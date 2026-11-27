@@ -1,15 +1,18 @@
 /**
  * Data files and their schema files, for both targets: which schema a data
  * file has, the declarations of a data file checked against it, and the
- * module source that rebuilds a schema file's schemas at runtime.
+ * module source that compiles a schema file's schema at runtime from the
+ * sources read now (no file system at runtime).
  */
 import { existsSync } from "node:fs"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, ModuleError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule, type SchemaFile } from "@haus-fmt/haus"
+import { readSourcesSync } from "@haus-fmt/haus/node"
+import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, isHausError, parseWithLocations, Schema, Sources, type Schema as SchemaValue } from "@haus-fmt/haus/internal"
 import { generateCodecs } from "@haus-fmt/haus/codegen"
-import { isSchemaFile, readSchemaFile, type NodeResolverOptions } from "@haus-fmt/haus/node"
-import { resolverOf } from "./runtime/shared.js"
+import { isSchemaFile } from "@haus-fmt/haus/node"
+import type { Backend } from "./generate.js"
+import { unwrap } from "./generate.js"
 
 export interface Diagnostic {
   readonly message: string
@@ -34,11 +37,11 @@ export function schemaFor(dataFile: string): SchemaLink | undefined {
 }
 
 /**
- * Where declarations import a package's types from: its name when the
- * file's project has it, otherwise the copy this package uses (by absolute path).
+ * Where declarations import a library's types from (`@haus-fmt/haus`): its
+ * name when the file's project has it, otherwise the copy this package uses
+ * (by absolute path). The library, not a schema package: those are never looked for.
  */
 export function specifier(fileName: string, pkg: string): string {
-  // The package's own name: "@scope/name" or "name", without a subpath.
   const name = pkg.split("/").slice(0, pkg.startsWith("@") ? 2 : 1)
   for (let dir = dirname(fileName); ; dir = dirname(dir)) {
     if (existsSync(join(dir, "node_modules", ...name, "package.json"))) return pkg
@@ -56,8 +59,29 @@ export const identifier = (fileName: string): string => {
   return /^[A-Za-z_$]/.test(camel) && !RESERVED.has(camel) ? camel : `_${camel}`
 }
 
+/** The schema file read and compiled now, with the files read (to watch). Throws its HausError. */
+const compiled = (schemaPath: string, b: Backend): { readonly schema: SchemaValue; readonly files: string[]; readonly data: SourcesData } => {
+  const files: string[] = []
+  const read = unwrap(readSourcesSync(schemaPath, { packages: b.packages.packages, folders: b.packages.folders, ...(b.packages.root === undefined ? {} : { root: b.packages.root }), onOpen: (p) => files.push(p) }))
+  const sources = b.bundles.reduce((s, bundle) => Sources.withPackage(s, bundle.package), read)
+  const schema = unwrap(Schema.compile(sources))
+  // Packages read from directories travel as their texts; bundles are imported by the module; official ones are built in.
+  const packages = [...schema.packages.values()]
+    .filter((p) => p.origin.kind === "directory" || p.origin.kind === "folder")
+    .map((p) => ({ manifest: p.manifest, schema: p.schema }))
+  return { schema, files, data: { entry: read.entry, files: Object.fromEntries(read.files), ...(read.id === undefined ? {} : { id: read.id }), packages } }
+}
+
+/** What a generated module compiles at runtime: the sources as plain data (no absolute paths) and the packages read. */
+export interface SourcesData {
+  readonly entry: string
+  readonly files: Readonly<Record<string, string>>
+  readonly id?: string
+  readonly packages: readonly { readonly manifest: string; readonly schema: string }[]
+}
+
 /** Declarations for a data file with a schema, plus where the data doesn't match it. */
-export function dataModule(text: string, fileName: string, link: SchemaLink, packages: NodeResolverOptions = {}): { text: string; diagnostics: Diagnostic[] } {
+export function dataModule(text: string, fileName: string, link: SchemaLink, b: Backend): { text: string; diagnostics: Diagnostic[] } {
   const name = identifier(fileName)
   const schemaName = basename(link.path)
   const fallback = (message: string) => ({
@@ -65,15 +89,14 @@ export function dataModule(text: string, fileName: string, link: SchemaLink, pac
     diagnostics: [{ message, offset: 0, length: 1 }],
   })
   if (!existsSync(link.path)) return fallback(`schema file not found: ${link.path}`)
-  let file
+  let schema: SchemaValue
   try {
-    // Read as every file of the schema is: a regular file, opened without blocking.
-    const { text: schemaText, options } = readSchemaFile(link.path, packages)
-    file = parseSchemaFile(schemaText, options)
+    schema = compiled(link.path, b).schema
   } catch (e) {
-    if (e instanceof HausSyntaxError || e instanceof ModuleError) return fallback(`${schemaName}: ${e.message}`)
+    if (isHausError(e)) return fallback(`${schemaName}: ${e.message}`)
     throw e
   }
+  const file = schema.file
   const definition = file.definition(link.type)
   if (!definition || definition.params.length > 0) return fallback(`${schemaName} has no type ${link.type} (without parameters) to describe the whole file`)
   const values = parseWithLocations(text)
@@ -91,93 +114,58 @@ export function dataModule(text: string, fileName: string, link: SchemaLink, pac
 
 // ── runtime modules ──────────────────────────────────────────
 
-/**
- * Parse options for a schema file (`base`, from readSchemaFile) that also record every import the
- * resolver finds, under short keys (no absolute paths end up in a bundle).
- * The recorded modules let the runtime rebuild the schema without a file system.
- */
-function recording(base: ParseSchemaOptions) {
-  const short = new Map<string, string>()
-  const real = new Map<string, string>()
-  const shorten = (key: string) => {
-    let k = short.get(key)
-    if (k === undefined) {
-      k = `m${short.size}`
-      short.set(key, k)
-      real.set(k, key)
-    }
-    return k
-  }
-  const modules: Record<string, ResolvedModule> = {}
-  const options: ParseSchemaOptions = {
-    key: shorten(base.key!),
-    id: base.id!,
-    resolver: {
-      resolve(module, from) {
-        const { path, ...found } = base.resolver!.resolve(module, from === undefined ? undefined : real.get(from))
-        // The bundle gets neither absolute keys nor paths; messages at build time still name the path.
-        const resolved = { ...found, key: shorten(found.key) }
-        modules[`${from ?? ""}\0${module}`] = resolved
-        return path === undefined ? resolved : { ...resolved, path }
-      },
-    },
-  }
-  return { options, modules, files: () => [...short.keys()] }
-}
+/** The imports of the bundles (`b0`, `b1`, …) and the expression of their list. */
+const bundleImports = (b: Backend): { readonly code: string; readonly list: string } => ({
+  code: b.bundles.map((bundle, i) => (bundle.name === "default" ? `import b${i} from ${JSON.stringify(bundle.module)};\n` : `import { ${bundle.name} as b${i} } from ${JSON.stringify(bundle.module)};\n`)).join(""),
+  list: `[${b.bundles.map((_, i) => `b${i}`).join(", ")}]`,
+})
 
-/**
- * Module source that rebuilds a schema file's schemas at runtime (`const
- * schema = …`), the files it was built from, the file as parsed now, and
- * options that parse it as the runtime does.
- */
-function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[]; file: SchemaFile; text: string; options: ParseSchemaOptions } {
-  // Read as every file of the schema is: a regular file, opened without blocking.
-  const { text, options: base } = readSchemaFile(schemaPath, packages)
-  const r = recording(base)
-  const file = parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
+/** Module source that compiles a schema file's schema at runtime (`const schema = …`), and the files it was built from. */
+function schemaModule(schemaPath: string, runtime: string, b: Backend): { code: string; files: string[]; schema: SchemaValue } {
+  const { schema, files, data } = compiled(schemaPath, b)
+  const bundles = bundleImports(b)
   return {
-    code: `import { compiled, decodeData } from ${JSON.stringify(runtime)};\n` +
-      `const schema = compiled(${JSON.stringify(text)}, ${JSON.stringify(r.modules)}, ${JSON.stringify(r.options.key)}, ${JSON.stringify(r.options.id)});\n`,
-    files: r.files(),
-    file,
-    text,
-    // The same keys as the runtime's: what is built now is what it builds.
-    options: { key: r.options.key!, id: r.options.id!, resolver: resolverOf(r.modules) },
+    code: `import { compiled, type, stream } from ${JSON.stringify(runtime)};\n${bundles.code}` +
+      `const schema = compiled(${JSON.stringify(data)}, ${bundles.list});\n`,
+    files,
+    schema,
   }
 }
 
 /**
- * The generated codecs of the types `optimize` of a schema file (and the
- * types they reach), generated now (no `eval` at runtime):
- * `prebuilt(schema, types, source, factory)`, the source both as a string
- * and as a function; it marks the types as `h.optimize` does. @haus-fmt/haus
- * uses the function for a marked schema once it has generated the same
- * source again from the schemas built at runtime. Empty if nothing is generated.
+ * The generated codecs of the types `optimize` (and the types they reach),
+ * generated now (no `eval` at runtime): `prebuilt(schema, types, source,
+ * factory)`. Empty if nothing is generated.
  */
-function prebuiltCodecs(text: string, options: ParseSchemaOptions, optimize: readonly string[]): string {
-  const { schemas } = fromSchemaFile(parseSchemaFile(text, options))
+function prebuiltCodecs(schema: SchemaValue, optimize: readonly string[]): string {
+  const { schemas } = fromSchemaFile(schema.file, { rules: schema.rules })
   const source = generateCodecs(schemas, optimize)
   if (source === undefined) return ""
   return `prebuilt(schema, ${JSON.stringify(optimize)}, ${JSON.stringify(source)}, function (rt, env) {\n${source}});\n`
 }
 
 /**
- * Module source for a `.schema.haus` file: its schemas as named exports, and
- * the generated codecs of the types `optimize` (plain target), generated now.
+ * Module source for a `.schema.haus` file (plain target): the compiled
+ * `schema` and a handle per type without parameters; the generated codecs
+ * of the types `optimize`, generated now. The Effect target: its schemas.
  */
-export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}, optimize: readonly string[] = []): { code: string; files: string[] } {
-  const { code, files, file, text, options } = compiledSchema(path, runtime, packages)
-  const names = file.definitions.filter((d) => d.params.length === 0).map((d) => d.name)
-  const prebuilt = optimize.length > 0 ? prebuiltCodecs(text, options, optimize) : ""
+export function schemaModuleSource(path: string, runtime: string, b: Backend, optimize: readonly string[] = []): { code: string; files: string[] } {
+  const { code, files, schema } = schemaModule(path, runtime, b)
+  const own = schema.file.definitions.filter((d) => d.params.length === 0)
+  if (b.target === "effect") return { code: code + own.map((d) => `export const ${d.name} = schema.schemas[${JSON.stringify(d.name)}];\n`).join(""), files }
+  const prebuilt = optimize.length > 0 ? prebuiltCodecs(schema, optimize) : ""
   const header = prebuilt === "" ? "" : `import { prebuilt } from ${JSON.stringify(runtime)};\n`
-  return { code: header + code + prebuilt + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
+  const handles = own.map((d) => `export const ${d.name} = ${d.template.stream ? "stream" : "type"}(${JSON.stringify(d.id)});\n`).join("")
+  return { code: header + code + prebuilt + "export { schema };\n" + handles, files }
 }
 
 /** Module source for a data file with a schema: decoded with it when the module loads. */
-export function dataModuleSource(text: string, fileName: string, link: SchemaLink, runtime: string, packages: NodeResolverOptions = {}): { code: string; files: string[] } {
-  const { code, files } = compiledSchema(link.path, runtime, packages)
+export function dataModuleSource(text: string, fileName: string, link: SchemaLink, runtime: string, b: Backend): { code: string; files: string[] } {
+  const { code, files, schema } = schemaModule(link.path, runtime, b)
+  const d = schema.file.definition(link.type)
+  if (d === undefined) throw new HausSyntaxError(`${basename(link.path)} has no type ${link.type} to describe the whole file`, 0, 1, 1, "unknown-type")
   return {
-    code: code + `export default decodeData(${JSON.stringify(text)}, schema, ${JSON.stringify(link.type)}, ${JSON.stringify(basename(fileName))});\n`,
+    code: code + `import { decodeData } from ${JSON.stringify(runtime)};\nexport default decodeData(${JSON.stringify(text)}, schema, ${JSON.stringify(b.target === "effect" ? d.name : d.id)}, ${d.template.stream}, ${JSON.stringify(basename(fileName))});\n`,
     files,
   }
 }

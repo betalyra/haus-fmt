@@ -3,10 +3,11 @@
  * core reports for the same input, a hint, a docs link and the core's JSON form.
  * Hand-written Effect schemas get codes too, from the issues of Effect's decoder.
  */
-import { errorJson as coreErrorJson, HausSyntaxError, parse } from "@haus-fmt/haus"
+import { errorJson as coreErrorJson, HausSyntaxError, parse } from "@haus-fmt/haus/internal"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Redacted, Schema, Stream } from "effect"
 import * as Haus from "../src/index.js"
+import { compileText } from "./support.js"
 
 /** The code and place of decoding `text` with `schema`. */
 const failure = (schema: Schema.Top, text: string) =>
@@ -159,7 +160,7 @@ describe("Effect's issues as codes (as the core decides, spec §17)", () => {
 
   it.effect("a schema file's types report what the core reports", () =>
     Effect.gen(function* () {
-      const { schemas } = Haus.compileSchemaFile(`
+      const { schemas } = compileText(`
         type Root = { small: Int8, big: UInt32, pair: < Pair Int String >, nick: Maybe String, payload: < Wrap { values: Array Int32 } > }`)
       const fields = { small: "1", big: "1", pair: `Pair(1, "a")`, nick: "None", payload: "Wrap { values: [] }" }
       const text = (over: string) => {
@@ -188,7 +189,7 @@ describe("Effect's issues as codes (as the core decides, spec §17)", () => {
       expect(yield* hint(Schema.TaggedStruct("Empty", {}), "Empty(1)")).toMatchObject({ hint: "Empty takes no payload: write `Empty`." })
       expect(yield* hint(Schema.Option(Schema.Finite), "Some")).toMatchObject({ hint: "Some takes 1 argument: write `Some(…)`." })
       expect(yield* hint(Schema.Boolean, "True(1)")).toMatchObject({ hint: "True takes no payload: write `True`." })
-      const { schemas } = Haus.compileSchemaFile("type Root = < Point Float64 Float64 >")
+      const { schemas } = compileText("type Root = < Point Float64 Float64 >")
       expect(yield* hint(schemas.Root!, "Point(1)")).toMatchObject({ code: "wrong-payload", path: "$", hint: "Point takes 2 arguments: write `Point(…, …)`." })
     }))
 

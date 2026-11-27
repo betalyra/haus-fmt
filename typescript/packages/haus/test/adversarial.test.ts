@@ -125,9 +125,10 @@ describe("work budget", () => {
     const Nest: h.Schema<Nest> = h.Recursive<Nest>("Nest", (self) => h.Array(self), { maxDepth: 100 })
     let x: Nest = []
     for (let i = 0; i < 50; i++) x = [x, x] // 2^50 nodes when written out
+    // Encoded once per object (the value shares parts as the objects do), so the node limit ends it at once (spec §7).
     const e = within(5000, () => errorOf(() => h.encode(Nest, x, { maxSteps: 100_000 })))
     expect(e).toBeInstanceOf(h.HausEncodeError)
-    expect(e.message).toContain("encode budget")
+    expect(e).toMatchObject({ code: "too-many-nodes", path: [] })
   })
 })
 
@@ -176,13 +177,20 @@ const forgedCycle = (): Value => {
 describe("decoding values built in code", () => {
   it("a forged cyclic Value is rejected before decoding", () => {
     const cyclic = forgedCycle()
-    expect(errorOf(() => h.decode(h.Array(h.Int), cyclic)).message).toContain("nested deeper than 256")
+    // An error, never a hang: the schema's own (its item is the array) or the depth limit's.
+    expect(errorOf(() => h.decode(h.Array(h.Int), cyclic))).toBeInstanceOf(h.HausDecodeError)
+    type Nest = readonly Nest[]
+    const Nest: h.Schema<Nest> = h.Recursive<Nest>("Nest", (self) => h.Array(self))
+    expect(errorOf(() => h.decode(Nest, cyclic))).toBeInstanceOf(h.HausDecodeError)
   })
 
   it("depth is limited even for schemas without recursion", () => {
+    // Constructors stop at 256 levels (spec §7); a value parsed with a larger limit is deeper.
     let v: Value = num("1")
-    for (let i = 0; i < 300; i++) v = arr([v])
-    expect(errorOf(() => h.decode(h.Array(h.Int), v)).message).toContain("nested deeper than 256")
+    for (let i = 0; i < 256; i++) v = arr([v])
+    expect(() => arr([v])).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    const deep = parseAll(`${"[".repeat(300)}1${"]".repeat(300)}`, { maxDepth: 300 })[0]!
+    expect(errorOf(() => h.decode(h.Array(h.Int), deep))).toMatchObject({ code: "nesting-too-deep" })
   })
 })
 

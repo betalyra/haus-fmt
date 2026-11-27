@@ -1,9 +1,10 @@
 /** `Secret a`, `Any` and attributes through the Effect adapter (spec §14, §15). */
-import { canonical, equals, num, parse, parseSchemaFile, type Value } from "@haus-fmt/haus"
+import { canonical, equals, num, parse, parseSchemaFile, type Value } from "@haus-fmt/haus/internal"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Redacted, Schema } from "effect"
 import { inspect } from "node:util"
 import * as Haus from "../src/index.js"
+import { compileText } from "./support.js"
 
 const SECRET = "hunter2-ZQXJ9WVK"
 
@@ -23,7 +24,7 @@ const failure = <A>(effect: Effect.Effect<A, Haus.HausError>): Haus.HausError =>
 const schema = `
   type Config = closed { name: String, key: Secret String, pin?: Secret Int8, keys: Secret (Map Int), extra: Any }
   type Root = Config`
-const { schemas } = Haus.compileSchemaFile(schema)
+const { schemas } = compileText(schema)
 const Config = schemas.Config!
 
 describe("Secret", () => {
@@ -40,8 +41,14 @@ describe("Secret", () => {
     expect(String(config.key)).toBe("<redacted>")
     expect(JSON.stringify(config)).not.toContain(SECRET)
     expect(inspect(config, { depth: 10 })).not.toContain(SECRET)
-    // Written in full: the receiver needs it.
-    expect(Effect.runSync(Haus.encode(Config)(config, { style: "compact" }))).toBe(`{ name: "a", key: "${SECRET}", pin: 12, keys: { a: 1 }, extra: 1 }`)
+    // Written in full only when the program says so (spec §15, "Encoding a secret").
+    expect(Effect.runSync(Haus.encode(Config)(config, { style: "compact", revealSecrets: true }))).toBe(`{ name: "a", key: "${SECRET}", pin: 12, keys: { a: 1 }, extra: 1 }`)
+    const refused = failure(Haus.encode(Config)(config))
+    expect([refused.code, refused._tag === "HausSchemaError" ? refused.place : undefined]).toEqual(["cannot-encode", "$.key"])
+    expectNoPartOf(SECRET, refused.message)
+    // The schema-based JSON too, and a stream.
+    expect(failure(Haus.toJson(Config)(config)).code).toBe("cannot-encode")
+    expect(Effect.runSync(Haus.toJson(Config)(config, { revealSecrets: true }))).toContain(SECRET)
   })
 
   it("leaves the value out of errors, from the converter and from Effect", () => {
@@ -62,10 +69,10 @@ describe("Secret", () => {
 
   it("leaves the value out of encode errors", () => {
     const value = { name: "a", key: Redacted.make(SECRET), pin: Redacted.make(98765), keys: Redacted.make({}), extra: parse("1") }
-    const e = failure(Haus.encode(Config)(value as never))
+    const e = failure(Haus.encode(Config)(value as never, { revealSecrets: true }))
     expectNoPartOf("98765", e.message)
     expect(e.message).toContain("(a Secret: the value is not shown)")
-    const bare = failure(Haus.encode(Config)({ ...value, pin: undefined, key: SECRET } as never))
+    const bare = failure(Haus.encode(Config)({ ...value, pin: undefined, key: SECRET } as never, { revealSecrets: true }))
     expectNoPartOf(SECRET, bare.message)
   })
 
@@ -93,7 +100,9 @@ describe("Any", () => {
   it("checks a value before writing it", () => {
     const e = failure(Haus.encodeValue(Haus.Any)({ kind: "number", text: "1" } as unknown as Value))
     expect(e.message).toContain("expected a haus value")
-    expect(failure(Haus.encodeValue(Haus.Any)(num("1e9999"))).code).toBe("exponent-too-large")
+    // A number beyond the limits can't be built (spec §7): a lowered limit holds it when encoding.
+    expect(() => num("1e9999")).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    expect(failure(Haus.encodeValue(Haus.Any)(num("1e999"), { maxExponent: 99 })).code).toBe("exponent-too-large")
     // Number literals built in code are normalized when they are built, as the parser would.
     const built = num("1E5")
     expect(Effect.runSync(Haus.encodeValue(Haus.Any)(built))).toBe(built)

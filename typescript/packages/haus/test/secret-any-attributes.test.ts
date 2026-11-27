@@ -46,14 +46,22 @@ describe("Secret", () => {
     expect(h.Secret.is("x")).toBe(false)
   })
 
-  it("decodes what its type decodes and encodes it back unchanged", () => {
+  it("decodes what its type decodes, and encodes it back unchanged with revealSecrets only (spec §15)", () => {
     const Config = h.Record({ key: h.Secret(h.String), pin: h.Optional(h.Secret(h.Int)) })
     const config = h.parse(Config, `{ key: "${SECRET}", pin: 1234 }`)
     expect(config.key).toBeInstanceOf(Secret)
     expect(config.key.expose()).toBe(SECRET)
     expect(config.pin?.expose()).toBe(1234n)
-    expect(h.stringify(Config, config, { style: "compact" })).toBe(`{ key: "${SECRET}", pin: 1234 }`)
-    expect(h.stringify(Config, { key: h.Secret.make("new") }, { style: "compact" })).toBe('{ key: "new" }')
+    const reveal = { style: "compact", revealSecrets: true } as const
+    expect(h.stringify(Config, config, reveal)).toBe(`{ key: "${SECRET}", pin: 1234 }`)
+    expect(h.stringify(Config, { key: h.Secret.make("new") }, reveal)).toBe('{ key: "new" }')
+    // Without the option, refused at the secret, in an error that doesn't show it; on every path.
+    for (const style of ["compact", "minimised", "pretty"] as const) {
+      const e = thrown(() => h.stringify(Config, config, { style }))
+      expect(e).toMatchObject({ code: "cannot-encode", path: ["key"] })
+      expect(e.message).not.toContain(SECRET)
+    }
+    expect(() => h.toJson(Config, config)).toThrow(expect.objectContaining({ code: "cannot-encode" }))
   })
 
   it("leaves the value out of decode errors: only the place and the type", () => {
@@ -88,12 +96,13 @@ describe("Secret", () => {
 
   it("leaves the value out of encode errors", () => {
     const Config = h.Record({ key: h.Secret(h.UInt8) })
-    const wrong = thrown(() => h.encode(Config, { key: h.Secret.make(98765432) }))
+    const wrong = thrown(() => h.encode(Config, { key: h.Secret.make(98765432) }, { revealSecrets: true }))
     expect(wrong).toBeInstanceOf(h.HausEncodeError)
+    expect(wrong).toMatchObject({ code: "invalid-secret" })
     expect(wrong.message).toBe("expected UInt8 (a Secret: the value is not shown) at $.key")
     // A bare value where a Secret belongs: not quoted either.
     const bare = thrown(() => h.encode(h.Record({ key: h.Secret(h.String) }), { key: SECRET } as never))
-    expect(bare.message).toBe("expected a Secret (h.Secret.make(…)), got string at $.key")
+    expect(bare.message).toBe("expected a Secret (Secret.make(…)), got string at $.key")
   })
 
   it("comes from Secret in schema files", () => {
@@ -138,8 +147,9 @@ describe("Any", () => {
       undefined,
     ]
     for (const value of notValues) expect(() => h.encode(h.Any, value as Value)).toThrow(expect.objectContaining({ code: "cannot-encode" }))
-    expect(() => h.encode(h.Any, num("1e99999"))).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
-    const deep: Value = Array.from({ length: 300 }).reduce<Value>((v) => arr([v]), num("1"))
+    // A value parsed with larger limits is checked against the encoder's (spec §7).
+    expect(() => h.encode(h.Any, parse("1e99999", { maxExponent: 99999 }))).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    const deep: Value = parse(`${"[".repeat(300)}1${"]".repeat(300)}`, { maxDepth: 300 })
     expect(() => h.encode(h.Any, deep)).toThrow(/deeper than 256 levels/)
   })
 
@@ -358,10 +368,10 @@ describe("attributes", () => {
 
   it("become JSDoc @deprecated in declarations", () => {
     const d = schemaDeclarations(parseSchemaFile(schema))
-    expect(d).toContain(" * @deprecated use Customer\n */\nexport type Client = ")
-    expect(d).toContain("/** @deprecated use email */ readonly mail?: string")
+    expect(d).toContain(" * @deprecated use Customer\n */\nexport type Client<H$ = {}> = ")
+    expect(d).toContain(`/** @deprecated use email */ readonly mail?: h$.Host<H$, "prelude#String", string>`)
     expect(d).toContain('/** @deprecated */ readonly _tag: "Square"')
-    expect(d).toContain("/** @deprecated gone */ readonly old?: bigint")
+    expect(d).toContain(`/** @deprecated gone */ readonly old?: h$.Host<H$, "prelude#Int", bigint>`)
     expect(schemaDeclarations(parseSchemaFile(`type L = closed < A | @deprecated("*/ no") B >`))).toContain('"A" | /** @deprecated *\\/ no */ "B"')
   })
 
@@ -382,7 +392,9 @@ describe("Secret and Any in tools", () => {
 
   it("declare Secret<T> and Value", () => {
     const d = schemaDeclarations(file)
-    expect(d).toContain("readonly key: h$.Secret<string>; readonly pin?: h$.Secret<bigint>; readonly extra: h$.Value; readonly keys: h$.Secret<ReadonlyMap<string, bigint>>")
+    expect(d).toContain(
+      `readonly key: h$.Secret<h$.Host<H$, "prelude#String", string>>; readonly pin?: h$.Secret<h$.Host<H$, "prelude#Int", bigint>>; readonly extra: h$.Host<H$, "prelude#Any", h$.Value>; readonly keys: h$.Secret<ReadonlyMap<string, h$.Host<H$, "prelude#Int", bigint>>>`,
+    )
   })
 
   it("checkData masks values inside a Secret", () => {
@@ -451,9 +463,12 @@ describe("raw values are checked like the parser counts them (spec §7, §9.8)",
   })
 
   it("rejects an empty container nested deeper than the parser allows", () => {
+    // 257 levels, an empty array innermost: constructors refuse it, an encoder with the default limits too.
     let deep: Value = arr([])
-    for (let i = 0; i < 256; i++) deep = arr([deep])
-    expect(() => h.encode(h.Any, deep)).toThrow(h.HausEncodeError)
+    for (let i = 0; i < 255; i++) deep = arr([deep])
+    expect(() => arr([deep])).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    const parsed = parse(`${"[".repeat(257)}${"]".repeat(257)}`, { maxDepth: 257 })
+    expect(() => h.encode(h.Any, parsed)).toThrow(h.HausEncodeError)
   })
 
   it("rejects an unknown value whose tag the variant lists", () => {

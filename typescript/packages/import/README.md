@@ -4,8 +4,10 @@ Import `.haus` files in TypeScript, with types:
 
 ```ts
 import people from "./people.haus"              // no schema: typed by its data
-import { Comment } from "./thread.schema.haus"  // a schema file: its types and schemas
-import thread from "./thread.haus"              // typed by thread.schema.haus, checked against it
+import { Comment, schema } from "./thread.schema.haus"  // a schema file: its types, their handles and its compiled schema
+import thread from "./thread.haus"                      // typed by thread.schema.haus, checked against it
+
+Schema.decode(schema, Comment)(text)                    // Result<Comment, HausError>
 ```
 
 Two parts make an import work, and both come from one generator
@@ -21,7 +23,7 @@ Two parts make an import work, and both come from one generator
 
 | Target | `.schema.haus` | data with a schema | data without a schema | needs |
 |---|---|---|---|---|
-| `"plain"` (default) | haus schemas (Standard Schemas) | decoded with them | plain JS values | nothing |
+| `"plain"` (default) | its compiled `schema` and a type handle per type (`@haus-fmt/haus`) | decoded with it | plain JS values | nothing |
 | `"effect"` | Effect schemas | decoded with Effect | plain JS values | `effect`, `@haus-fmt/effect` |
 
 Plain, without a schema: strings, `bigint` for whole numbers, `string` for decimals
@@ -33,7 +35,8 @@ fields only some records have.
 Plain, with a schema: the same, plus `Int8` … `UInt32` and floats → `number`, std/time values → their text as written,
 `Maybe a` → `Maybe<A>` (the same tagged form), `Map` → `ReadonlyMap`, open variants add `Unknown`, `Any` → `Value` (the parsed
 value, unchanged) and `Secret a` → `Secret<A>`
-(see [`@haus-fmt/haus`](../haus)).
+(see [`@haus-fmt/haus`](../haus)). Each type takes the codecs' host types, so
+`Schema.decode(Schema.withCodec(…), Order)` is typed with them.
 With Effect: `Int` → `bigint`, `Decimal` → `string` (exact), std/time values → their text as written,
 `Maybe` → `Option`, `Any` → `Haus.Value` and `Secret a` → `Redacted<A>`
 (see [`@haus-fmt/effect`](../effect)). Every target keeps the value as
@@ -68,25 +71,28 @@ export default { plugins: [haus({ target: "effect" })] }
 ```
 
 With Vite, data without a schema is baked into the bundle as JavaScript values,
-so no haus parser ships for it. Schema imports (`import @haus-fmt/money`) are resolved at
-build time, and the schema files are watched.
+so no haus parser ships for it. A schema file's sources are read at build
+time (the official packages are built in), and the schema files are watched.
 
 In VS Code, typed imports need the TypeScript native preview extension, a trusted
 workspace and permission to run content mappers.
 
 ## Schema packages
 
-Schema imports (`import @acme/money (Money)`) find packages in `node_modules`,
-from the real path of the importing file, when the nearest `package.json`
-declares them. Packages outside `node_modules` (vendored, or from a Cargo or
-Python project) are given with the same options everywhere:
+The official packages (`import @haus-fmt/money (Money)`) are built in. Every
+other package is given, never looked for (no `node_modules` search), with the
+same options everywhere:
 
 | Option | |
 |---|---|
-| `packages` | package directories (with `package.haus` and `schema.haus`), used instead of an installed package with the same name |
-| `folders` | folders whose direct subdirectories with a `package.haus` are packages; one also installed in `node_modules` must have the same files |
-| `npm` | `false`: only `packages` and `folders`, never `node_modules` (default `true`) |
+| `bundles` | libraries that publish a schema package as a value (a bundle, with its rules), by module specifier, imported as your program imports them: their default export, or a named one after `#` (`"@acme/orders#orders"`) |
+| `packages` | package directories (with `package.haus` and `schema.haus`) |
+| `folders` | folders whose direct subdirectories with a `package.haus` are packages; a package directory given is used instead of one with its name |
 | `root` | the directory relative imports of schema files stay in (default: each schema file's directory); `"src"` lets `src/app/order.schema.haus` import `../shared/money` |
+
+A package given by its directory carries no rules: if its manifest names one
+(`rules: { "Id": "ulid" }`), the import fails with `missing-codec` unless the
+library's bundle is given instead. The `npm` option is gone.
 
 Paths are relative to the project root: the directory of `tsconfig.json` for
 the content mapper, Vite's `root` for the plugin, the working directory for the
@@ -129,11 +135,11 @@ await register({ optimize: { "src/github.schema.haus": ["Issue"] } })
 ```
 
 ```ts
-import { Issue } from "./github.schema.haus"
-h.parse(Issue, text)   // the code built ahead for Issue
+import { Issue, schema } from "./github.schema.haus"
+Schema.decode(schema, Issue)(text)   // the code built ahead for Issue
 ```
 
-| `optimize` option | `h.optimize(Issue)` in the code | what runs for `Issue` |
+| `optimize` option | `Schema.optimize(schema, Issue)` in the code | what runs for `Issue` |
 |---|---|---|
 | no | no | closures (the default); no generated code in the bundle |
 | no | yes | code made at first use with `new Function` (needs `eval`) |
@@ -142,7 +148,8 @@ h.parse(Issue, text)   // the code built ahead for Issue
 Only the listed types, and the types they reach (`User` inside `Issue`), get
 code in the module; a module without the option has none, so bundles stay
 small. A reached type that isn't listed keeps the closures unless you call
-`h.optimize(User)`, which then uses the code built ahead too. Code for a whole large schema file can run to megabytes, so list only
+`Schema.optimize(schema, User)`, which then uses the code built ahead too. Code
+is built for the schema without codecs: a schema with codecs uses the closures. Code for a whole large schema file can run to megabytes, so list only
 the types you measured as hot. Paths are relative to the project root (Vite's
 `root`, the working directory for the Node loader); a schema file or type that
 doesn't exist is an error when the loader starts. The content mapper ignores

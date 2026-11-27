@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prestart": "pnpm --filter @haus-fmt/haus --filter @haus-fmt/effect --filter @haus-fmt/import build",
-    "start": "tsx --import @haus-fmt/import/register/effect src/main.ts",
+    "prestart": "pnpm --filter @haus-fmt/haus --filter @haus-fmt/import build",
+    "start": "tsx --import @haus-fmt/import/register src/main.ts",
     "typecheck": "tsc --noEmit --runExternalCode"
   },
   "devDependencies": {
@@ -14,9 +14,6 @@
     "typescript": "7.1.0-beta"
   },
   "dependencies": {
-    "@haus-fmt/effect": "workspace:*",
-    "@haus-fmt/geo": "workspace:*",
-    "@haus-fmt/money": "workspace:*",
-    "effect": "4.0.6"
+    "@haus-fmt/haus": "workspace:*"
   }
 }

@@ -16,7 +16,7 @@
  * `repository`, …; an array of X counts as X), or the operation for an
  * inline schema.
  */
-import { isJsonObject, jsonObject, JsonNumber, parseJson, stringifyJson, type Json, type JsonObject } from "@haus-fmt/haus"
+import { isJsonObject, jsonObject, JsonNumber, parseJson, stringifyJson, type Json, type JsonObject } from "@haus-fmt/haus/internal"
 import { parseAllDocuments } from "yaml"
 import { JSON_SCHEMA, OPENAPI, typeName, type Converter, type ConverterOptions } from "./openapi.ts"
 

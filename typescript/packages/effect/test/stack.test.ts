@@ -25,7 +25,8 @@ const { parentPort, workerData } = require("node:worker_threads")
   const N = workerData.depth
   const limits = { maxDepth: N }
   const Nest = Schema.Array(Schema.suspend(() => Nest))
-  const nestedValue = (n) => Array.from({ length: n - 1 }).reduce((inner) => H.arr([inner]), H.arr([]))
+  // As a reader builds it with raised limits: the constructors build values within the default limits only.
+  const nestedValue = (n) => Array.from({ length: n - 1 }).reduce((inner) => H.uncheckedArr([inner]), H.uncheckedArr([]))
   const nestedArray = (n) => Array.from({ length: n - 1 }).reduce((inner) => [inner], [])
   const paths = {
     "decode": () => Haus.decode(Nest)("[".repeat(N) + "]".repeat(N), limits),
@@ -49,7 +50,7 @@ const { parentPort, workerData } = require("node:worker_threads")
       eval: true,
       workerData: {
         effect: pathToFileURL(require.resolve("effect")).href,
-        haus: pathToFileURL(require.resolve("@haus-fmt/haus")).href,
+        haus: pathToFileURL(require.resolve("@haus-fmt/haus/internal")).href,
         index: pathToFileURL(join(DIST, "index.js")).href,
         depth,
       },

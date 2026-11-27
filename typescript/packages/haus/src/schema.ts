@@ -59,10 +59,16 @@ export interface Limits extends Partial<ValueLimits> {
    * share sub-objects (a DAG of depth 64 would otherwise expand to 2^64 nodes).
    */
   readonly maxSteps?: number
-  // The parser's limits (maxNumberLength, maxExponent, maxStringLength, default
-  // DEFAULT_LIMITS) apply when `parse` reads the text, and when a raw value
-  // (an `Any`, an unknown variant) is written again (spec §9.8): pass the same
-  // limits to both, and a parsed value always encodes again.
+  /**
+   * Encoding: write every `Secret` in full (spec §15, "Encoding a secret").
+   * Off by default: a secret is then refused, `cannot-encode` at the secret,
+   * so a secret leaves the program only by its choice.
+   */
+  readonly revealSecrets?: boolean
+  // The parser's limits (maxNumberLength, maxExponent, maxStringLength,
+  // maxNodes, default DEFAULT_LIMITS) apply when `parse` reads the text, and
+  // to the value an encoder builds (spec §7): every string, key and number,
+  // its depth and its size.
 }
 
 const DEFAULT_MAX_DEPTH = 256
@@ -81,6 +87,15 @@ export interface Context {
   readonly recursion: Map<object, { depth: number; current: unknown }>
   /** Encoding: the objects being encoded on the current path, to detect cycles. */
   readonly ancestors: Set<object>
+  /** Encoding: write secrets in full (`Limits.revealSecrets`). */
+  readonly revealSecrets: boolean
+  /**
+   * Encoding: the value each object was encoded to, per schema. An object the
+   * program shares between places is encoded once, and the value shares its
+   * part as the objects do, its size counted as written (spec §7): a DAG over
+   * the node limit fails at once with `too-many-nodes`, instead of expanding.
+   */
+  readonly encoded: WeakMap<object, Map<object, Value>>
 }
 
 /**
@@ -131,6 +146,11 @@ export class At {
   /** @internal The call's nesting limit (spec §7), for checking raw values. */
   get maxDepth(): number {
     return this.ctx.maxDepth
+  }
+
+  /** @internal The state of the whole call. */
+  get context(): Context {
+    return this.ctx
   }
 
   /** The parser's limits for this call, for checking raw values (spec §9.8). */
@@ -215,7 +235,34 @@ export const context = (mode: "decode" | "encode", maxSteps: number, limits: Lim
   steps: 0,
   recursion: new Map(),
   ancestors: new Set(),
+  revealSecrets: limits.revealSecrets === true,
+  encoded: new WeakMap(),
 })
+
+/**
+ * Encoding `a` with `schema` at `at` (spec §7, §15): an object encoded before
+ * with the same schema gives the same value again (`Context.encoded`), and a
+ * container built is checked against the node limit, `too-many-nodes` at the
+ * value given (`$`, or `$[i]`).
+ */
+export const encodeShared = (schema: object, a: unknown, at: At, ctx: Context, encode: () => Value): Value => {
+  if (typeof a !== "object" || a === null) return checkedSize(encode(), at, ctx)
+  let bySchema = ctx.encoded.get(a)
+  const known = bySchema?.get(schema)
+  if (known !== undefined) {
+    if (at.depth + known.depth > ctx.maxDepth) at.reject("nesting-too-deep", `nesting deeper than ${ctx.maxDepth} levels`)
+    return known
+  }
+  const v = checkedSize(encode(), at, ctx)
+  if (bySchema === undefined) ctx.encoded.set(a, (bySchema = new Map()))
+  bySchema.set(schema, v)
+  return v
+}
+
+const checkedSize = (v: Value, at: At, ctx: Context): Value =>
+  v.size > ctx.values.maxNodes
+    ? at.top().reject("too-many-nodes", `value of more than ${ctx.values.maxNodes} nodes (the objects share each other: written out, it would be larger than the node limit)`)
+    : v
 
 /** A container, as the parser counts levels: an array, a record, or a variant with arguments (empty or not). */
 const isContainer = (v: Value): boolean => v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0)
@@ -307,12 +354,16 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At, depth =
   }
 }
 
-/** A value built in code is decoded within the node limit (`maxNodes`, default 64 Mi, spec §7): the parser's 64 Mi characters can't produce more. */
+/**
+ * Decoding a value that exists: its size was recorded when it was built
+ * (spec §7), within the node limit, so decoding never raises `too-many-nodes`;
+ * the step budget is proportional to it.
+ */
 const decodeAt = (value: Value, limits: Limits, key?: string | number): At => {
-  if (limits.maxSteps !== undefined) return decodeWithin(limits, 0, key)
-  const maxDepth = limits.maxDepth ?? DEFAULT_MAX_DEPTH
-  const probe = At.root(context("decode", Infinity, limits), key)
-  return decodeWithin(limits, countValues(value, maxDepth, probe.limits.maxNodes, probe), key)
+  const at = decodeWithin(limits, value.size, key)
+  // A value deeper than the call's limit (one parsed with a larger one): its recorded depth says so at once (spec §7, §9.8).
+  if (value.depth > at.maxDepth) at.reject("nesting-too-deep", `value nested deeper than ${at.maxDepth} levels`)
+  return at
 }
 
 /** Decoding a value of `size` values (counted by `countValues`, or by the parser that read it: a tree within the limits). */
@@ -590,7 +641,7 @@ const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: 
   },
   encode: (a, at) => {
     at.step()
-    return encode(a, at)
+    return encodeShared(self, a, at, at.context, () => encode(a, at))
   },
   }
   return shaped(self, shape)
@@ -613,8 +664,13 @@ const string_ = make(
  * A string or key of the application's data, as haus text: one with an
  * unpaired surrogate has no UTF-8 form (spec §4), `cannot-encode` at `at`.
  */
-const writable = (s: string, what: "string" | "key", at: At): string =>
-  unpairedSurrogate(s) < 0 ? s : at.reject("cannot-encode", `a ${what} with an unpaired surrogate, which has no UTF-8 form`)
+const writable = (s: string, what: "string" | "key", at: At): string => {
+  if (unpairedSurrogate(s) >= 0) return at.reject("cannot-encode", `a ${what} with an unpaired surrogate, which has no UTF-8 form`)
+  // Within the string limit (spec §7): an encoder checks what the constructors check.
+  const max = at.limits.maxStringLength
+  if (longerThan(s, max)) at.reject(what === "key" ? "key-too-long" : "string-too-long", `${what} longer than ${max} characters`)
+  return s
+}
 
 const short = (text: string) => quoteText(text)
 /** A type's description inside another's, at most 80 characters. */
@@ -722,7 +778,11 @@ const bool = make(
 const bytes_ = make(
   "Bytes",
   (v, p) => (v.kind === "bytes" ? v.bytes : mismatch("Bytes", v, p)),
-  (b, p) => (b instanceof Uint8Array ? uncheckedBytes(b) : invalid("a Uint8Array", b, p)),
+  (b, p) =>
+    !(b instanceof Uint8Array) ? invalid("a Uint8Array", b, p)
+    // Two hex digits a byte, within the string limit (spec §7), as the constructor `bytes` checks.
+    : b.length * 2 > p.limits.maxStringLength ? p.reject("string-too-long", `byte string longer than ${p.limits.maxStringLength} hex digits`)
+    : uncheckedBytes(b),
   { kind: "bytes" },
   { kind: "bytes" },
 )
@@ -986,7 +1046,7 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
     },
     encode: (a, at) => {
       at.step()
-      return encodeRecord(a, at)
+      return encodeShared(self, a, at, at.context, () => encodeRecord(a, at))
     },
   }
   return shaped(self, { kind: "record", entries, closed: options.closed ?? false })
@@ -1320,8 +1380,10 @@ export const Secret = Object.assign(
       (v, at) => new SecretValue(concealed(inner.expected, at, () => inner.decode(v, at))),
       (s, at) =>
         // Not even a short description of what was given instead: it may be the secret itself.
-        s instanceof SecretValue ? concealed(inner.expected, at, () => inner.encode(s.expose(), at))
-        : at.reject("cannot-encode", `expected a Secret (h.Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`),
+        !(s instanceof SecretValue) ? at.reject("cannot-encode", `expected a Secret (Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`)
+        // Refused unless the program chose to write it (spec §15, "Encoding a secret").
+        : !at.context.revealSecrets ? at.reject("cannot-encode", `a Secret ${inner.expected} is not written without revealSecrets (the value is not shown)`, { expected: `revealSecrets: true` })
+        : concealed(inner.expected, at, () => inner.encode(s.expose(), at)),
       { kind: "secret", item: jsonType(inner), expected: inner.expected },
       { kind: "secret", inner },
     ),
@@ -1575,7 +1637,7 @@ const lineCompiled = (schema: AnySchema, value: unknown, options: FormatOptions 
 
 /** Encode and write as haus text in the standard format (no trailing newline). */
 export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions & Options = {}): string =>
-  lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), { ...options, limits: options })
+  lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), options)
 
 /**
  * Encode several values as a file, as `format` writes it: a single value
@@ -1587,7 +1649,7 @@ export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: Fo
   const all = [...values]
   const lines = all.map((v) => lineCompiled(schema, v, options, options.style))
   if (lines.every((l) => l !== undefined)) return lines.length === 1 && options.stream !== true ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
-  return format(all.map((v, i) => encodeFrom(schema, v, encodeAt(options, i))), { ...options, limits: options })
+  return format(all.map((v, i) => encodeFrom(schema, v, encodeAt(options, i))), options)
 }
 
 /**
@@ -1604,7 +1666,7 @@ export async function* encodeStream<A>(
   const layout: FormatOptions & Options = { style: "compact", ...options }
   for await (const v of values) {
     // Value i's errors are at `$[i]`, the writer's too.
-    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyAt(encodeFrom(schema, v, encodeAt(options, i)), { ...layout, limits: options }, [i])) + ",\n"
+    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyAt(encodeFrom(schema, v, encodeAt(options, i)), layout, [i])) + ",\n"
     i++
   }
 }

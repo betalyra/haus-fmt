@@ -1,7 +1,7 @@
 {
   "name": "@haus-fmt/effect",
   "version": "0.1.0",
-  "description": "Decode haus data with Effect schemas",
+  "description": "haus for Effect: schema files, packages and their rules as Effect schemas; the recommended way to use haus in TypeScript",
   "keywords": [
     "haus",
     "data-format",
@@ -22,6 +22,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./money": {
+      "types": "./dist/money.d.ts",
+      "default": "./dist/money.js"
+    },
+    "./geo": {
+      "types": "./dist/geo.d.ts",
+      "default": "./dist/geo.js"
+    },
+    "./uuid": {
+      "types": "./dist/uuid.d.ts",
+      "default": "./dist/uuid.js"
     }
   },
   "files": [

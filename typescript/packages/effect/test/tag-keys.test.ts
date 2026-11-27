@@ -5,14 +5,15 @@
  * payload that lists a field `_tag` is nested: `{ _tag: "Odd", value: { _tag: 1 } }`.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { canonical, parse } from "@haus-fmt/haus"
+import { canonical, parse } from "@haus-fmt/haus/internal"
 import { Effect, Exit, Redacted, type Schema } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
+import { compileText } from "./support.js"
 
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
-const own = (text: string) => Haus.compileSchemaFile(text).schemas
+const own = (text: string) => compileText(text).schemas
 const suite = (path: string) => own(readFileSync(repo(path), "utf8"))
 
 // From fuzz/schema/fuzz.schema.haus and fuzz/json/names.schema.haus.
@@ -45,7 +46,7 @@ const failure = <A, E>(effect: Effect.Effect<A, E>): string => {
 }
 const decode = (schema: Codec, text: string): any => run(Haus.decodeValue(schema)(parse(text)))
 /** Decode `text` with `schema` and encode it again, canonical. */
-const roundTrip = (schema: Codec, text: string) => canonical(run(Haus.encodeValue(schema)(decode(schema, text))))
+const roundTrip = (schema: Codec, text: string) => canonical(run(Haus.encodeValue(schema)(decode(schema, text), { revealSecrets: true })))
 /** Write `text` as schema-based JSON, read it back and encode it, canonical. */
 const jsonRoundTrip = (schema: Codec, text: string) => {
   const json = run(Haus.toJson(schema)(decode(schema, text)))
@@ -123,7 +124,7 @@ describe("a payload field named _tag", () => {
   })
 
   it("is declared nested", () => {
-    expect(Haus.schemaDeclarations(Haus.compileSchemaFile(namesText).file))
+    expect(Haus.schemaDeclarations(compileText(namesText).file))
       .toContain(`{ readonly _tag: "Odd"; readonly value: { readonly _tag: Haus$.Lookup<C$, "prelude#Int32", number>; readonly x?: Haus$.Lookup<C$, "prelude#String", string> } } | { readonly _tag: "Even" } | Haus$.Unknown`)
   })
 })

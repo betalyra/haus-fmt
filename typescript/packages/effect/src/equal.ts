@@ -11,7 +11,7 @@
  *   values.sort(Haus.ValueOrder)                            // deterministic
  *   HashSet.make(Haus.key(a), Haus.key(b))                  // haus values as keys
  */
-import { canonical, compare, type Value } from "@haus-fmt/haus"
+import { canonical, compare, type Value } from "@haus-fmt/haus/internal"
 import { Equal, Equivalence, Hash, type Order } from "effect"
 
 /** Equality of haus values (spec §2): the same canonical form. */

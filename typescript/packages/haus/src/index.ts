@@ -1,10 +1,17 @@
+/**
+ * The internals of `@haus-fmt/haus`, for its first-party tools (the Effect
+ * binding, the import tool, the editor extension) and tests: the text layer,
+ * the schema engine and the editor services as functions that throw the
+ * package's errors. Not a stable API: applications use `@haus-fmt/haus`,
+ * whose fallible functions give Results.
+ */
 import { checkWellFormed, HausSyntaxError, locate, START } from "./errors.js"
 import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
 export {
-  ERROR_CODES, errorCode, errorDocs, errorHint, errorJson, formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, isErrorCode, payloadHint,
-  type CasePayload, type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type Path,
+  ERROR_CODES, errorCode, errorDocs, errorHint, errorJson, formatPath, HausConfigError, HausDecodeError, HausEncodeError, HausPackageError, HausSyntaxError, isErrorCode, isHausError, payloadHint,
+  type CasePayload, type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type HausError, type Path,
 } from "./errors.js"
 export {
   equalsJson, fromHausJson, fromHausJsonLines, fromHausJsonValue, hausJsonDepth, importJson, importJsonLines, importJsonValue, isJsonObject, jsonDepth, jsonObject, JsonNumber,
@@ -15,13 +22,16 @@ export {
 } from "./json-schema-based.js"
 export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, STACK_NEEDED_MB, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
-export { arr, bytes, isValue, num, rec, str, variant, type HArray, type HBytes, type HNumber, type HRecord, type HString, type HVariant, type Located, type Value } from "./value.js"
-export { format, quote, stringify, type FormatOptions, type FormatStyle } from "./format.js"
+export { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant } from "./value.js"
+export { arr, bytes, isContainer, isValue, num, rec, str, Value, variant, type HArray, type HBytes, type HNumber, type HRecord, type HString, type HVariant, type Located, type Part } from "./value.js"
+export { format, quote, stringify, wholeOptionIssue, type FormatOptions, type FormatStyle } from "./format.js"
 export { canonical, compare, compareCodePoints, equals, hash, hashAll } from "./canonical.js"
+export { checkUnchanged } from "./written.js"
 export { floatText, floatValue, specialFloat, toFloat, toFloat32, toFloat64, type FloatType } from "./float.js"
 export { normalizeNumber } from "./number.js"
 export { unpairedSurrogate } from "./chars.js"
 export { infer, inferSchema, printShape, recursiveNames, RecordShape, resolve, Shape, VariantShape, type Inference, type PrintOptions } from "./infer.js"
+export { attempt, pipe, Result, type Failure, type Success } from "./result.js"
 
 /**
  * Parse a complete text into its sequence of top-level values, within
@@ -71,14 +81,19 @@ export {
 } from "./schema-file.js"
 export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, quoteText, schemaOutline, type MissingImport, type SchemaOutline } from "./schema-file.js"
 export { importEdits, missingImports, type ImportEdit } from "./schema-imports.js"
-export { missingCodecMessage, missingCodecs, packageProfiles, PROFILED_TYPES, uncheckedProfiles, type CodecWarning, type ProfileNote } from "./profiles.js"
+export { BUILT_IN_TYPE_IDS, unusedCodecs, type CodecWarning } from "./codec-ids.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"
 export { checkData, checkText, describeType, MAX_ERRORS, type CheckIssue, type CheckOptions, type CheckReport } from "./check.js"
 export { contextOf, describeValue, hoverAt, hoverContext, hoverMarkdown, hoverText, TAG_NOTES, type HoverContext, type HoverInfo } from "./hover.js"
 export { completeAt, type Completion } from "./complete.js"
 export { HausValidationError, parseWith, parseWithAsync, type StandardSchemaV1 } from "./standard.js"
-export { parsePlain, toPlain } from "./plain.js"
+export { parsePlain, plainDeclarations, toPlain } from "./plain.js"
 export {
-  compileSchemaFile, fromSchemaFile, schemaDeclarations, definitionDoc, deprecatedDoc, type Codec, type CompiledSchemaFile, type CompileOptions, type DeclarationOptions, type FromSchemaFileOptions,
+  compileSchemaFile, fromSchemaFile, schemaDeclarations, definitionDoc, deprecatedDoc, type Codec as EngineCodec, type CompiledSchemaFile, type CompileOptions, type DeclarationOptions, type FromSchemaFileOptions,
 } from "./schema-compile.js"
+export { Codec, compileForTool, engineSchemaOf, parseOptionsOf, Schema, Sources, sourcesOf, type DecodeOptions, type EncodeOptions, type Folder, type ReadFailure, type UncheckedRules, type WriteSchemaOptions } from "./compile.js"
+export { Package, packageOf, readManifest, ruleTypes, type Manifest, type PackageData, type PackageOrigin, type Rule } from "./package.js"
+export { geo, money, OFFICIAL, uuid } from "./official.js"
+export { Prelude, StdTime, Type as TypeHandle, type Builtin as BuiltinLambda, type Const, type Host, type StreamType, type TypeLambda, type TypeOf } from "./types.js"
+export * as h from "./schema.js"

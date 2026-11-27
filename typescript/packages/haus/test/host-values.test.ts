@@ -54,7 +54,7 @@ describe("constructors build only haus values (spec §11, values built in code)"
     ["an empty number", () => num(""), "invalid-number"],
     ["a number with spaces", () => num(" 1"), "invalid-number"],
     ["two numbers", () => num("1 2"), "invalid-number"],
-    ["a number that isn't text", () => num(1 as unknown as string), "cannot-encode"],
+    ["a number that isn't text, a JS number or a bigint", () => num({} as unknown as string), "cannot-encode"],
     ["a tag that isn't a tag", () => variant("lower"), "invalid-tag"],
     ["an empty tag", () => variant(""), "invalid-tag"],
     ["a tag with a lone surrogate", () => variant("A\uD800"), "invalid-tag"],
@@ -75,15 +75,17 @@ describe("constructors build only haus values (spec §11, values built in code)"
     expect(build).toThrow(encodeError(code))
   })
 
-  it("normalizes a number literal as the parser does, without limits", () => {
+  it("normalizes a number literal as the parser does, then applies the number limits (spec §7)", () => {
     expect(num("1e+05").text).toBe("1e5")
     expect(num("1E5").text).toBe("1e5")
     expect(num("0xFF").text).toBe("255")
     expect(num("1_000").text).toBe("1000")
     expect(num("-0x0").text).toBe("-0")
     expect(num("19.90").text).toBe("19.90")
-    expect(num(`1e${"9".repeat(30)}`).text).toBe(`1e${"9".repeat(30)}`)
-    expect(num("7".repeat(3000)).text).toBe("7".repeat(3000))
+    expect(num(255).text).toBe("255")
+    expect(num(10n ** 30n).text).toBe(`1${"0".repeat(30)}`)
+    expect(() => num(`1e${"9".repeat(30)}`)).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    expect(() => num("7".repeat(3000))).toThrow(expect.objectContaining({ code: "number-too-long" }))
     expect(num("1e+05")).toEqual(parse("1e5"))
   })
 
@@ -142,7 +144,8 @@ describe("what takes a value can't fail for it (spec §12)", () => {
     ["x", num("0xFF")],
     ["s", str("😀 a\nb")],
     ["k-y", arr([bytes(new Uint8Array([0, 255])), variant("None"), variant("Point", [num("1"), num("-0")])])],
-    ["big", num("9".repeat(1500))],
+    // A part parsed with larger limits keeps them (spec §7): constructors refuse such a number themselves.
+    ["big", parse("9".repeat(1500), { maxNumberLength: 2000 })],
   ])
 
   it("canonical, equals, compare, hash and hashAll", async () => {
@@ -156,27 +159,27 @@ describe("what takes a value can't fail for it (spec §12)", () => {
     expect(await hash(num("1e+05"))).toBe(await hash(parse("1e5")))
   })
 
-  it("writers write the normalized number; only their limits can fail (spec §7)", () => {
+  it("writers write the normalized number, and never fail (spec §11)", () => {
     expect(stringify(num("1e+05"))).toBe("1e5")
     expect(stringify(num("0xFF"), { style: "minimised" })).toBe("255")
-    expect(format([built, num("1")], { style: "compact", limits: { maxNumberLength: 2000 } })).toContain("big: 9999")
-    expect(() => format([built, num("1")], { style: "compact" })).toThrow(expect.objectContaining({ code: "number-too-long" }))
+    // A number parsed with larger limits is written as it is.
+    expect(format([built, num("1")], { style: "compact" })).toContain("big: 9999")
   })
 
-  it("writers check every number against the number limits, a decimal or an exponent too (spec §7)", () => {
-    const long = num(`1.${"0".repeat(2000)}`)
-    for (const style of ["pretty", "compact", "minimised"] as const) {
-      expect(() => stringify(long, { style })).toThrow(expect.objectContaining({ code: "number-too-long" }))
-      expect(() => stringify(num("1e9999"), { style })).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
-      expect(() => stringify(num(`1${"0".repeat(1000)}`), { style })).toThrow(expect.objectContaining({ code: "number-too-long" }))
-    }
+  it("constructors check every number against the number limits on its normalized form, a decimal or an exponent too (spec §7)", () => {
+    expect(() => num(`1.${"0".repeat(2000)}`)).toThrow(expect.objectContaining({ code: "number-too-long" }))
+    expect(() => num("1e9999")).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    expect(() => num(`1${"0".repeat(1000)}`)).toThrow(expect.objectContaining({ code: "number-too-long" }))
+    expect(() => num(`0x${"f".repeat(840)}`)).toThrow(expect.objectContaining({ code: "number-too-long" }))
+    expect(num(`1${"_0".repeat(600)}`).text).toBe(`1${"0".repeat(600)}`)
     expect(stringify(num("1e6144"))).toBe("1e6144")
-    expect(stringify(long, { limits: { maxNumberLength: 2002 } })).toBe(long.text)
-    expect(stringify(num("1e9999"), { limits: { maxExponent: 9999 } })).toBe("1e9999")
+    expect(stringify(num(`1${"0".repeat(999)}`))).toHaveLength(1000)
+    // An encoder checks with its own limits (spec §7).
     expect(() => h.stringify(h.Any, num("1e100"), { maxExponent: 99 })).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
-    expect(h.stringify(h.Any, long, { maxNumberLength: 2002 })).toBe(long.text)
+    const long = parse(`1.${"0".repeat(2000)}`, { maxNumberLength: 2002 })
+    expect(h.stringify(h.Any, long, { maxNumberLength: 2002 })).toBe(long.kind === "number" ? long.text : "")
     // The canonical form has no limits (spec §12).
-    expect(canonical(long)).toBe(long.text)
+    expect(canonical(long)).toBe(long.kind === "number" ? long.text : "")
   })
 
   it("a typed value: Any checks the limits with the place, String and Map keys with the place", () => {

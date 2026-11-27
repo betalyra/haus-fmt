@@ -17,7 +17,7 @@ import { defineOwn } from "./own.js"
 import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
 import { chunks, type ChunkSource } from "./stream.js"
 import { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant, type Value } from "./value.js"
-import { nodesWithin, tooManyNodes } from "./written.js"
+import { checkUnchanged } from "./written.js"
 
 // ── the JSON data model ──────────────────────────────────────
 
@@ -608,52 +608,31 @@ const VERSION = "1"
  * The self-describing JSON of a value (spec §16.2), without the envelope (as
  * inside schema-based JSON): strings and arrays as themselves,
  * `{"_num": "19.90"}`, `{"_bytes": "0b34"}`, `{"_rec": {…}}`,
- * `{"_tag": "Circle", "_args": […]}`. Within the limits (spec §7): a value
- * built in code can be outside them.
+ * `{"_tag": "Circle", "_args": […]}`. Total (spec §11): a value is within
+ * the limits it was built with, so no limit is checked; only the safety net
+ * (`value-changed`, written.ts).
  */
-export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => {
-  const fail = (reason: string, at: Place, code: ErrorCode = "cannot-encode"): never => {
-    throw new HausEncodeError(reason, at.path(), code)
-  }
-  const write = (v: Value, depth: number, at: Place, payload: boolean): Json => {
-    const open = () => {
-      if (!payload && depth >= limits.maxDepth) fail(`value nested deeper than ${limits.maxDepth} levels (or cyclic)`, at, "nesting-too-deep")
-    }
-    const inner = payload ? depth : depth + 1
+export const hausJsonOf = (value: Value, place: Place): Json => {
+  const write = (v: Value, at: Place): Json => {
     switch (v.kind) {
       case "string":
-        if (longerThan(v.value, limits.maxStringLength)) fail(`string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
         return v.value
-      case "number": {
-        const issue = numberLimitIssue(v.text, limits)
-        return issue === undefined ? jsonObject([["_num", v.text]]) : fail(issue.reason, at, issue.code)
-      }
+      case "number":
+        return jsonObject([["_num", v.text]])
       case "bytes":
         return jsonObject([["_bytes", toHex(v.bytes)]])
       case "array":
-        open()
-        return v.items.map((x, i) => write(x, inner, at.child(i), false))
+        return v.items.map((x, i) => write(x, at.child(i)))
       case "record":
-        open()
-        return jsonObject([["_rec", jsonObject([...v.fields].map(([k, x]) => {
-          if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at, "key-too-long")
-          return [k, write(x, inner, at.child(k), false)] as const
-        }))]])
-      case "variant": {
-        const tagIssue = tagLengthIssue(v.tag, limits)
-        if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
+        return jsonObject([["_rec", jsonObject([...v.fields].map(([k, x]) => [k, write(x, at.child(k))] as const))]])
+      case "variant":
         if (v.args.length === 0) return jsonObject([["_tag", v.tag]])
-        open()
-        // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
-        const single = v.args.length === 1 && v.args[0]!.kind === "record"
-        return jsonObject([["_tag", v.tag], ["_args", v.args.map((x, i) => write(x, depth + 1, at.child(i), single))]])
-      }
+        return jsonObject([["_tag", v.tag], ["_args", v.args.map((x, i) => write(x, at.child(i)))]])
     }
   }
-  // A value whose parts share each other expands when written: the node limit first (spec §7).
-  if (!nodesWithin(value, limits.maxNodes)) fail(tooManyNodes(limits.maxNodes), place, "too-many-nodes")
-  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
-  return guardStack(() => write(value, 0, place, false), encodeTooDeep(place.path()))
+  checkUnchanged(value, place.path())
+  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7): only for a value deeper than this binding supports.
+  return guardStack(() => write(value, place), encodeTooDeep(place.path()))
 }
 
 /** A haus value from its self-describing JSON without the envelope (spec §16.2, as inside schema-based JSON); any other JSON is an error. */
@@ -741,7 +720,7 @@ const unwrap = (json: Json, place: Place): Json => {
 }
 
 /** The self-describing JSON of a value (spec §16.2), as a JSON value: the envelope. */
-export const toHausJsonValue = (value: Value, limits: Partial<Limits> = {}): Json => envelope(hausJsonOf(value, withDefaults(limits), Place.root()))
+export const toHausJsonValue = (value: Value): Json => envelope(hausJsonOf(value, Place.root()))
 
 /**
  * The self-describing JSON text of a value (spec §16.2),
@@ -749,7 +728,7 @@ export const toHausJsonValue = (value: Value, limits: Partial<Limits> = {}): Jso
  * an equal value (§2). For carrying haus through systems that only store
  * JSON.
  */
-export const toHausJson = (value: Value, limits: Partial<Limits> = {}): string => stringifyJson(toHausJsonValue(value, limits))
+export const toHausJson = (value: Value): string => stringifyJson(toHausJsonValue(value))
 
 /**
  * A haus value from its self-describing JSON value (the envelope). Anything
@@ -863,8 +842,7 @@ export const fromHausJsonLines = (source: ChunkSource, options: JsonLinesOptions
 }
 
 /** Write values as JSON Lines of their self-describing JSON (§16.2): an envelope per line, each ending in a line feed. */
-export async function* toHausJsonLines(values: AsyncIterable<Value> | Iterable<Value>, limits: Partial<Limits> = {}): AsyncGenerator<string, void, undefined> {
-  const l = withDefaults(limits)
+export async function* toHausJsonLines(values: AsyncIterable<Value> | Iterable<Value>): AsyncGenerator<string, void, undefined> {
   let i = 0
-  for await (const v of values) yield stringifyJson(envelope(hausJsonOf(v, l, Place.root(i++)))) + "\n"
+  for await (const v of values) yield stringifyJson(envelope(hausJsonOf(v, Place.root(i++)))) + "\n"
 }

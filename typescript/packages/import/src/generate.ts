@@ -8,17 +8,25 @@
  *
  * The target decides what schemas become:
  *
- *   "plain"   haus schemas (Standard Schemas) from @haus-fmt/haus; no other dependencies
+ *   "plain"   type handles and the compiled `schema` of @haus-fmt/haus; no other dependencies
  *   "effect"  Effect schemas from @haus-fmt/effect
  *
  * Data files without a schema are plain values in both targets; data files
  * with a schema are decoded with it.
+ *
+ * Packages are never looked for (packages.md §2): the official packages are
+ * built in, and every other comes from the options, as directories
+ * (`packages`, `folders`) or as the bundles of libraries the project
+ * depends on (`bundles`: module specifiers, imported as the program imports
+ * them).
  */
-import { parseSchemaFile, schemaDeclarations } from "@haus-fmt/haus"
+import { readSourcesSync, isSchemaFile, type ReadSourcesOptions } from "@haus-fmt/haus/node"
+import { Package, parseSchemaFile, Result, Schema, schemaDeclarations, Sources, type HausError, type Package as PackageValue, type Sources as SourcesValue } from "@haus-fmt/haus/internal"
+import { plainDeclarations, parsePlain } from "@haus-fmt/haus/internal"
 import { existsSync, realpathSync } from "node:fs"
-import { resolve } from "node:path"
-import { isSchemaFile, nodeResolver, readSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
-import { parsePlain, plainDeclarations } from "@haus-fmt/haus/plain"
+import { createRequire } from "node:module"
+import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { dataModule, dataModuleSource, schemaFor, schemaModuleSource, specifier, type Diagnostic } from "./schemas.js"
 
 export type Target = "plain" | "effect"
@@ -27,33 +35,30 @@ export interface ImportOptions {
   /** What `.haus` imports become. Default "plain". */
   readonly target?: Target
   /**
-   * Schema packages given explicitly (spec §13.3), relative to the project
-   * root: each a package directory with `package.haus` and `schema.haus`.
-   * Used instead of an installed package with the same name.
+   * Schema packages given explicitly (packages.md §2), relative to the
+   * project root: each a package directory with `package.haus` and
+   * `schema.haus`.
    */
   readonly packages?: readonly string[]
-  /**
-   * Folders of packages, relative to the project root: each direct
-   * subdirectory with a `package.haus` is a package. One that is also
-   * installed in node_modules must have the same files.
-   */
+  /** Folders of packages, relative to the project root: each direct subdirectory with a `package.haus` is a package. */
   readonly folders?: readonly string[]
-  /** Look for packages in node_modules too (default true). With `false`, only `packages` and `folders`. */
-  readonly npm?: boolean
+  /**
+   * Libraries that publish a schema package as a bundle (packages.md §3),
+   * by module specifier, imported as the program imports them: their default
+   * export is the package value (`"@acme/orders"`), or a named export after
+   * `#` (`"@acme/orders#orders"`). Their rules come with them.
+   */
+  readonly bundles?: readonly string[]
   /**
    * The root directory of schema builds, relative to the project root (spec
    * §13.3, "The root"): relative imports of a schema file can't reach a file
-   * outside it. Default: the directory of each schema file, so `../shared`
-   * needs a root that contains both, such as `"src"` or `"."`.
+   * outside it. Default: the directory of each schema file.
    */
   readonly root?: string
   /**
    * Plain target, Node loader and Vite plugin: types to build generated code
    * for, by schema file (relative to the project root), e.g.
-   * `{ "src/github.schema.haus": ["Issue"] }`. The module of that file gets
-   * the code for these types and the types they reach, and marks these types
-   * as `h.optimize` does: they use it without `eval`. (`h.optimize` on a type
-   * they reach uses it too.) Without it, modules carry no generated code.
+   * `{ "src/github.schema.haus": ["Issue"] }`.
    */
   readonly optimize?: Readonly<Record<string, readonly string[]>>
 }
@@ -61,33 +66,43 @@ export interface ImportOptions {
 /** `optimize` as given: each schema file (`key` as written, `path` absolute) and its types. */
 export type OptimizeOption = readonly { readonly key: string; readonly path: string; readonly types: readonly string[] }[]
 
+/** Where a build's packages come from: directories, folders and bundles, and the build's root. */
+export interface PackageOptions {
+  readonly packages: readonly string[]
+  readonly folders: readonly string[]
+  readonly bundles: readonly string[]
+  readonly root?: string
+  /** The project root: bundles are imported from it. */
+  readonly project: string
+}
+
 export type { Diagnostic }
 
 const paths = (value: unknown, what: string): readonly string[] => {
   if (value === undefined) return []
   if (Array.isArray(value) && value.every((p) => typeof p === "string")) return value as readonly string[]
-  throw new Error(`@haus-fmt/import: ${what} must be a list of paths, found ${JSON.stringify(value)}`)
+  throw new Error(`@haus-fmt/import: ${what} must be a list of ${what === "bundles" ? "module specifiers" : "paths"}, found ${JSON.stringify(value)}`)
 }
 
 /**
- * The resolver options of `options`: `packages` and `folders` made absolute
+ * The package options of `options`: `packages` and `folders` made absolute
  * against `root` (the project root: Vite's root, the tsconfig.json's
  * directory, or the working directory).
  */
-export const packagesOf = (options: { readonly packages?: unknown; readonly folders?: unknown; readonly npm?: unknown; readonly root?: unknown } | undefined, root: string): NodeResolverOptions => {
-  const npm = options?.npm ?? true
-  if (typeof npm !== "boolean") throw new Error(`@haus-fmt/import: npm must be true or false, found ${JSON.stringify(npm)}`)
+export const packagesOf = (options: { readonly packages?: unknown; readonly folders?: unknown; readonly bundles?: unknown; readonly root?: unknown; readonly npm?: unknown } | undefined, root: string): PackageOptions => {
+  if (options?.npm !== undefined) throw new Error(`@haus-fmt/import: the npm option is gone: no package is looked for in node_modules any more. Give a library's bundle (bundles) or a package's directory (packages)`)
   const buildRoot = options?.root
   if (buildRoot !== undefined && typeof buildRoot !== "string") throw new Error(`@haus-fmt/import: root must be a path, found ${JSON.stringify(buildRoot)}`)
   return {
     packages: paths(options?.packages, "packages").map((p) => resolve(root, p)),
     folders: paths(options?.folders, "folders").map((f) => resolve(root, f)),
-    npm,
+    bundles: paths(options?.bundles, "bundles"),
     ...(buildRoot === undefined ? {} : { root: resolve(root, buildRoot) }),
+    project: root,
   }
 }
 
-/** The `optimize` option, its paths made absolute against `root` (the project root: Vite's root or the working directory). Its shape is checked; the files and types by `backend`. */
+/** The `optimize` option, its paths made absolute against `root`. Its shape is checked; the files and types by `backend`. */
 export const optimizeOf = (options: { readonly optimize?: unknown } | undefined, root: string): OptimizeOption => {
   const o = options?.optimize
   if (o === undefined) return []
@@ -98,18 +113,105 @@ export const optimizeOf = (options: { readonly optimize?: unknown } | undefined,
   return Object.entries(o as Record<string, readonly string[]>).map(([key, types]) => ({ key, path: resolve(root, key), types }))
 }
 
+export const targetOf = (options: { readonly target?: unknown } | undefined): Target => {
+  const t = options?.target ?? "plain"
+  if (t !== "plain" && t !== "effect") throw new Error(`@haus-fmt/import: target must be "plain" or "effect", found ${JSON.stringify(t)}`)
+  return t
+}
+
+/** A thrown Error for a failed Result of the core. */
+export const unwrap = <A>(r: Result<A, HausError>): A => {
+  if (r._tag === "Failure") throw r.failure
+  return r.success
+}
+
+/** A bundle: its specifier, and the package value its module exports. */
+export interface Bundle {
+  readonly specifier: string
+  readonly module: string
+  readonly name: string
+  readonly package: PackageValue
+}
+
+/** Import the bundles, from the project root, as the program imports them. */
+const importBundles = async (options: PackageOptions): Promise<readonly Bundle[]> => {
+  const require = createRequire(join(options.project, "package.json"))
+  return Promise.all(options.bundles.map(async (specifier) => {
+    const [module = specifier, name = "default"] = specifier.split("#")
+    let path: string
+    try {
+      path = require.resolve(module)
+    } catch {
+      throw new Error(`@haus-fmt/import: the bundle ${module} can't be imported from ${options.project}: add the library to the project's dependencies`)
+    }
+    const exported = ((await import(pathToFileURL(path).href)) as Record<string, unknown>)[name]
+    if (!Package.is(exported)) throw new Error(`@haus-fmt/import: ${specifier} exports no package value (Package) as ${name === "default" ? "its default export" : name}`)
+    return { specifier, module, name, package: exported }
+  }))
+}
+
+/** The read options of a schema file: the directories and folders given, the build's root. */
+const readOptions = (options: PackageOptions): ReadSourcesOptions => ({
+  packages: options.packages,
+  folders: options.folders,
+  ...(options.root === undefined ? {} : { root: options.root }),
+})
+
+/** What differs between the targets. */
+export interface Backend {
+  readonly target: Target
+  /** Declarations for a schema file (`.schema.haus`, a package's `schema.haus`): its types and their handles. */
+  readonly schemaTypes: (fileName: string) => string
+  /** The runtime generated modules import (runtime/plain.ts or runtime/effect.ts), as `@haus-fmt/import/runtime/<target>`. */
+  readonly runtime: string
+  /** Where schema packages come from. */
+  readonly packages: PackageOptions
+  /** The bundles, imported. */
+  readonly bundles: readonly Bundle[]
+  /** The sources of a schema file, read now, with the bundles given (throws a HausError). */
+  readonly sources: (fileName: string) => SourcesValue
+  /** The types to build generated code for, by the real path of their schema file (plain target). */
+  readonly optimize: ReadonlyMap<string, readonly string[]>
+}
+
 /**
- * The types to build code for, by the real path of their schema file:
- * every file must exist and be a schema file, every type one of its types
- * without parameters.
+ * The backend for a target. Packages, folders and bundles that don't exist,
+ * and schema files or types of `optimize` that don't, are reported now. The
+ * Effect backend is loaded only when a project asks for it.
  */
-const optimizedTypes = (optimize: OptimizeOption, packages: NodeResolverOptions): ReadonlyMap<string, readonly string[]> => {
+export async function backend(target: Target, packages: PackageOptions = packagesOf({}, process.cwd()), optimize: OptimizeOption = []): Promise<Backend> {
+  const bundles = await importBundles(packages)
+  for (const dir of [...packages.packages, ...packages.folders]) {
+    if (!existsSync(dir)) throw new Error(`@haus-fmt/import: ${dir} doesn't exist`)
+  }
+  const sources = (fileName: string): SourcesValue =>
+    bundles.reduce((s, b) => Sources.withPackage(s, b.package), unwrap(readSourcesSync(fileName, readOptions(packages))))
+  const compiled = (fileName: string) => unwrap(Schema.compile(sources(fileName)))
+  if (target === "plain") {
+    return {
+      target,
+      schemaTypes: (fileName) =>
+        schemaDeclarations(compiled(fileName).file, { haus: specifier(fileName, "@haus-fmt/haus") }) +
+        `/** The compiled schema of this file, for \`Schema.decode(schema, Type)\`. */\nexport declare const schema: import(${JSON.stringify(specifier(fileName, "@haus-fmt/haus"))}).Schema;\n`,
+      runtime: "runtime/plain",
+      packages,
+      bundles,
+      sources,
+      optimize: optimizedTypes(optimize, compiled),
+    }
+  }
+  if (optimize.length > 0) throw new Error(`@haus-fmt/import: optimize is for the plain target: Effect schemas don't use generated code`)
+  const { effectSchemaTypes } = await import("./effect.js")
+  return { target, schemaTypes: (fileName) => effectSchemaTypes(compiled(fileName).file, fileName), runtime: "runtime/effect", packages, bundles, sources, optimize: new Map() }
+}
+
+/** The types to build code for, by the real path of their schema file: every file a schema file, every type one of its types without parameters. */
+const optimizedTypes = (optimize: OptimizeOption, compiled: (fileName: string) => Schema): ReadonlyMap<string, readonly string[]> => {
   const byFile = new Map<string, string[]>()
   for (const { key, path, types } of optimize) {
     if (!existsSync(path)) throw new Error(`@haus-fmt/import: optimize: the schema file ${key} doesn't exist (${path})`)
     if (!isSchemaFile(path)) throw new Error(`@haus-fmt/import: optimize: ${key} is not a schema file (.schema.haus)`)
-    const { text, options } = readSchemaFile(path, packages)
-    const definitions = parseSchemaFile(text, options).definitions
+    const definitions = compiled(path).file.definitions
     for (const t of types) {
       const d = definitions.find((d) => d.name === t)
       if (d === undefined) throw new Error(`@haus-fmt/import: optimize: ${key} has no type ${t}`)
@@ -121,55 +223,11 @@ const optimizedTypes = (optimize: OptimizeOption, packages: NodeResolverOptions)
   return byFile
 }
 
-export const targetOf = (options: { readonly target?: unknown } | undefined): Target => {
-  const t = options?.target ?? "plain"
-  if (t !== "plain" && t !== "effect") throw new Error(`@haus-fmt/import: target must be "plain" or "effect", found ${JSON.stringify(t)}`)
-  return t
-}
-
-/** What differs between the targets. */
-export interface Backend {
-  readonly target: Target
-  /** Declarations for a schema file (`.schema.haus`, a package's `schema.haus`): its types and schemas. */
-  readonly schemaTypes: (text: string, fileName: string) => string
-  /** The runtime generated modules import (runtime/plain.ts or runtime/effect.ts), as `@haus-fmt/import/runtime/<target>`. */
-  readonly runtime: string
-  /** Where schema packages are found (packagesOf). */
-  readonly packages: NodeResolverOptions
-  /** The types to build generated code for, by the real path of their schema file (plain target). */
-  readonly optimize: ReadonlyMap<string, readonly string[]>
-}
-
-/**
- * The backend for a target, finding schema packages with `packages`
- * (packagesOf; default: node_modules only), building generated code for the
- * types of `optimize` (optimizeOf; plain target). Packages or folders that
- * don't exist, and schema files or types of `optimize` that don't, are
- * reported now. The Effect backend is loaded only when a project asks for
- * it, so plain projects need no Effect.
- */
-export async function backend(target: Target, packages: NodeResolverOptions = {}, optimize: OptimizeOption = []): Promise<Backend> {
-  nodeResolver(packages)
-  if (target === "plain") {
-    return {
-      target,
-      schemaTypes: (text, fileName) =>
-        schemaDeclarations(parseSchemaFile(text, schemaOptions(fileName, packages)), { haus: specifier(fileName, "@haus-fmt/haus/schema") }),
-      runtime: "runtime/plain",
-      packages,
-      optimize: optimizedTypes(optimize, packages),
-    }
-  }
-  if (optimize.length > 0) throw new Error(`@haus-fmt/import: optimize is for the plain target: Effect schemas don't use generated code`)
-  const { effectSchemaTypes } = await import("./effect.js")
-  return { target, schemaTypes: (text, fileName) => effectSchemaTypes(text, fileName, packages), runtime: "runtime/effect", packages, optimize: new Map() }
-}
-
 /** TypeScript declarations for an imported `.haus` file, with diagnostics for the file. */
 export function typesFor(text: string, fileName: string, b: Backend): { text: string; diagnostics: Diagnostic[] } {
-  if (isSchemaFile(fileName)) return { text: b.schemaTypes(text, fileName), diagnostics: [] }
+  if (isSchemaFile(fileName)) return { text: b.schemaTypes(fileName), diagnostics: [] }
   const link = schemaFor(fileName)
-  if (link) return dataModule(text, fileName, link, b.packages)
+  if (link) return dataModule(text, fileName, link, b)
   return { text: plainDeclarations(text, fileName), diagnostics: [] }
 }
 
@@ -180,9 +238,9 @@ export function typesFor(text: string, fileName: string, b: Backend): { text: st
  */
 export function moduleFor(text: string, fileName: string, b: Backend, importRuntime: (path: string) => string): { code: string; files: string[] } {
   const runtime = importRuntime(b.runtime)
-  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime, b.packages, b.optimize.size === 0 ? [] : (b.optimize.get(realpathSync(fileName)) ?? []))
+  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime, b, b.optimize.size === 0 ? [] : (b.optimize.get(realpathSync(fileName)) ?? []))
   const link = schemaFor(fileName)
-  if (link) return dataModuleSource(text, fileName, link, runtime, b.packages)
+  if (link) return dataModuleSource(text, fileName, link, runtime, b)
   return { code: `export default ${js(parsePlain(text))};\n`, files: [] }
 }
 
@@ -197,3 +255,5 @@ function js(x: unknown): string {
   }
   return JSON.stringify(x)
 }
+
+export { parseSchemaFile }

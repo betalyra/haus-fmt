@@ -28,7 +28,7 @@ Each package also ships the codecs of its profiles, tested against the vectors:
 | Language | Package | Codecs |
 |---|---|---|
 | TypeScript, `h.*` schemas | `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid` (`ts/`) | `import { iso } from "@haus-fmt/money"`, `{ wgs84 }` from `"@haus-fmt/geo"`, `{ rfc9562 }` from `"@haus-fmt/uuid"`: `compileSchemaFile(text, { …, codecs: [...iso, ...wgs84, ...rfc9562] })` |
-| TypeScript, Effect | the same, `/effect` | `import { iso } from "@haus-fmt/money/effect"`: `Haus.decode(Order, iso, wgs84, rfc9562)` |
+| TypeScript, Effect | built into `@haus-fmt/effect`, rules on by default (`Haus.compile`) | host-type codecs from `@haus-fmt/effect/money`, `/geo`, `/uuid`: `Haus.decode(Order, currencyAsString, wgs84Types, uuidAsString)` |
 | Python | `haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-uuid` (`python/`), imported as `haus_money`, `haus_geo`, `haus_uuid` | `load_schema(path, packages=[haus_money.PACKAGE], codecs=haus_money.iso \| haus_geo.wgs84 \| haus_uuid.rfc9562)` |
 | Rust | the crates `haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-uuid` (`src/`), imported as `haus_money`, `haus_geo`, `haus_uuid` | in `build.rs`: `.codec("@haus-fmt/money@1#Money", "haus_money::Iso")`, `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox`, `haus_uuid::Rfc9562` ([rust/README.md](../rust/README.md)) |
 | Roc | the Roc packages (`roc/`) | modules `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`, `Rfc9562`: `haus-gen roc … --codec "@haus-fmt/money@1#Money=money.Iso"` ([roc/README.md](../roc/README.md)) |

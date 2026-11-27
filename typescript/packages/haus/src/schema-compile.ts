@@ -32,7 +32,7 @@
  *   compileSchemaFile(text, { ...options, codecs: iso })   // iso from @haus-fmt/money
  */
 import { groupSchemas } from "./codegen.js"
-import { missingCodecs, unusedCodecs, type CodecWarning } from "./profiles.js"
+import { unusedCodecs, type CodecWarning } from "./codec-ids.js"
 import * as h from "./schema.js"
 import {
   deprecation, HausSchemaFileError, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type,
@@ -45,15 +45,14 @@ export interface CompiledSchemaFile {
   /** Types that describe a whole file as a stream of values (`type Events = Stream Event`). */
   readonly streams: ReadonlySet<string>
   /**
-   * Warnings about the codecs given (spec §13.4): `missing-codec` for each
-   * type of an official profile that the file's types reach without its codec
-   * (`@haus-fmt/money@1#Currency` without `iso`), whose values are then checked
-   * for their shape only; `unused-codec` for each codec whose id no type has
-   * (`@haus-fmt/money@2#Money` when the schema imports major 1), which never
-   * runs. Decoding is the same with or without them. The warnings of the
-   * schema text itself are `file.warnings`.
+   * Warnings about the codecs given (spec §13.4): `unused-codec` for each
+   * codec whose id no type has (`@haus-fmt/money@2#Money` when the schema
+   * imports major 1), which never runs. The warnings of the schema text
+   * itself are `file.warnings`.
    */
   readonly warnings: readonly CodecWarning[]
+  /** The schema of any instance of the file's types (an imported package's type too), with its rules and codecs. */
+  readonly schemaOf: (inst: Instance) => h.AnySchema
 }
 
 /**
@@ -79,6 +78,13 @@ export interface FromSchemaFileOptions {
    * (spec §13.4).
    */
   readonly codecs?: readonly Codec[] | undefined
+  /**
+   * The package rules to check (packages.md §6), by type id: each a check of
+   * the value the type's schema decoded, before its codec, giving why it
+   * rejects the value or undefined. A value it rejects is `codec-rejected`
+   * when decoding, `cannot-encode` when encoding.
+   */
+  readonly rules?: ReadonlyMap<string, (value: unknown) => string | undefined> | undefined
 }
 
 export interface CompileOptions extends ParseSchemaOptions, FromSchemaFileOptions {}
@@ -123,6 +129,7 @@ const builtin = (name: Builtin): h.AnySchema => {
 /** Build haus schemas for an already checked schema file. */
 export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions = {}): CompiledSchemaFile => {
   const byId = codecsById(options.codecs ?? [])
+  const rules = options.rules ?? new Map<string, (value: unknown) => string | undefined>()
   const built = new Map<Instance, h.AnySchema>()
   const building = new Set<Instance>()
   /** The schema with the codec for `id` applied, if one is set. */
@@ -135,9 +142,11 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     // limited only by the call's nesting depth (spec §9.9).
     if (building.has(inst)) return h.Recursive(inst.key, () => built.get(inst)!)
     building.add(inst)
-    // Codecs target named types without arguments, by id.
+    // Rules and codecs target named types without arguments, by id: the rule on the value the schema decoded, then the codec.
     const body = build(inst.body)
-    const schema = inst.args.length === 0 ? withCodec(inst.definition.id, body) : body
+    const rule = inst.args.length === 0 ? rules.get(inst.definition.id) : undefined
+    const checked = rule === undefined ? body : h.refine(body, rule)
+    const schema = inst.args.length === 0 ? withCodec(inst.definition.id, checked) : checked
     building.delete(inst)
     built.set(inst, schema)
     return schema
@@ -225,7 +234,7 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   }
   // Generated together when one of them is first used (codegen.ts).
   groupSchemas(schemas)
-  return { file, schemas, streams, warnings: [...missingCodecs(file, (id) => byId.has(id)), ...unusedCodecs(file, byId.keys())] }
+  return { file, schemas, streams, warnings: unusedCodecs(file, byId.keys()), schemaOf: ref }
 }
 
 // ── TypeScript declarations ──────────────────────────────────
@@ -278,15 +287,22 @@ const referenced = (t: Type, onRef: (d: Definition) => void): void => {
 }
 
 export interface DeclarationOptions {
-  /** Module specifier to import this package's types from (default "@haus-fmt/haus/schema"). */
+  /** Module specifier to import this package's types from (default "@haus-fmt/haus"). */
   readonly haus?: string
 }
 
 /**
- * A TypeScript module declaring the file's types (`export type Order = …`)
- * and their schemas (`export declare const Order: Schema<Order>`). Imported
- * types are declared too (not exported), so the module needs no other
- * schema module. Generic types are declared as generic type aliases.
+ * A TypeScript module declaring the file's types and their handles:
+ *
+ *   export type Order<H$ = {}> = { readonly placed: h$.Host<H$, "std/time#Instant", string>; … }
+ *   export interface Order$ extends h$.TypeLambda { readonly type: h$.Host<this["hosts"], "app/order#Order", Order<this["hosts"]>> }
+ *   export declare const Order: h$.Type<Order$, "app/order#Order">
+ *
+ * Each type takes the codecs' host types `H$` (by type id), so that
+ * `Schema.decode(schema, Order)` with a codec for `std/time#Instant` gives
+ * its host type wherever an `Instant` is. Imported types are declared too
+ * (not exported), so the module needs no other schema module. Generic types
+ * are generic type aliases, `H$` first. A stream type has a `StreamType`.
  */
 export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions = {}): string => {
   const defs: Definition[] = []
@@ -316,19 +332,24 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
     return taken.has(n) ? `${n}_` : n
   }
 
+  /** `type` as the host type of a codec for `id` would replace it. */
+  const host = (id: string, type: string) => `h$.Host<H$, ${JSON.stringify(id)}, ${type}>`
+  const builtinType = (name: Builtin): string => {
+    switch (name) {
+      case "String": case "Decimal": return "string"
+      case "Bytes": return "Uint8Array"
+      case "Bool": return "boolean"
+      case "Int": case "Int64": case "UInt64": return "bigint"
+      case "Any": return "h$.Value"
+      default: return "number"
+    }
+  }
   const print = (t: Type): string => {
     switch (t.kind) {
       case "builtin":
-        switch (t.name) {
-          case "String": case "Decimal": return "string"
-          case "Bytes": return "Uint8Array"
-          case "Bool": return "boolean"
-          case "Int": case "Int64": case "UInt64": return "bigint"
-          case "Any": return "h$.Value"
-          default: return "number"
-        }
+        return host(`prelude#${t.name}`, builtinType(t.name))
       case "std":
-        return "string"
+        return host(`std/time#${t.name}`, "string")
       case "array":
         return `ReadonlyArray<${print(t.item)}>`
       case "map":
@@ -357,7 +378,9 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
       case "ref": {
         const d = t.instance.definition
         const name = names.get(d) ?? d.name
-        return t.instance.args.length ? `${name}<${t.instance.args.map(print).join(", ")}>` : name
+        // A codec applies to a named type without arguments (spec §13.4), not to a stream.
+        if (t.instance.args.length > 0) return `${name}<H$, ${t.instance.args.map(print).join(", ")}>`
+        return d.template.stream ? `${name}<H$>` : host(d.id, `${name}<H$>`)
       }
       case "param":
         return paramName(t.name)
@@ -367,16 +390,19 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
   const record = (fs: readonly Field[]) => (fs.length === 0 ? "{}" : `{ ${fieldList(fs).join("; ")} }`)
 
   const own = new Set(file.definitions)
-  const out: string[] = [`import type * as h$ from ${JSON.stringify(options.haus ?? "@haus-fmt/haus/schema")};\n`]
+  const out: string[] = [`import type * as h$ from ${JSON.stringify(options.haus ?? "@haus-fmt/haus")};\n`]
   for (const d of defs) {
     const name = names.get(d)!
     const exported = own.has(d) ? "export " : ""
     const stream = d.template.stream ? "A stream: a file of values of this type.\n\n" : ""
     const from = own.has(d) ? "" : `From ${d.module ?? "another file"} (${d.id}).\n\n`
-    const params = d.params.length ? `<${d.params.map(paramName).join(", ")}>` : ""
+    const params = d.params.length ? `<H$, ${d.params.map(paramName).join(", ")}>` : "<H$ = {}>"
     out.push(`${definitionDoc(d, from + stream)}${exported}type ${name}${params} = ${print(d.template.body)};\n`)
     if (own.has(d) && d.params.length === 0) {
-      out.push(`${definitionDoc(d, `The schema of ${d.name}.\n\n`)}export declare const ${name}: h$.Schema<${name}>;\n`)
+      const id = JSON.stringify(d.id)
+      const lambda = d.template.stream ? `${name}<this["hosts"]>` : `h$.Host<this["hosts"], ${id}, ${name}<this["hosts"]>>`
+      out.push(`/** The type function of ${d.name}: its type with the codecs' host types. */\nexport interface ${name}$ extends h$.TypeLambda { readonly type: ${lambda} }\n`)
+      out.push(`${definitionDoc(d, `The handle of ${d.name}${d.template.stream ? ", a stream" : ""}.\n\n`)}export declare const ${name}: h$.${d.template.stream ? "StreamType" : "Type"}<${name}$, ${id}>;\n`)
     }
   }
   return out.join("")

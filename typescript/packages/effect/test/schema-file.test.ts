@@ -1,19 +1,18 @@
-import { HausSchemaFileError, parseSchemaFile } from "@haus-fmt/haus"
+import { HausSchemaFileError, parseSchemaFile } from "@haus-fmt/haus/internal"
 import { describe, expect, it } from "@effect/vitest"
 import { DateTime, Effect, Exit, Option, Schema } from "effect"
-import { schemaOptions } from "@haus-fmt/haus/node"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
+import { NodeSchemaFiles } from "../src/node.js"
+import { compileText } from "./support.js"
 
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
 const read = (path: string) => readFileSync(repo(path), "utf8")
-/** Parse options for a schema file of the repo; official extensions come from extensions/. */
-const options = (path: string) =>
-  schemaOptions(repo(path), { packages: { "@haus-fmt/money": repo("extensions/money"), "@haus-fmt/geo": repo("extensions/geo") } })
-const compileFile = (path: string) => Haus.compileSchemaFile(read(path), options(path))
+/** A schema file of the repo, read and compiled (the official packages are built in). */
+const compileFile = (path: string) => Effect.runSync(Haus.readSources(repo(path)).pipe(Effect.flatMap(Haus.compile), Effect.provide(NodeSchemaFiles.layer)))
 
-const compile = (text: string) => Haus.compileSchemaFile(text).schemas
+const compile = (text: string) => compileText(text).schemas
 const decodeWith = (text: string, name: string, data: string) => Effect.runSyncExit(Haus.decode(compile(text)[name]!)(data))
 const decoded = (text: string, name: string, data: string): any => {
   const exit = decodeWith(text, name, data)
@@ -146,7 +145,7 @@ type Root = { i: Instant, z: ZonedDateTime }`
   })
 
   it("a case whose one argument names a record is a record case (spec §15)", () => {
-    const { schemas } = Haus.compileSchemaFile(`
+    const { schemas } = compileText(`
       type Rec = { w: Int32, tags?: Array String }
       type Alias = Rec
       type Alias2 = Alias
@@ -180,7 +179,7 @@ type Root = { i: Instant, z: ZonedDateTime }`
     for (const name of ["Named", "Chain", "ById"]) {
       const e = thrown(() => Haus.decode(schemas[name]!, toNumber as never))
       expect(e).toBeInstanceOf(Haus.HausSchemaError)
-      expect(e).toMatchObject({ code: "codec-unreachable", message: expect.stringContaining("the codec for Rec can't apply in the record case Box") })
+      expect(e).toMatchObject({ code: "codec-unreachable", message: expect.stringContaining("the codec for main#Rec can't apply in the record case Box") })
     }
   })
 
@@ -270,9 +269,10 @@ type Root = { i: Instant, z: ZonedDateTime }`
 
   it("prints TypeScript declarations", () => {
     const path = "examples/syntax-tour.schema.haus"
-    const d = Haus.schemaDeclarations(parseSchemaFile(read(path), options(path)))
-    expect(d).toContain(`export type Level<C$ = {}> = Haus$.Lookup<C$, "haus-examples/syntax-tour#Level", "Debug" | "Info" | "Warn" | "Error">;`)
-    expect(d).toContain(`export declare const Root: Haus$.Named<Schema$.Codec<Root>, "haus-examples/syntax-tour#Root", Root$F, `)
+    const d = Haus.schemaDeclarations(compileFile(path).file)
+    // The entry file's id is its path from the build's root (spec §13.3, "Identity").
+    expect(d).toContain(`export type Level<C$ = {}> = Haus$.Lookup<C$, "syntax-tour#Level", "Debug" | "Info" | "Warn" | "Error">;`)
+    expect(d).toContain(`export declare const Root: Haus$.Named<Schema$.Codec<Root>, "syntax-tour#Root", Root$F, `)
     expect(d).toContain(`interface Root$F extends Haus$.TypeLambda { readonly type: Root<this["C"]> }`)
     // Every type of the prelude can have a codec (spec §13.4).
     expect(d).toContain(`readonly timeout: Option$.Option<Haus$.Lookup<C$, "prelude#Int", bigint>>`)
@@ -290,7 +290,7 @@ type Root = { i: Instant, z: ZonedDateTime }`
 
 describe("error locations", () => {
   it("leads to the value that failed", async () => {
-    const { parseWithLocations } = await import("@haus-fmt/haus")
+    const { parseWithLocations } = await import("@haus-fmt/haus/internal")
     const schema = `type Root = { items: Array < Point Int Int | Box { size: Int } > , m: Maybe Int }`
     const cases: [string, string][] = [
       [`{ items: [Point(1, "x")], m: None }`, `"x"`],
@@ -320,7 +320,7 @@ describe("standard modules", () => {
   })
 
   it("the checker knows exactly the types of spec/std", async () => {
-    const { STD_MODULES } = await import("@haus-fmt/haus")
+    const { STD_MODULES } = await import("@haus-fmt/haus/internal")
     for (const [module, names] of Object.entries(STD_MODULES)) {
       const file = parseSchemaFile(read(`spec/${module}.schema.haus`))
       expect(file.definitions.map((d) => d.name)).toEqual(names)

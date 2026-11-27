@@ -11,13 +11,12 @@
  *
  * `--count` is the number of cases for each profile.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
-import { canonical, compileSchemaFile, parseAll } from "../../typescript/packages/haus/dist/index.js"
-import { schemaOptions } from "../../typescript/packages/haus/dist/node.js"
+import { canonical, engineSchemaOf, parseAll, Schema, Sources, TypeHandle } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { COMMENTS, Rng } from "./generate.ts"
 import { runProgram, timeoutFor } from "./spawn.ts"
@@ -561,44 +560,39 @@ function hRoundtrip(schema: h.Schema<unknown> | undefined, value: any): Outcome 
   }
 }
 
-const schemaPath = (p: Profile) => join(root, "extensions", p.dir, "schema.haus")
-const extension = (p: Profile, entry: string) => import(pathToFileURL(join(root, "extensions", p.dir, "dist", entry)).href)
 
-/** @haus-fmt/money, @haus-fmt/geo and @haus-fmt/uuid: the schema file compiled with the profile's codecs (`compileSchemaFile(…, { codecs })`). */
+/**
+ * @haus-fmt/money, @haus-fmt/geo and @haus-fmt/uuid as `@haus-fmt/haus` has
+ * them built in: a schema that imports the package, compiled, its rules on by
+ * default (packages.md §6); each type decoded by its id.
+ */
 async function typescriptRunner(): Promise<Runner> {
   const compiled = new Map<string, Record<string, h.Schema<unknown>>>()
   for (const p of PROFILES) {
-    const m = await extension(p, "index.js")
-    // Each package exports its profile's codecs by the profile's short name: iso, wgs84, rfc9562.
-    const codecs = m[p.short]
-    const text = readFileSync(schemaPath(p), "utf8")
-    compiled.set(p.name, compileSchemaFile(text, { ...schemaOptions(schemaPath(p)), codecs }).schemas as Record<string, h.Schema<unknown>>)
+    const pkg = `@haus-fmt/${p.dir}`
+    const sources = Sources.make("p.schema.haus", { "p.schema.haus": `import ${pkg}@1 (${p.types.join(", ")})\ntype Uses = { ${p.types.map((t, i) => `t${i}: ${t}`).join(", ")} }` })
+    const schema = sources._tag === "Success" ? Schema.compile(sources.success) : sources
+    if (schema._tag === "Failure") throw schema.failure
+    compiled.set(p.name, Object.fromEntries(p.types.map((t) => [t, engineSchemaOf(schema.success, TypeHandle.make(`${pkg}@1#${t}`))])))
   }
   return inProcess("typescript", (p, type, value) => hRoundtrip(compiled.get(p.name)![type], value))
 }
 
-/** The same packages' `h.*` schemas (`Money`, `Currency`, `LatLng`, `BBox`, `Uuid`), for schemas written in TypeScript. */
-async function typescriptHRunner(): Promise<Runner> {
-  const schemas = new Map<string, Record<string, h.Schema<unknown>>>()
-  for (const p of PROFILES) {
-    const m = await extension(p, "index.js")
-    schemas.set(p.name, Object.fromEntries(p.types.map((t) => [t, m[t]])))
-  }
-  return inProcess("typescript-h", (p, type, value) => hRoundtrip(schemas.get(p.name)![type], value))
-}
-
-/** Their `./effect` codec groups: `Haus.compileSchemaFile`, `decodeValue(schema, codecs)`, `encodeValue(schema, codecs)`. */
+/**
+ * @haus-fmt/effect, which has the packages built in: a schema that imports
+ * the package, compiled (`Haus.Sources.make`, `Haus.compile`), its rules on
+ * by default (packages.md §6); each type by an alias of it, `decodeValue`, `encodeValue`.
+ */
 async function effectRunner(): Promise<Runner> {
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
   const { Effect, Exit, Cause, Option } = await import(pathToFileURL(createRequire(join(dir, "package.json")).resolve("effect")).href)
   const coders = new Map<string, Record<string, { decode: (v: unknown) => unknown; encode: (v: unknown) => unknown }>>()
   for (const p of PROFILES) {
-    const m = await extension(p, "effect.js")
-    // Each package exports its profile's codecs by the profile's short name: iso, wgs84, rfc9562.
-    const codecs = m[p.short]
-    const schemas = Haus.compileSchemaFile(readFileSync(schemaPath(p), "utf8"), schemaOptions(schemaPath(p))).schemas
-    coders.set(p.name, Object.fromEntries(p.types.map((t) => [t, { decode: Haus.decodeValue(schemas[t], codecs), encode: Haus.encodeValue(schemas[t], codecs) }])))
+    const pkg = `@haus-fmt/${p.dir}`
+    const text = `import ${pkg}@1 (${p.types.join(", ")})\n${p.types.map((t) => `type T${t} = ${t}`).join("\n")}`
+    const schemas = Effect.runSync(Effect.flatMap(Haus.Sources.make("p.schema.haus", { "p.schema.haus": text }), Haus.compile)).schemas
+    coders.set(p.name, Object.fromEntries(p.types.map((t) => [t, { decode: Haus.decodeValue(schemas[`T${t}`]), encode: Haus.encodeValue(schemas[`T${t}`]) }])))
   }
   return inProcess("effect", (p, type, value) => {
     const coder = coders.get(p.name)![type]
@@ -618,7 +612,6 @@ async function effectRunner(): Promise<Runner> {
 const allRunners: Runner[] = [
   external("lean", join(root, "spec/lean/.lake/build/bin/haus-rules"), (p) => ["--profile-batch", p.name]),
   await typescriptRunner(),
-  await typescriptHRunner(),
   await effectRunner(),
   external("rust", join(root, "fuzz/schema-rust/target/release/profile_runner")),
   external("roc", join(root, "fuzz/.build/roc-profile-runner")),

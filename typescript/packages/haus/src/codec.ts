@@ -758,7 +758,8 @@ export class WriteCompiler {
       case "string":
         return (w, a, cx) => {
           step(cx)
-          w.s += typeof a === "string" ? quote(a) : fail()
+          // Within the string limit (spec §7: encoding checks what the constructors check), else the generic path reports it.
+          w.s += typeof a === "string" && a.length <= cx.values.maxStringLength ? quote(a) : fail()
         }
       case "int":
         return (w, a, cx) => {
@@ -801,7 +802,8 @@ export class WriteCompiler {
       case "bytes":
         return (w, a, cx) => {
           step(cx)
-          w.s += a instanceof Uint8Array ? `x"${toHex(a)}"` : fail()
+          // Two hex digits a byte, within the string limit (spec §7), else the generic path reports it.
+          w.s += a instanceof Uint8Array && a.length * 2 <= cx.values.maxStringLength ? `x"${toHex(a)}"` : fail()
         }
       case "tagged": {
         const { tag, format, convert } = shape
@@ -838,7 +840,8 @@ export class WriteCompiler {
           const colon = w.tight ? ":" : ": "
           let first = true
           for (const [k, x] of m) {
-            if (typeof k !== "string") fail()
+            // Within the string limit, as the generic path checks a key (spec §7, key-too-long), which reports it.
+            if (typeof k !== "string" || k.length > cx.values.maxStringLength) fail()
             w.s += (first ? w.open : w.comma) + keyText(k as string) + colon
             first = false
             value(w, x, cx, depth + 1)
@@ -890,7 +893,8 @@ export class WriteCompiler {
         const inner = this.write(shape.inner)
         return (w, a, cx, depth) => {
           step(cx)
-          if (!(a instanceof Secret)) fail()
+          // Without revealSecrets the generic path refuses it (spec §15, "Encoding a secret").
+          if (!(a instanceof Secret) || !cx.revealSecrets) fail()
           inner(w, (a as Secret<unknown>).expose(), cx, depth)
         }
       }

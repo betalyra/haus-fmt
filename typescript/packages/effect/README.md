@@ -1,8 +1,12 @@
 # @haus-fmt/effect
 
-haus with [Effect](https://effect.website): decode and encode with Effect
-schemas, streams of values, schemas from `.schema.haus` files, and codecs that
-map haus types onto your own.
+haus with [Effect](https://effect.website), the recommended way to use haus in
+TypeScript: decode and encode with Effect schemas, streams of values, schemas
+from `.schema.haus` files with their packages and rules, and codecs that map
+haus types onto your own. Everything haus decides (parsing, schema files,
+packages, rules, values and their limits) comes from
+[`@haus-fmt/haus`](../haus), the dependency-free foundation; this package makes
+Effect schemas, Effects and Streams of it.
 
 ```sh
 npm install @haus-fmt/effect effect
@@ -40,7 +44,7 @@ const program = Effect.gen(function* () {
 | `Date("…")` and the other std/time types | `Haus.Date`, …: the text as written |
 | an unknown tag in `Haus.OpenUnion` | `{ _tag: "@unknown", tag, value }` |
 | any value (`Any`) | `Haus.Any`: the parsed haus `Value`, unchanged |
-| a secret (`Secret a`) | `Schema.Redacted(A)`: shows `<redacted>`; errors inside never show the value |
+| a secret (`Secret a`) | `Schema.Redacted(A)`: shows `<redacted>`; errors inside never show the value; written only with `revealSecrets: true` |
 
 These keep the value: encoding what they decoded writes an equal haus value
 (spec §13.4), apart from what §15 drops by design (the spelling of a float,
@@ -125,7 +129,8 @@ Without a schema, on haus `Value`s: `Haus.toHausJson` / `Haus.fromHausJson`
 write and read self-describing JSON (spec §16.2), every haus value exactly in
 an envelope, `{"_haus":1,"_value":…}`, and `Haus.importJson` reads any JSON as
 a haus `Value` (spec §16.1). The caller says which form it reads: only
-`Haus.fromHausJson` looks for the envelope.
+`Haus.fromHausJson` looks for the envelope. `Haus.toHausJson` never fails: a
+`Value` was checked against every limit when it was built or read.
 
 ## Limits
 
@@ -183,7 +188,10 @@ inside a `Redacted` name the secret's place, never a path into it.
 The error channel holds `HausParseError` (text that isn't haus or JSON, with
 `line` and `column`; invalid UTF-8 in a byte stream is `invalid-utf8`, without
 them), `HausSchemaError` (a value that doesn't fit the schema,
-or can't be encoded) and `HausLimitsError`. Each has a `code` (spec §17), the
+or can't be encoded) and `HausLimitsError`; reading and compiling a schema
+fail with `HausCompileError` (with `line` and `column` for a schema file's
+error) and, for a mistake in the program's configuration, `HausConfigError`
+(without a code). Each but the last has a `code` (spec §17), the
 same in every haus binding, a `hint` and a `docs` link
 (`https://haus-fmt.org/docs/errors#<code>`). `Haus.errorJson(e)` (or
 `JSON.stringify(e)`) is the core's JSON form, for tools and agents:
@@ -209,7 +217,7 @@ of Effect's own decoder, also in schemas you write by hand:
 | a missing key / an unknown field of a closed record | `missing-field` / `unknown-field` |
 | std/time text that the profile rejects (`Date("2026-02-30")`) | `invalid-time` |
 | anything inside a `Schema.Redacted` (a `Secret`): the error names its type, never the value | `invalid-secret` |
-| a check or issue annotated `Haus.CODEC_REJECTED`: a codec rejecting a value the schema accepts (the profiles' codecs, `DateTime` for a zone `Intl` doesn't know) | `codec-rejected` |
+| a package's rule rejecting a value its type's schema accepts (`Money(1, Eur)`), or a check or issue annotated `Haus.CODEC_REJECTED`: a codec rejecting one (`DateTime` for a zone `Intl` doesn't know) | `codec-rejected` |
 | any other check or transformation that fails | `type-mismatch` |
 | encoding a value the schema can't write | `cannot-encode` |
 | more than one value where one is expected | `not-one-value` |
@@ -221,15 +229,58 @@ writes it (`$.items[0].qty`; a variant's argument as `[i]`, the text of
 `unsupported-depth`. Stream errors keep their `index`, and their `place`
 starts with it (`$[3].price`).
 
-## Schema files
+## Schema files, packages and rules
+
+Read a schema with its imports, compile it, and decode with its Effect
+schemas. Reading is the only step that touches files: an Effect that needs
+the `SchemaFiles` service, which `@haus-fmt/effect/node` provides for Node
+(with the file rules of spec §13.3). Compiling reads nothing and needs no
+service.
 
 ```ts
-import { readSchemaFile } from "@haus-fmt/haus/node"
+import * as Haus from "@haus-fmt/effect"
+import { NodeSchemaFiles } from "@haus-fmt/effect/node"
+import { Effect } from "effect"
 
-const { text, options } = readSchemaFile("order.schema.haus")
-const { schemas } = Haus.compileSchemaFile(text, options)
-const order = yield* Haus.decode(schemas.Order!)(data)
+const program = Effect.gen(function* () {
+  const sources = yield* Haus.readSources("order.schema.haus", { packages: ["vendor/acme"] })   // HausCompileError
+  const { schemas } = yield* Haus.compile(sources)                                              // HausCompileError
+  return yield* Haus.decode(schemas.Order!)(data)
+}).pipe(Effect.provide(NodeSchemaFiles.layer))
 ```
+
+`Haus.Sources.make(entry, { "order.schema.haus": text, … })` makes the same
+sources from data you have from anywhere (a database, a URL, memory), and a
+`SchemaFiles` layer of your own can read from anywhere too. `Haus.fromSchema`
+gives the Effect schemas of a schema `@haus-fmt/haus` compiled.
+
+**Packages.** The official packages (`@haus-fmt/money`, `@haus-fmt/geo`,
+`@haus-fmt/uuid`) are built in. Nothing is looked for: any other package is
+given, as a directory (`readSources`' `packages` and `folders`,
+`Haus.readPackage`) or as a value (`Haus.Package.make({ manifest, schema })`,
+a library's bundle), with `Haus.Sources.withPackage`.
+
+**Rules, on by default.** A package's rules (its manifest's
+`rules: { "Currency": "iso" }`) become checks of their types, before any
+codec and whatever the codecs: `Money(1, Eur)` fails with `codec-rejected` at
+the currency. A reached type whose rule your program doesn't implement is
+`missing-codec` when compiling; supply the rule, or take the package
+shape-only:
+
+```ts
+const acme = yield* Haus.readPackage("vendor/acme")                                   // rules: { "Id": "ulid" }
+const checked = yield* Haus.Package.withRule(acme, "Id", (id) => ulid.test(String(id)) || "not a ULID")
+const sources = Haus.Sources.withPackage(yield* Haus.readSources("order.schema.haus"), checked)
+// or: Haus.Sources.withPackage(sources, Haus.Package.shapeOnly(acme)), its ids checked for their shape only
+```
+
+A rule is a filter, as `Schema.makeFilter` takes one: `true` accepts, a
+message (or `false`) rejects. It sees the value as this package decodes the
+type without codecs. `Haus.Package.shapeOnly(money)` (from
+`@haus-fmt/effect/money`) takes an official package without its rule.
+Compile errors are `HausCompileError`s, with a `code`, and a `line` and
+`column` for a schema file's; a rule for a type its package gives none is a
+`HausConfigError`.
 
 `Int` → `bigint`, `Decimal` → `string` (the exact text), `Maybe` → `Option`,
 std/time types → `string` (the text as written), `Any` → `Haus.Value`,
@@ -244,14 +295,13 @@ import schema files directly: `import { Order } from "./order.schema.haus"`.
 
 ## Codecs
 
-A codec is your choice of type for a named haus type, applied after the
-schema's own checks:
+A codec is your choice of type for a named haus type, an ordinary Effect
+Schema transformation applied after the schema's own checks and its
+package's rule:
 
 ```ts
-import * as money from "@haus-fmt/money/schema.haus"
-
-const cents = Haus.codec(money.Money, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))
-const order = yield* Haus.decode(Order, cents)(text)   // order.total: Cents
+const cents = Haus.codec(schemas.Money!, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))
+const order = yield* Haus.decode(schemas.Order!, cents)(text)   // order.total: Cents
 ```
 
 A value the schema accepts and the codec rejects is `codec-rejected` when the
@@ -260,17 +310,30 @@ codec's check says so: `Schema.refine(isCents, { message: "…", ...Haus.CODEC_R
 
 See the [order example](../../examples/order) for a complete one.
 
-The official packages ship the codecs of their profiles, as groups (a schema
-that lacks some of their types takes them too):
+The official packages' rules are on without codecs. Their modules export the
+package values and codecs that choose host types, as groups (a schema that
+lacks some of their types takes them too):
 
 ```ts
-import { iso } from "@haus-fmt/money/effect"   // @haus-fmt/money/iso: currencies are three letters A–Z
-import { wgs84 } from "@haus-fmt/geo/effect"   // @haus-fmt/geo/wgs84: latitudes and longitudes in range
-import { rfc9562 } from "@haus-fmt/uuid/effect"   // @haus-fmt/uuid/rfc9562: a UUID's text, lowercase
+import { currencyAsString, money } from "@haus-fmt/effect/money"   // a Currency as its tag, a string
+import { geo, wgs84Types } from "@haus-fmt/effect/geo"             // LatLng and BBox typed as such
+import { uuid, uuidAsString } from "@haus-fmt/effect/uuid"         // a Uuid as its text
 
-const order = yield* Haus.decode(Order, iso, wgs84, rfc9562)(text)   // Money(1, Eur) or LatLng(91, 0) fails
+const order = yield* Haus.decode(Order, currencyAsString, wgs84Types, uuidAsString)(text)
 ```
 
 They keep the value: a `Money` is still `{ _tag: "Money", values: ["19.90", "EUR"] }`,
 its currency typed `string` (a tag, never a `Haus.Unknown`), a `LatLng` its
 two floats, `-0` included, and a `Uuid` its checked text, a `string`.
+
+## Secrets
+
+`Secret a` decodes to a `Redacted`: it shows `<redacted>`, and errors inside
+never show the value. Encoding refuses one, a `HausSchemaError`
+`cannot-encode` at the secret's place, unless the program says otherwise:
+
+```ts
+yield* Haus.encode(Config)(config)                           // fails: cannot-encode at $.key
+yield* Haus.encode(Config)(config, { revealSecrets: true })  // writes the key in full
+yield* Haus.toJson(Config)(config, { revealSecrets: true })
+```

@@ -6,7 +6,7 @@
  * JSON value is the tag in snake_case (`User` ↔ "user", `InProgress` ↔
  * "in_progress"), as the schema file says.
  */
-import { parseSchemaFile, type Instance, type Type } from "@haus-fmt/haus"
+import { parseSchemaFile, type Instance, type Type } from "@haus-fmt/haus/internal"
 import type { Converter, Field, HType } from "./openapi.ts"
 
 /** `InProgress` → in_progress. */

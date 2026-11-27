@@ -76,14 +76,7 @@ importers:
         specifier: 0.27.1
         version: 0.27.1
 
-  ../examples:
-    dependencies:
-      '@haus-fmt/geo':
-        specifier: workspace:*
-        version: link:../extensions/geo
-      '@haus-fmt/money':
-        specifier: workspace:*
-        version: link:../extensions/money
+  ../examples: {}
 
   ../extensions/geo:
     devDependencies:
@@ -212,18 +205,9 @@ importers:
 
   examples/order:
     dependencies:
-      '@haus-fmt/effect':
+      '@haus-fmt/haus':
         specifier: workspace:*
-        version: link:../../packages/effect
-      '@haus-fmt/geo':
-        specifier: workspace:*
-        version: link:../../../extensions/geo
-      '@haus-fmt/money':
-        specifier: workspace:*
-        version: link:../../../extensions/money
-      effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        version: link:../../packages/haus
     devDependencies:
       '@haus-fmt/import':
         specifier: workspace:*
@@ -240,12 +224,9 @@ importers:
 
   examples/quickstart:
     dependencies:
-      '@haus-fmt/effect':
+      '@haus-fmt/haus':
         specifier: workspace:*
-        version: link:../../packages/effect
-      effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        version: link:../../packages/haus
     devDependencies:
       '@haus-fmt/import':
         specifier: workspace:*

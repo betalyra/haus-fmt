@@ -11,10 +11,10 @@
  * the error with its path (errors.ts gives Effect's issues their codes).
  */
 import {
-  arr as vArr, bytes as vBytes, checkStdTime, DEFAULT_LIMITS, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
-  payloadHint, quoteText, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
-} from "@haus-fmt/haus"
-import * as h from "@haus-fmt/haus/schema"
+  checkStdTime, DEFAULT_LIMITS, equals, floatValue as coreFloatValue, MAX_DEPTH, payloadHint, quoteText, specialFloat, toFloat, uncheckedArr, uncheckedBytes, uncheckedNum,
+  uncheckedRec, uncheckedStr, uncheckedVariant, unpairedSurrogate, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
+} from "@haus-fmt/haus/internal"
+import { h } from "@haus-fmt/haus/internal"
 import { Array as Arr, BigDecimal, DateTime, Duration, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
 
 export type Converter = (value: Value) => unknown
@@ -168,6 +168,8 @@ interface Guard {
   readonly maxNesting: number
   /** The call's limits, for checking raw values and decimals when encoding (spec §9.8). */
   readonly limits: h.Limits
+  /** Encoding: write every secret in full (spec §15, "Encoding a secret"); off, a secret is `cannot-encode`. */
+  readonly revealSecrets: boolean
 }
 
 /** Nested converter calls per level of a value: schema wrappers plus the value's own level. */
@@ -188,7 +190,7 @@ const nodesOf = (limits: h.Limits): number => limits.maxNodes ?? DEFAULT_LIMITS.
 /** The nesting limit of a call (spec §7): `maxDepth`, 256 by default. */
 const depthOf = (limits: h.Limits): number => limits.maxDepth ?? MAX_DEPTH
 
-let guard: Guard = { steps: 0, maxSteps: Infinity, depth: 0, maxNesting: maxNesting(MAX_DEPTH), limits: {} }
+let guard: Guard = { steps: 0, maxSteps: Infinity, depth: 0, maxNesting: maxNesting(MAX_DEPTH), limits: {}, revealSecrets: false }
 
 /**
  * The engine's stack overflow: V8's and JavaScriptCore's RangeError "Maximum
@@ -203,9 +205,9 @@ export const isStackOverflow = (e: unknown): boolean =>
  * stack overflow (on a small stack: JavaScript can't choose its own) is
  * `nesting-too-deep` (spec §7), not a RangeError.
  */
-const guarded = <R>(limits: h.Limits, maxSteps: number, f: () => R): R => {
+const guarded = <R>(limits: h.Limits, maxSteps: number, f: () => R, revealSecrets = false): R => {
   const saved = guard
-  guard = { steps: 0, maxSteps, depth: 0, maxNesting: maxNesting(depthOf(limits)), limits }
+  guard = { steps: 0, maxSteps, depth: 0, maxNesting: maxNesting(depthOf(limits)), limits, revealSecrets }
   try {
     return f()
   } catch (e) {
@@ -333,10 +335,11 @@ export const decoding = <R>(value: Value, limits: h.Limits, convert: (value: Val
 
 /**
  * Encode with `encode`, within `limits`: a budget of `maxSteps` (16 Mi by
- * default), and a value nested at most `maxDepth` levels, as the parser reads it.
+ * default), and a value nested at most `maxDepth` levels, as the parser reads
+ * it. A secret is written only with `revealSecrets` (spec §15).
  */
-export const encoding = (limits: h.Limits, encode: () => Value): Value => {
-  const value = guarded(limits, limits.maxSteps ?? DEFAULT_ENCODE_STEPS, encode)
+export const encoding = (limits: h.Limits, encode: () => Value, revealSecrets = false): Value => {
+  const value = guarded(limits, limits.maxSteps ?? DEFAULT_ENCODE_STEPS, encode, revealSecrets)
   countValues(value, depthOf(limits), nodesOf(limits))
   return value
 }
@@ -938,7 +941,7 @@ function compileObject(ast: SchemaAST.Objects): Converter {
     const name = tag.value
     if (v.kind !== "variant" || v.tag !== name) return mismatch(`the variant ${name}`, v, v.kind === "variant" ? "unknown-tag" : "type-mismatch")
     // Point(1, 2) → { values: [1, 2] }, with as many arguments as the case lists (spec §15).
-    if (values) return arity === undefined || v.args.length === arity ? [["values", vArr(v.args)]] : wrongPayload(`${name} with ${arity} argument(s)`, v, { kind: "args", count: arity })
+    if (values) return arity === undefined || v.args.length === arity ? [["values", uncheckedArr(v.args)]] : wrongPayload(`${name} with ${arity} argument(s)`, v, { kind: "args", count: arity })
     const [first] = v.args
     const record = `${name} { ${positional.map((n) => `${n}: …`).join(", ")} }`
     if (nested) return v.args.length === 1 && first?.kind === "record" ? [["value", first]] : notRecord(v, `expected ${name} { … }, got ${describe(v)}`) // Odd { _tag: 1 } → { value: { _tag: 1 } }
@@ -1102,6 +1105,53 @@ export type Encoder = (js: unknown) => Value
 
 const TAG_NAME = /^[A-Z][A-Za-z0-9_]*$/
 
+// The values written, checked as the core's encoder checks them (spec §7,
+// §11): against the limits of the call (`guard.limits`, the defaults for
+// those not given), not the constructors' defaults, so that a value decoded
+// with raised limits encodes again with them. Depth and nodes are counted on
+// the whole value once it is built (`encoding`).
+
+/** Longer than `max` characters (code points, spec §7). */
+const longerThan = (s: string, max: number): boolean => {
+  if (s.length <= max) return false
+  let n = 0
+  for (const _ of s) if (++n > max) return true
+  return false
+}
+
+/** Text with a UTF-8 form (spec §4) within the string limit: a string, a key or a tag's. */
+const writable = (s: string, what: "string" | "key" | "tag"): string => {
+  if (what !== "tag" && unpairedSurrogate(s) >= 0) fail(`a ${what} with an unpaired surrogate, which has no UTF-8 form`, "cannot-encode")
+  const max = guard.limits.maxStringLength ?? DEFAULT_LIMITS.maxStringLength
+  if (longerThan(s, max)) fail(`${what} longer than ${max} characters`, what === "key" ? "key-too-long" : what === "tag" ? "tag-too-long" : "string-too-long")
+  return s
+}
+
+const vStr = (s: string): Value => uncheckedStr(writable(s, "string"))
+
+/** An integer's text (`-0` already written as 0), within the number limit. */
+const vNum = (text: string): Value => {
+  const max = guard.limits.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength
+  return text.length > max ? fail(`number literal longer than ${max} characters`, "number-too-long") : uncheckedNum(text)
+}
+
+const vBytes = (data: Uint8Array): Value => {
+  const max = guard.limits.maxStringLength ?? DEFAULT_LIMITS.maxStringLength
+  return data.length * 2 > max ? fail(`byte string longer than ${max} hex digits`, "string-too-long") : uncheckedBytes(new Uint8Array(data))
+}
+
+const vArr = (items: readonly Value[]): Value => uncheckedArr(Object.freeze(items))
+
+const vRec = (fields: ReadonlyMap<string, Value>): Value => {
+  for (const k of fields.keys()) writable(k, "key")
+  return uncheckedRec(fields)
+}
+
+const vVariant = (tag: string, args: readonly Value[] = []): Value => {
+  if (!TAG_NAME.test(tag)) fail(`the tag '${quoteText(tag)}' is not [A-Z][A-Za-z0-9_]*`, "invalid-tag")
+  return uncheckedVariant(writable(tag, "tag"), Object.freeze(args))
+}
+
 /** A float in its one spelling (spec §15); a Float32 as the nearest binary32 value. */
 const floatValue = (n: number, type: FloatType = "Float64"): Value => coreFloatValue(n, type) ?? fail(`${n} is too large for ${type}`, "cannot-encode")
 
@@ -1262,7 +1312,7 @@ const encodeByTag: (ast: AST) => Encoder = Match.type<AST>().pipe(
   Match.tag("Arrays", (ast): Encoder => {
     const elements = ast.elements.map(compileEncoder)
     const rest = Arr.head(ast.rest).pipe(Option.map(compileEncoder), Option.getOrElse(() => encodeGeneric))
-    return (js) => (Array.isArray(js) ? vArr(js.map((x, i) => (elements[i] ?? rest)(x))) : encodeGeneric(js))
+    return (js) => (Array.isArray(js) ? vArr(js.map((x, i) => at(i, () => (elements[i] ?? rest)(x)))) : encodeGeneric(js))
   }),
   Match.tag("Objects", encodeObject),
   Match.tag("Union", encodeUnion),
@@ -1302,11 +1352,13 @@ function encodeObject(ast: SchemaAST.Objects): Encoder {
         if (!declared.has(key) && isField(key) && obj[key] !== undefined) present.push({ name: key, encode: rest.value })
       }
     }
-    if (tag === undefined) return vRec(new Map(present.map((p) => [p.name, p.encode(obj[p.name])])))
+    // Errors at their place in the haus value (spec §15): a field by name (a record payload's fields are the variant's own), an argument by index.
+    const field = (p: { readonly name: string; readonly encode: Encoder }): readonly [string, Value] => [p.name, at(p.name, () => p.encode(obj[p.name]))]
+    if (tag === undefined) return vRec(new Map(present.map(field)))
     // A tag without fields takes no payload; one with fields always a record, `Tag {}` included (spec §15).
     if (props.length === 0 && Option.isNone(rest)) return vVariant(tag)
-    if (positional) return vVariant(tag, present.map((p) => p.encode(obj[p.name])))
-    return vVariant(tag, [vRec(new Map(present.map((p) => [p.name, p.encode(obj[p.name])])))])
+    if (positional) return vVariant(tag, present.map((p, i) => at(i, () => p.encode(obj[p.name]))))
+    return vVariant(tag, [vRec(new Map(present.map(field)))])
   }
 }
 
@@ -1364,14 +1416,15 @@ function encodeDeclaration(ast: SchemaAST.Declaration): Encoder {
     case "effect/schema/Option": {
       const inner = Arr.head(ast.typeParameters).pipe(Option.map(compileEncoder), Option.getOrElse(() => encodeGeneric))
       return (js) =>
-        Option.isOption(js) ? Option.match(js, { onNone: () => vVariant("None"), onSome: (x) => vVariant("Some", [inner(x)]) }) : encodeGeneric(js)
+        Option.isOption(js) ? Option.match(js, { onNone: () => vVariant("None"), onSome: (x) => vVariant("Some", [at(0, () => inner(x))]) }) : encodeGeneric(js)
     }
     case "effect/schema/Redacted": {
-      // Written in full (the receiver needs it), but never shown in an error.
+      // Written in full only with `revealSecrets` (spec §15, "Encoding a secret"), and never shown in an error.
       const inner = Arr.head(ast.typeParameters).pipe(Option.map(compileEncoder), Option.getOrElse(() => encodeGeneric))
       const message = secretMessage(ast)
       return (js) => {
         if (!Redacted.isRedacted(js)) throw new ConversionError("expected a Redacted (Redacted.make(…))", "cannot-encode")
+        if (!guard.revealSecrets) throw new ConversionError("a secret is written only with revealSecrets: true (spec §15)", "cannot-encode")
         try {
           return inner(Redacted.value(js))
         } catch (e) {

@@ -9,7 +9,8 @@
     "skipLibCheck": true,
     "types": ["node"],
     "paths": {
-      "@haus-fmt/haus": ["../../typescript/packages/haus/src/index.ts"],
+      "@haus-fmt/haus": ["../../typescript/packages/haus/src/haus.ts"],
+      "@haus-fmt/haus/internal": ["../../typescript/packages/haus/src/index.ts"],
       "@haus-fmt/haus/node": ["../../typescript/packages/haus/src/node.ts"]
     }
   },

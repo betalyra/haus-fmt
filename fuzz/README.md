@@ -225,7 +225,7 @@ code; reasons are not compared.
 | Lean | `haus-rules --profile-batch NAME FILE` ([`spec/lean/Rules.lean`](../spec/lean/Rules.lean)) |
 | TypeScript | in this process: `@haus-fmt/money`'s `iso`, `@haus-fmt/geo`'s `wgs84` and `@haus-fmt/uuid`'s `rfc9562` with `compileSchemaFile(schema.haus, { codecs })`, `h.decode`, `h.encode` |
 | TypeScript (`typescript-h`) | in this process: the packages' `h.*` schemas `Money`, `Currency`, `LatLng`, `BBox`, `Uuid` |
-| Effect | in this process: the packages' `./effect` codec groups with `Haus.decodeValue(schema, codecs)`, `Haus.encodeValue(schema, codecs)` |
+| Effect | in this process: the packages built in, rules on by default (`Haus.Sources.make`, `Haus.compile`), `Haus.decodeValue`, `Haus.encodeValue` |
 | Rust | [`schema-rust/src/profile_runner.rs`](schema-rust/src/profile_runner.rs): `haus_money::{Iso, IsoCurrency}`, `haus_geo::{Wgs84, Wgs84BBox}`, `haus_uuid::Rfc9562` as generated code runs a codec (`haus::de::codec`) |
 | Roc | [`roc/profile_runner.roc`](roc/profile_runner.roc): `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`, `Rfc9562` of `extensions/*/roc` with `Decode.codec` |
 | Python | [`python/fuzz/profile_runner.py`](../python/fuzz/profile_runner.py): `haus_money.iso`, `haus_geo.wgs84` and `haus_uuid.rfc9562` with `haus.schema.load_schema(…, codecs=…)` |
@@ -278,7 +278,7 @@ tests the check: `node --test fuzz/src/`.
 | Lean | `haus-ref --schema-batch TYPES FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
 | TypeScript | in this process: `compileSchemaFile`, `h.decode`, `h.encode` |
 | TypeScript (`typescript-codec`) | in this process: `h.parse` of the text and `h.stringify` (minimised) of the result on the generic path (`withCodec(…, "generic")`, compared with Lean), and on each compiled path checked against it: closures, code generated at runtime, and code generated ahead by @haus-fmt/import (each schema file built into a module with `optimize` for all its types, loaded, which marks its schemas as `h.optimize` does; needs `typescript/packages/import/dist`). On the case, on texts near it and on values near the decoded one: the same values, texts and errors, and no falling back on what the generic path accepts ([`src/codec.ts`](src/codec.ts)); a difference is a crash |
-| Effect | in this process: `Haus.compileSchemaFile`, `decodeValue`, `encodeValue` |
+| Effect | in this process: its schema builder (`compileSchemaFile` of `dist/schema-file.js`, behind `Haus.compile`), `decodeValue`, `encodeValue` |
 | Rust | [`schema-rust`](schema-rust): the code haus-fmt-build generates for each schema |
 | Rust (`rust-check`) | [`schema-rust/src/check_runner.rs`](schema-rust/src/check_runner.rs): haus-fmt-schema's runtime checker, `Schema::decode` |
 | Roc | [`roc/schema_runner.roc`](roc/schema_runner.roc), with the modules `haus-gen roc` generates ([`roc/gen_schemas.ts`](roc/gen_schemas.ts)) |
@@ -523,7 +523,7 @@ smallest text with the same pattern of disagreement.
 |---|---|
 | Lean | `haus-ref --schema-check-batch FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `Haus.SchemaFile.load`, no position |
 | TypeScript | in this process: `compileSchemaFile` |
-| Effect | in this process: `Haus.compileSchemaFile` (TypeScript's parser and checker, its own schema builder) |
+| Effect | in this process: its schema builder (`compileSchemaFile` of `dist/schema-file.js`: TypeScript's parser and checker, its own schema builder) |
 | Rust | [`schema-rust/src/schema_check_runner.rs`](schema-rust/src/schema_check_runner.rs): `haus_schema::Schema::parse` |
 | Python | [`python/fuzz/schema_check_runner.py`](../python/fuzz/schema_check_runner.py): `haus.schema.compile_schema` |
 | Go | [`go-runner --schema-check`](go/check.go): `schema.Parse` |
@@ -633,7 +633,7 @@ or `err CODE`.
 |---|---|
 | Lean | `haus-ref --packages-batch FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `Packages.resolveIn` on the case's tree; `ok` or `err CODE` (no type names) |
 | TypeScript | in this process: `readSchemaFile` (`@haus-fmt/haus/node`) and `parseSchemaFile` |
-| Effect | in this process: `readSchemaFile` and `Haus.compileSchemaFile` |
+| Effect | in this process: the TypeScript reader's options and its schema builder (`compileSchemaFile` of `dist/schema-file.js`) |
 | Rust | [`schema-rust/src/import_runner.rs`](schema-rust/src/import_runner.rs): `Schema::load_with` |
 | Python | [`python/fuzz/api_runner.py --imports`](../python/fuzz/api_runner.py): `haus.schema.load_schema` |
 | Go | [`go-runner --imports`](go/api.go): `schema.Load` |
@@ -675,7 +675,7 @@ A runner reads lines `KIND HEX`, the text as hex of its UTF-16 code units;
 | String API | Runner |
 |---|---|
 | TypeScript | in this process: `parseAll`, `parseDocument` and `format`, `compileSchemaFile`, `importJson`; `str`, `rec`, `variant` with `canonical` and `stringify` |
-| Effect | in this process: `Haus.compileSchemaFile` (`S` only) |
+| Effect | in this process: its schema builder, `compileSchemaFile` of `dist/schema-file.js` (`S` only) |
 | Python | [`python/fuzz/api_runner.py --strings`](../python/fuzz/api_runner.py): `parse_all`, `format`, `compile_schema`, `import_json`; `String`, `Record`, `Variant` with `canonical`, `hash`, `stringify` |
 | JVM | [`jvm-runner --strings`](jvm/src/main/java/org/hausfmt/fuzz/ApiModes.java): `Haus.parseAll(String)`, `Haus.format(String, …)`, `Schema.parse(String)`, `HausJson.importJson(String)`; `Value.string`, `record`, `variant` with `Haus.canonical`, `hash`, `write` |
 

@@ -4,7 +4,7 @@
  *   node --import @haus-fmt/import/register main.ts           (target "plain")
  *   node --import @haus-fmt/import/register/effect main.ts    (target "effect")
  *
- * or, with options, from your own register file: `await register({ target: "effect", packages: ["vendor/money"] })`,
+ * or, with options, from your own register file: `await register({ target: "effect", packages: ["vendor/acme"], bundles: ["@acme/orders"] })`,
  * `await register({ optimize: { "src/github.schema.haus": ["Issue"] } })` (paths relative to the working directory).
  * Use the same target as in tsconfig.json, so the types match the values.
  */

@@ -262,17 +262,21 @@ describe("schema-based (spec §16.3), hand-written schemas", () => {
   const json = `{"id":"9007199254740993","count":7,"total":"19.90","when":"2026-11-13","raw":"CzQ=","shape":{"_tag":"Point","values":[1,2.5]},` +
     `"level":"Info","note":null,"nested":{"_tag":"Some","value":null},"tags":{"a":[true,false]},"key":"sk-1"}`
 
+  // The order holds a secret: written only with revealSecrets (spec §15).
+  const reveal = { revealSecrets: true }
+
   it("writes and reads", () => {
-    expect(h.toJson(Order, order)).toBe(json)
+    expect(h.toJson(Order, order, reveal)).toBe(json)
+    expect(() => h.toJson(Order, order)).toThrow(expect.objectContaining({ code: "cannot-encode", path: ["key"] }))
     const back = h.fromJson(Order, json)
-    expect(h.stringify(Order, back)).toBe(h.stringify(Order, order))
+    expect(h.stringify(Order, back, reveal)).toBe(h.stringify(Order, order, reveal))
     expect(back.key.expose()).toBe("sk-1")
   })
 
   it("a missing optional field is a missing member, never null", () => {
     const { note: _, ...rest } = order
-    expect(h.toJson(Order, rest)).not.toContain("note")
-    expect("note" in h.fromJson(Order, h.toJson(Order, rest))).toBe(false)
+    expect(h.toJson(Order, rest, reveal)).not.toContain("note")
+    expect("note" in h.fromJson(Order, h.toJson(Order, rest, reveal))).toBe(false)
   })
 
   it("variant forms", () => {
@@ -343,7 +347,7 @@ describe("schema-based (spec §16.3), hand-written schemas", () => {
     const Inner = h.Secret(h.Maybe(h.Int32))
     const Outer = h.Maybe(Inner)
     expect(h.toJson(Outer, h.Maybe.none)).toBe(`{"_tag":"None"}`)
-    expect(h.toJson(Outer, h.Maybe.some(h.Secret.make(h.Maybe.none)))).toBe(`{"_tag":"Some","value":null}`)
+    expect(h.toJson(Outer, h.Maybe.some(h.Secret.make(h.Maybe.none)), { revealSecrets: true })).toBe(`{"_tag":"Some","value":null}`)
   })
 
   it("a recursive type", () => {

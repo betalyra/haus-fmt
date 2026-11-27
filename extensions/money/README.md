@@ -31,6 +31,6 @@ h.parse(schemas.Root!, `{ total: Money(19.90, EUR) }`)   // ok
 h.parse(schemas.Root!, `{ total: Money(19.90, Eur) }`)   // HausDecodeError
 ```
 
-With Effect: `import { iso } from "@haus-fmt/money/effect"`, then `Haus.decode(Root, iso)`.
+With Effect: `@haus-fmt/effect` has the package built in, its rule iso on by default (`Haus.compile`); `@haus-fmt/effect/money` exports the package value (`money`, for `Haus.Package.shapeOnly`) and `currencyAsString`, a codec giving every `Currency` as a `string`.
 
 Other languages: [extensions](https://github.com/betalyra/haus-fmt/tree/main/extensions).
