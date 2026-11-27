@@ -1,6 +1,6 @@
 [package]
 name = "haus-fmt-geo"
-version = "1.0.0"
+version = "1.0.1"
 description = "@haus-fmt/geo: Points and boxes on the earth (a haus schema package)"
 edition = "2024"
 license = "MIT"

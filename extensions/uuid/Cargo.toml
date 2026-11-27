@@ -1,6 +1,6 @@
 [package]
 name = "haus-fmt-uuid"
-version = "1.0.0"
+version = "1.0.1"
 description = "@haus-fmt/uuid: Universally unique identifiers (a haus schema package)"
 edition = "2024"
 license = "MIT"

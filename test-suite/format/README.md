@@ -37,7 +37,7 @@ For each input:
 each case is `input`, `indent`, `width` and `stream` where given (unset
 otherwise, so the default applies), and `result`: `Ok(text)`, the pretty
 result, or `Rejected` for options a formatter must refuse (a negative
-number, spec §11). Its inputs have no comments, so a binding also checks its
+number, spec §11). Its inputs have no comments and only normalized spellings, so a binding also checks its
 writer of values that takes a list (`stringifyAll`, spec §11) with them.
 Rejecting is an API error, with no code of §17; a binding whose option types
 can't hold a negative number rejects it by its types and passes the case.
@@ -109,7 +109,7 @@ wrong:
   default, and a negative option is rejected also next to a valid one.
 - Formatted as a stream (`stream: True`), a single item has a comma after it
   in every layout, and in pretty the comma counts toward the width; a file of
-  several items, or of none, is written as without the option
-  (`cases/stream-option-*`, `options.cases.haus`).
+  several items, or of none (one of only comments too), is written as without
+  the option (`cases/stream-option-*`, `options.cases.haus`).
 - Several comments on one line above an entry are written one per line;
   comments after an entry's comma stay together (`cases/comments-one-line`).

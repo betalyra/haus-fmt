@@ -1,8 +1,8 @@
-import Haus.Packages.Resolve
+import Haus.Packages.Rules
 import Haus.Canonical
 
 /-!
-# The package suite (`test-suite/packages/cases.haus`)
+# The package suite (`test-suite/packages/cases.haus`, `rules.haus`)
 
 Each `Case` (format in `test-suite/README.md`, "Package suite") becomes a
 `Tree`, with no real file system: `File`, `Package`, `Npm`, `Link`, `Fifo`
@@ -10,18 +10,21 @@ Each `Case` (format in `test-suite/README.md`, "Package suite") becomes a
 directories made as needed), the tree's root being the adapter's empty
 temporary directory. The tree has no permissions: a case with a `Mode` entry
 is marked `unmodelled`, and `haus-ref --packages` skips it. The case's
-`rootDir` is the build's `root` option, and its `ecosystem` must agree with
-its mode (`npm` exactly when `Npm`). `Package(dir, name, version, schema)`
+`rootDir` is the build's `root` option, its mode is `Explicit` (no case turns
+on the resolver's npm lookup), and its `ecosystem` is `core` or `cargo`.
+`Package(dir, name, version, schema)`
 writes `dir/package.haus` as the record `{ name, version }` in canonical
 form, and `Npm(dir, {…})` writes `dir/package.json` with each dependency
 list as an object from the names to `"*"`.
 
-`check` runs the resolver on a case and compares it with `expect`: the
-packages on `Ok`; on `Err`, the code, and the message must contain each of
-`mentions` and none of `hides`. It also checks two things the suite can't
-see: every file read is a `package.haus`, `schema.haus`, `package.json` or a
-file whose real path ends in `.schema.haus` (R7's read set), and no file is
-read twice (§13.3).
+`check` compiles a case (`Haus.Packages.compile`: the built-in official
+packages, the resolver, the `rules` fields and `missing-codec`, with the
+case's `shapeOnly` and `withRule` as the program's) and compares it with
+`expect`: the packages on `Ok`; on `Err`, the code, and the message must
+contain each of `mentions` and none of `hides`. It also checks two things the
+suite can't see: every file read is a `package.haus`, `schema.haus`,
+`package.json` or a file whose real path ends in `.schema.haus` (R7's read
+set), and no file is read twice (§13.3).
 -/
 
 namespace Haus.Packages.Suite
@@ -42,10 +45,12 @@ structure Case where
   expect : Expect
   /-- The build's `root` option (`rootDir`), if given. -/
   rootDir : Option Path := none
-  /-- `core`, `npm` or `cargo`: which implementations run the case. -/
+  /-- `core` or `cargo`: which implementations run the case. -/
   ecosystem : String := "core"
   /-- Why the reference doesn't run the case (`unmodelled`), if it doesn't: it has a `Mode` entry. -/
   unmodelled : Option String := none
+  /-- The packages taken shape-only and the rules the program supplies (`shapeOnly`, `withRule`). -/
+  program : Program := {}
   deriving Inhabited
 
 abbrev D := Except String
@@ -104,13 +109,10 @@ def addFile (es : List (Path × Entry)) : Value → D (List (Path × Entry))
 /-- Whether a list of files has a `Mode` entry. -/
 def hasMode (files : List Value) : Bool := files.any fun | .variant "Mode" _ => true | _ => false
 
+/-- A case's mode: `Explicit` only. The resolver's npm lookup (`Mode.npm`, packages 0.1) stays in the model for its proofs, but no case turns it on (packages.md §2: no implementation searches). -/
 def mode : Value → D Mode
   | .variant "Explicit" [.record fs] => do
     pure { npm := false, packages := (← strs (field fs "packages")).map splitPath,
-           folders := (← strs (field fs "folders")).map splitPath }
-  | .variant "Npm" [] => pure { npm := true }
-  | .variant "Npm" [.record fs] => do
-    pure { npm := true, packages := (← strs (field fs "packages")).map splitPath,
            folders := (← strs (field fs "folders")).map splitPath }
   | v => .error s!"not a mode: {repr v}"
 
@@ -131,8 +133,7 @@ def decode : Value → D Case
     let tree ← files.foldlM addFile []
     let mode ← mode m
     let some (.str ecosystem) := field fs "ecosystem" | .error s!"{name}: no ecosystem"
-    if ecosystem ∉ ["core", "npm", "cargo"] then .error s!"{name}: ecosystem {ecosystem}, not core, npm or cargo"
-    if (ecosystem == "npm") != mode.npm then .error s!"{name}: ecosystem {ecosystem} with mode {if mode.npm then "Npm" else "Explicit"}"
+    if ecosystem ∉ ["core", "cargo"] then .error s!"{name}: ecosystem {ecosystem}, not core or cargo"
     let os ← match field fs "os" with
       | none => pure none
       | some (.str "unix") => pure (some "unix")
@@ -149,9 +150,10 @@ def decode : Value → D Case
       | none => pure none
       | some (.str d) => pure (some (splitPath d))
       | some v => .error s!"{name}: rootDir {repr v}, not a string"
+    let program := { shapeOnly := ← strs (field fs "shapeOnly"), withRule := ← strs (field fs "withRule") }
     pure { name, tree := ⟨tree⟩, root := splitPath root, mode,
            should := field fs "should" == some (.variant "True" []),
-           expect := ← expect e, rootDir, ecosystem, unmodelled }
+           expect := ← expect e, rootDir, ecosystem, unmodelled, program }
   | v => .error s!"not a case: {repr v}"
 
 def contains (s part : String) : Bool := (s.splitOn part).length > 1
@@ -168,7 +170,7 @@ def allowedRead (p : Path) : Bool :=
 
 /-- Runs a case: `none` if it passes, else why not. Also the outcome, for printing. -/
 def check (c : Case) : Option String × Outcome :=
-  let o := resolveIn c.tree { mode := c.mode, root := c.rootDir } c.root
+  let o := compile c.tree { mode := c.mode, root := c.rootDir } c.root c.program
   let bad := o.reads.filter (!allowedRead ·)
   let twice := o.reads.filter fun p => o.reads.count p > 1
   let verdict :=

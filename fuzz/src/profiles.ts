@@ -1,9 +1,10 @@
 /**
- * Differential testing of the official profiles' codecs (spec §13.3, §13.4;
+ * Differential testing of the official packages' rules (spec/packages.md §6;
  * extensions/money/profiles/iso.md, extensions/geo/profiles/wgs84.md,
  * extensions/uuid/profiles/rfc9562.md):
  * generated values and near misses through the Lean reference checkers
- * (spec/lean/Haus/Profiles, proven to compute the rules) and every binding's
+ * (extensions/<name>/lean/, run by spec/lean's haus-rules, proven to compute
+ * the rules) and every binding's
  * codecs, reporting where they disagree. See ../README.md, "Profiles".
  *
  *   node fuzz/src/profiles.ts [--count N] [--seed S] [--profiles iso,wgs84,rfc9562] [--runners lean,rust,…] [--out DIR]
@@ -38,7 +39,7 @@ const root = new URL("../..", import.meta.url).pathname
 // ── the profiles ─────────────────────────────────────────────
 
 interface Profile {
-  /** The profile's name, for `haus-ref --profile-batch`. */
+  /** The rule's name, for `haus-rules --profile-batch`. */
   readonly name: string
   readonly short: string
   /** The package's directory, under extensions/. */
@@ -615,7 +616,7 @@ async function effectRunner(): Promise<Runner> {
 }
 
 const allRunners: Runner[] = [
-  external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), (p) => ["--profile-batch", p.name]),
+  external("lean", join(root, "spec/lean/.lake/build/bin/haus-rules"), (p) => ["--profile-batch", p.name]),
   await typescriptRunner(),
   await typescriptHRunner(),
   await effectRunner(),

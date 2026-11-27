@@ -5,10 +5,17 @@ language-neutral package:
 
 | File | What it is |
 |---|---|
-| `package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
+| `package.haus` | The manifest: name and version, and `rules`, which of its types have a rule (spec/packages.md §4). Name and version make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
 | `schema.haus` | The schema, the package's one schema file. Shape only, like every haus schema. |
-| `profiles/<name>.md` | A profile's rule: a definition of the package's types, beyond the shape, which defines what a codec implementing it accepts (spec §13.3). |
-| `profiles/<name>.vectors.haus` | The profile's test vectors: examples of the rule that every codec must pass. They test the rule and don't define it. |
+| `profiles/<name>.md` | A rule: a definition of the package's types, beyond the shape, which every binding checks (spec/packages.md §6). The directory becomes `rules/` when the bindings read it there. |
+| `profiles/<name>.vectors.haus` | The rule's test vectors: examples of the rule that every implementation must pass. They test the rule and don't define it. |
+| `lean/` | The rule's reference model in Lean, built by `spec/lean` and run by its `haus-rules` executable. |
+
+The manifest's version is the package's version. Today `package.json`,
+`Cargo.toml` and `python/pyproject.toml` carry the same version, which
+changesets bumps in `package.json` and `typescript/scripts/sync-versions.mts`
+copies into the others (and `package.haus`); that changes when the official
+packages move into the bindings' libraries (packages round).
 
 The same schema is published for each language from this one source: the
 `package.json` publishes it to npm, the `Cargo.toml` makes it a crate (its
@@ -35,7 +42,7 @@ registry, as a git dependency, or as a copy in the project. Name it after
 something you own (`@your-domain/…`, `@your-github-org/…`), give it no install
 scripts, and publish every language from one source.
 
-| Package | Types | Profiles |
+| Package | Types | Rules |
 |---|---|---|
 | [`@haus-fmt/money`](money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
 | [`@haus-fmt/geo`](geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |

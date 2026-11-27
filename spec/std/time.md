@@ -1,10 +1,10 @@
-# The std/time profile
+# The std/time rule
 
 Which strings each type of [`std/time`](time.schema.haus) accepts (spec §13.2).
 Every schema binding checks exactly these rules: they are built-in rules, like
 the range of `UInt8`. A parser does not check them (§13.1).
 
-The profile is a strict subset of RFC 3339, RFC 9557 and ISO 8601 durations,
+The std/time rule is a strict subset of RFC 3339, RFC 9557 and ISO 8601 durations,
 close to what JavaScript's Temporal and java.time parse. Each value has one
 spelling, apart from the few listed under "Values" below, and
 nothing depends on a registry.

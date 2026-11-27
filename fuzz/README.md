@@ -79,7 +79,7 @@ exactly one line per case, in order, and nothing else on standard output:
 | (none), `--stream` | `ok ` and a JSON array with one element per top-level value, each in the suite's JSON encoding of `test-suite/README.md` but with its keys written without `_`: `{"num": "19.90"}`, `{"bytes": "0b34"}`, `{"rec": {…}}`, `{"tag": "Some", "args": […]}` (`{"tag": "None"}` without arguments) | `err LINE COLUMN CODE REASON` |
 | `--canonical` | `ok ` and a JSON array of strings, the canonical form (spec §12) of each top-level value | `err LINE COLUMN CODE REASON` |
 | `--format STYLE --indent N --width N [--stream]` | `ok ` and the formatted text as a JSON string; with `--stream`, formatted as a stream (spec §11: a comma after a single item too) | `err LINE COLUMN CODE REASON` |
-| `--write STYLE --indent N --width N [--stream]` | `ok ` and a JSON object: `"values"`, the array of each value written alone, and `"file"` (the whole file; with `--stream`, written as a stream, a comma after a single value too) or `"stream"` (a writer that always writes a stream: every value with a comma, `--stream` or not), or `null` where the binding has no such writer | `err LINE COLUMN CODE REASON` (an encoding error `0 0`) |
+| `--write STYLE --indent N --width N [--stream]` | `ok ` and a JSON object: `"values"`, the array of each value written alone, and `"file"` (the whole file; with `--stream`, written as a stream, a comma after a single value too) or `"stream"` (a writer that always writes a stream: every value with a comma, `--stream` or not), or `null` where the binding has no such writer | `err LINE COLUMN CODE REASON` (an encoding error `0 0`: a writer's error has a path, not a place, and paths aren't compared) |
 
 `LINE` and `COLUMN` are the error's place (spec §8), 1-based; `0 0` where
 the binding gives none, as for `invalid-utf8`, whose place is informative
@@ -179,8 +179,8 @@ audit plan X3): `@haus-fmt/money/iso`
 ([`wgs84.md`](../extensions/geo/profiles/wgs84.md)) and `@haus-fmt/uuid/rfc9562`
 ([`rfc9562.md`](../extensions/uuid/profiles/rfc9562.md)). Generated values and
 near misses of each type go through the Lean reference checkers
-([`spec/lean/Haus/Profiles`](../spec/lean/Haus/Profiles), proven to compute
-the rules) and every binding's codecs, which decode the value with the
+(`extensions/<name>/lean/`, such as [`HausMoney.lean`](../extensions/money/lean/HausMoney.lean),
+run by `haus-rules`, proven to compute the rules) and every binding's codecs, which decode the value with the
 package's schema and the profile, and encode what they decoded.
 
 ```sh
@@ -222,7 +222,7 @@ code; reasons are not compared.
 
 | Codecs | Runner (`FILE` of lines `TYPE HEX`, the value's text as hex UTF-8; prints `ok <canonical>` or `err <place> <code> <reason>`) |
 |---|---|
-| Lean | `haus-ref --profile-batch NAME FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
+| Lean | `haus-rules --profile-batch NAME FILE` ([`spec/lean/Rules.lean`](../spec/lean/Rules.lean)) |
 | TypeScript | in this process: `@haus-fmt/money`'s `iso`, `@haus-fmt/geo`'s `wgs84` and `@haus-fmt/uuid`'s `rfc9562` with `compileSchemaFile(schema.haus, { codecs })`, `h.decode`, `h.encode` |
 | TypeScript (`typescript-h`) | in this process: the packages' `h.*` schemas `Money`, `Currency`, `LatLng`, `BBox`, `Uuid` |
 | Effect | in this process: the packages' `./effect` codec groups with `Haus.decodeValue(schema, codecs)`, `Haus.encodeValue(schema, codecs)` |

@@ -1,10 +1,10 @@
 import Haus.Schema.Codec
 
 /-!
-# The profile `@haus-fmt/geo/wgs84`, version 1 — X2
+# The rule `wgs84` of `@haus-fmt/geo`, version 1 — X2
 
-The rule of [`extensions/geo/profiles/wgs84.md`](../../../../extensions/geo/profiles/wgs84.md),
-stated on the values the schema decoded (spec §13.3): a `Float64` is the
+The rule of [`profiles/wgs84.md`](../profiles/wgs84.md) (packages.md §6),
+stated on the values the schema decoded: a `Float64` is the
 float the literal rounds to (§15), so the ranges are checked on that float,
 as a number.
 
@@ -17,11 +17,12 @@ as a number.
 The rule is stated with rational numbers (`Flt.toRat?`, the exact value of a
 finite float); the checker compares products of natural numbers and
 integers (`within`, `le`). `check_iff`: the checker computes the rule.
-`codec` is the profile as a codec (§13.4), so the laws of
-`Haus.Schema.Codec` hold for it.
+`codec` is the rule as a check on the decoded value (§13.4), so the laws of
+`Haus.Schema.Codec` hold for it. Built as the library `HausGeo` of
+`spec/lean`, run by `haus-rules`.
 -/
 
-namespace Haus.Profiles.Geo
+namespace Haus.Rules.Geo
 open Haus Schema
 
 /-- The schema of `@haus-fmt/geo` (`extensions/geo/schema.haus`), resolved. -/
@@ -31,7 +32,7 @@ def env : Env := ⟨[
   -- type BBox = closed < BBox LatLng LatLng >
   ("BBox", .variant true [.positional "BBox" [.ref "LatLng", .ref "LatLng"]])]⟩
 
-/-- The types the profile has a rule for. -/
+/-- The types the rule decides on. -/
 inductive Type_ where
   | latLng
   | bbox
@@ -58,22 +59,22 @@ def toRat? : Flt → Option Rat
 /-- `x` is a finite float with −`B` ≤ `x` ≤ `B`. -/
 def Within (B : Nat) (x : Flt) : Prop := ∃ r, toRat? x = some r ∧ -(B : Rat) ≤ r ∧ r ≤ (B : Rat)
 
-/-- A point the profile accepts: latitude within 90, longitude within 180. -/
+/-- A point the rule accepts: latitude within 90, longitude within 180. -/
 def Point (lat lng : Flt) : Prop := Within 90 lat ∧ Within 180 lng
 
 /-- A decoded `LatLng`. -/
 def latLng (lat lng : Flt) : Typed := .case "LatLng" [.float .f64 lat, .float .f64 lng]
 
-/-- A `LatLng` the profile accepts. -/
+/-- A `LatLng` the rule accepts. -/
 inductive LatLng : Typed → Prop
   | mk {lat lng : Flt} : Point lat lng → LatLng (latLng lat lng)
 
-/-- A `BBox` the profile accepts: both corners accepted, and the south-west corner not north of the north-east one. -/
+/-- A `BBox` the rule accepts: both corners accepted, and the south-west corner not north of the north-east one. -/
 inductive BBox : Typed → Prop
   | mk {a b c d : Flt} {ra rc : Rat} : Point a b → Point c d → toRat? a = some ra → toRat? c = some rc → ra ≤ rc →
       BBox (.case "BBox" [latLng a b, latLng c d])
 
-/-- **The rule**, by type: which decoded values of each type the profile accepts. -/
+/-- **The rule**, by type: which decoded values of each type the rule accepts. -/
 def Valid : Type_ → Typed → Prop
   | .latLng => LatLng
   | .bbox => BBox
@@ -104,7 +105,7 @@ def checkBBox : Typed → Bool
     tag == "BBox" && t1 == "LatLng" && t2 == "LatLng" && checkPoint a b && checkPoint c d && le a c
   | _ => false
 
-/-- The checker: whether the profile accepts a decoded value of the type `ty`. -/
+/-- The checker: whether the rule accepts a decoded value of the type `ty`. -/
 def check : Type_ → Typed → Bool
   | .latLng => checkLatLng
   | .bbox => checkBBox
@@ -214,9 +215,9 @@ theorem check_iff (ty : Type_) (x : Typed) : check ty x = true ↔ Valid ty x :=
   · exact checkLatLng_iff x
   · exact checkBBox_iff x
 
-/-! ## The profile is a codec -/
+/-! ## The rule as a codec -/
 
-/-- The profile as a codec (§13.4): a check on the decoded value. -/
+/-- The rule as a codec (§13.4): a check on the decoded value. -/
 def codec (ty : Type_) : Codec Typed := Codec.check (check ty)
 
 /-- The codec accepts exactly the values the schema decodes that the rule accepts, and holds them as decoded. -/
@@ -250,4 +251,4 @@ private def f (lit : String) : Flt := (roundLit .f64 lit).getD .nan
 #guard check .bbox (.case "BBox" [latLng (f "-1e-300") (f "0"), latLng (f "-1e-301") (f "0")])
 #guard !check .bbox (.case "BBox" [latLng (f "-1e-301") (f "0"), latLng (f "-1e-300") (f "0")])
 
-end Haus.Profiles.Geo
+end Haus.Rules.Geo

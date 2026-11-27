@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-lean() { (cd spec/lean && lake build haus-ref); }
+lean() { (cd spec/lean && lake build haus-ref haus-rules); }
 
 rust() {
   (cd rust && cargo build -q --release -p haus-fmt --example fuzz_runner --example time_runner)

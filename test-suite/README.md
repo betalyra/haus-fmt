@@ -24,12 +24,19 @@ cases for it (spec §15), written in haus:
 ```haus
 Ok { type: "F64", input: 0.10, output: 0.1 },   // decodes; encoding gives output
 Ok { type: "I", input: 42 },                     // no output: encoding gives input back
+Ok { type: "Key", input: "sk-123", secrets: ["$"] },  // holds a secret at $
 Err { type: "I", input: 1.0, code: "not-an-integer", path: "$" },  // fails with this code, at this place
 ```
 
 `type` names a definition without parameters. For `Ok`, decode `input` with
-the type, encode the result with the same type, and compare its canonical form
-(§12) with that of `output`, or of `input` when there is no `output`. For
+the type, encode the result with the same type and `revealSecrets` (spec §15,
+"Encoding a secret"), and compare its canonical form
+(§12) with that of `output`, or of `input` when there is no `output`. Then
+encode the result again without `revealSecrets`: when the case has `secrets`,
+the places (spec §15) of the secrets in the decoded value, encoding must fail
+with `cannot-encode` at one of them (which one is not fixed, §15 "General
+rules"); without `secrets`, the value holds no secret, and encoding must
+succeed as with the option. For
 `Err`, decoding must fail with the error code `code` (spec §17), at the place
 `path` (spec §15, "General rules": `$.items[2].price`, `$.m["pt-BR"]`,
 `$[1].of[0]`), compared as text. Error messages are not compared.
@@ -85,6 +92,30 @@ values of exactly 256 levels counted as §7 does (`Tag { … }` is one level,
 `invalid/too-deep-paren-record.haus` 257 counted as §7 does. The `.jsonl` of a
 value 256 levels deep has more than 256 JSON levels (up to four per level), so
 a runner compares it without the JSON depth limit of §16.
+
+## Values built in code
+
+Every suite file is haus or JSON text, so every value in it is parsed: no
+format holds a value built in code. What happens when one is built (spec §7,
+§11, §12) is tested by each binding's own tests, with its constructors:
+
+- the constructors' errors: `invalid-tag`, `invalid-number`, `duplicate-key`,
+  `cannot-encode` (an unpaired surrogate); the default limits of §7, each
+  one past them where it is built: `string-too-long`, `key-too-long`,
+  `tag-too-long`, `number-too-long` (an integer of 1001 digits, measured on
+  its normalized literal), `exponent-too-large`, `nesting-too-deep` (257
+  levels, counted as §7 counts values built in code); and `too-many-nodes`
+  for a value whose parts share each other, *x*<sub>*n*+1</sub> =
+  [*x*<sub>*n*</sub>, *x*<sub>*n*</sub>], refused where it is built;
+- that the writers, `canonical`, `hash`, `hashAll`, `equals` and `compare`
+  never fail on a value that exists: their signatures have no error, and
+  a value at every default limit (256 levels, 1000-digit integers) is
+  written and read back by a reader with the default limits;
+- in a binding whose language can't keep code from changing a value: a value
+  changed after it was built (an array that contains itself, an element
+  added) gives `value-changed`, and never a hang;
+- encoding objects of the program whose parts share each other:
+  `too-many-nodes` at `$`, and `cyclic-value` for one that contains itself.
 
 ## Stream suite
 
@@ -182,8 +213,12 @@ A binding without a data checker runs the `Schema` cases only, and says so.
 haus, with JSON text in strings:
 
 - `schema-based.schema.haus` and `schema-based.cases.haus`: schema-based JSON, with a type.
-  `Ok { type, input, json }`: writing the decoded `input` gives `json`, and
-  reading `json` gives a value that encodes to `input` (or `output`).
+  `Ok { type, input, json, secrets? }`: writing the decoded `input` gives `json`, and
+  reading `json` gives a value that encodes to `input` (or `output`). Both
+  write and encode with `revealSecrets`; writing again without it fails with
+  `cannot-encode` at one of the places in `secrets` (spec §15 paths of the
+  decoded value), or, without `secrets`, gives `json` too (spec §15, "Encoding
+  a secret").
   `Read { type, json, output }`: reading `json` gives `output`.
   `Err { type, json, code }`: reading fails, with the error code `code`.
 - `self-describing.cases.haus`: self-describing JSON, without a type (`Ok { input, json }`, `Err { json, code }`).
@@ -212,17 +247,18 @@ and the result:
 
 ```haus
 Case {
-  name: "undeclared-in-package",
+  name: "version-differs-explicit",
+  should: True,
   files: [
-    Npm("app", { dependencies: ["@acme/orders"] }),               // app/package.json
-    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
-    Package("app/node_modules/@acme/orders", "@acme/orders", "1.0.0", "type Order = { id: Int }"),
-    Link("app/node_modules/@acme/x", "../../../vendor/x"),       // a symbolic link
+    File("app/app.schema.haus", "import @acme/common@1 (Address)\ntype Root = { home: Address }"),
+    Package("vendor/common", "@acme/common", "1.0.0", "type Address = { city: String }"),
+    Npm("vendor/common", { name: "@acme/common", version: "1.1.0" }),   // vendor/common/package.json
+    Link("vendor/x", "../elsewhere/x"),                                 // a symbolic link
   ],
   root: "app/app.schema.haus",
-  ecosystem: "npm",
-  mode: Npm,
-  expect: Err { code: "undeclared-package", mentions: ["@acme/orders"] },
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/common"] },
+  expect: Err { code: "package-version", mentions: ["1.0.0", "1.1.0"] },
 },
 ```
 
@@ -265,26 +301,24 @@ option skips the cases with `rootDir` and says so.
   nothing else is looked at (no `node_modules`). Each of `packages` is a
   package's directory; each of `folders` is a directory whose subdirectories
   with a `package.haus` are packages. Their manifests name them.
-- `Npm` or `Npm { packages?, folders? }`: from `node_modules` by the npm
-  rules of spec §13.3, together with the packages given explicitly, if any.
 
-`ecosystem` says which implementations run a case (spec §13.3, "Installed
-packages"):
+No implementation searches for packages
+([`../spec/packages.md`](../spec/packages.md) §2), so `Explicit` is the only
+mode; the npm lookup of packages 0.1 and its cases are gone. A binding MUST
+NOT read `node_modules`, which the cases check.
 
-- `"core"`: every implementation of every ecosystem, on every OS (`mode` is
-  `Explicit`). A binding whose packages given explicitly can also be a file
-  tree given in code (a Go `fs.FS`, a Swift `Bundle`, classpath resources, a
-  Python `Traversable`) runs these cases that way too where it is cheap.
-- `"npm"`: implementations of the npm ecosystem, which look in
-  `node_modules` (`mode` is `Npm`): the TypeScript binding, under Node, Bun
-  and Deno. Every other binding skips them, with a count; it MUST NOT read
-  `node_modules`, which the core cases check.
+`ecosystem` says which implementations run a case:
+
+- `"core"`: every implementation, on every OS. A binding whose packages given
+  explicitly can also be a file tree given in code (a Go `fs.FS`, a Swift
+  `Bundle`, classpath resources, a Python `Traversable`) runs these cases that
+  way too where it is cheap.
 - `"cargo"`: code generators that take packages from Cargo (`haus-build`).
   No case has it yet: Cargo passes packages through build-script metadata,
   which a file tree can't express, and `haus-build` runs the core cases.
 
-There are 136 cases: 90 `"core"` and 46 `"npm"`; 6 of them have
-`os: "unix"` (4 core, 2 npm), and 3 `unmodelled` (below).
+There are 93 cases, all `"core"`; 4 of them have `os: "unix"`, and 2
+`unmodelled` (below).
 
 **The 1.0 core and the package layer.** The specification freezes its core
 at 1.0, and the package layer has a version of its own (spec §10,
@@ -292,14 +326,15 @@ at 1.0, and the package layer has a version of its own (spec §10,
 their `mode`, without a field of their own: the 41 cases with
 `mode: Explicit {}` (all `"core"`) give the build no package, so they test
 only what the core defines (relative imports, the root, the files a build
-reads, the import rules); the other 95 give it packages, explicitly or from
-`node_modules`, and test the package layer as well. A binding that
-implements the core but finds no packages runs the 41 and says so: "haus
-1.0" for those, "packages 0.x" when it passes the others too. (The
-`ecosystem` `"core"` is another thing: every ecosystem runs those cases.)
+reads, the import rules); the other 52 give it packages and test the package
+layer as well. A binding that implements the core but finds no packages runs
+the 41 and says so: "haus 1.0" for those, "packages 0.x" when it passes the
+others too. (The `ecosystem` `"core"` is another thing: every implementation
+runs those cases.)
 
-The Lean reference (`haus-ref --packages`) runs every case of every
-ecosystem: it has one resolver, with the npm lookup as an option.
+The Lean reference (`haus-ref --packages`) runs every case. Its resolver
+still has the npm lookup of packages 0.1 as an option, which its proofs
+cover; no case and no command-line option turns it on.
 
 `os: "unix"` marks a case that only Unix runs (a `Fifo` or `Mode` entry);
 adapters on Windows skip it and say so. Cases that bite only on
@@ -321,6 +356,33 @@ has no permissions); it skips it and names it, and the bindings run it.
 `should: True` marks a case for the version check, which implementations
 SHOULD make (spec §13.3, "Package versions"). An implementation that doesn't
 make it skips these cases and says so; one that makes it must pass them.
+
+**Rules.** `packages/rules.haus` tests the package layer's compile
+([`../spec/packages.md`](../spec/packages.md) §3, §4, §6, §7): the built-in
+official packages, the manifest's `rules` field and `missing-codec`. Its
+cases have the format above (all `"core"`, `mode: Explicit`), with package
+manifests written as `File` entries, so that a case can hold a broken
+`rules` field, and a package's rule documents as files under its `rules/`.
+Two optional fields are the program's:
+
+- `shapeOnly`: the names of the packages the program takes shape-only
+  (`Package.shapeOnly`).
+- `withRule`: the type ids (`@acme/codes@1#Code`) whose package rule the
+  program implements (`Package.withRule`). The runner supplies a rule that
+  accepts every value: the cases only check that the rule is there.
+
+A runner needs one hook: read the packages the case gives (by directory and
+in folders) as its binding reads them, then compile `root` with them, its
+binding's built-in official packages, and the case's `shapeOnly` and
+`withRule`, and compare the result with `expect` as above. An `Ok` lists the
+built-in packages the schema reaches too, with the version the binding ships
+(`@haus-fmt/money@1.0.1`): those cases change with an official package's
+release. Every binding runs the file, as it runs the core cases of
+`cases.haus`; a binding whose compile has no built-in official packages yet
+skips the cases named `official-…` and says so.
+
+The Lean reference (`haus-ref --packages ../../test-suite/packages/rules.haus`)
+runs both files with the same compile (`Haus.Packages.compile`).
 
 ## Error codes
 

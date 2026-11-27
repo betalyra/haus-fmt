@@ -1,6 +1,6 @@
 {
   "name": "@haus-fmt/geo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "haus schema package: points and boxes on the earth",
   "keywords": [
     "haus",

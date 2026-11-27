@@ -33,7 +33,7 @@ inductive Core (env : Env) : Ty → Value → Typed → Prop
   | floatTag {k tag x} : floatTag? tag = some x → Core env (.float k) (.variant tag []) (.float k x)
   | decimal (a : String) : Core env .decimal (.num a) (.decimal a)
   | any (v : Value) : Core env .any v (.any v)
-  /-- The type's own tag around a string the std/time profile accepts. -/
+  /-- The type's own tag around a string the std/time rule accepts. -/
   | time {k s} : Time.check k s.toList = true → Core env (.time k) (.variant k.name [.str s]) (.time k s)
   | array {t xs ys} : Items env t xs ys → Core env (.array t) (.arr xs) (.arr ys)
   | map {t fs ys} : Entries env t fs ys → Core env (.map t) (.record fs) (.map ys)

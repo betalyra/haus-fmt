@@ -3,8 +3,8 @@
 The syntax is defined in [`grammar.ebnf`](grammar.ebnf). This document defines
 what the syntax means and the rules every implementation must follow. The
 standard types are in [`prelude.schema.haus`](prelude.schema.haus) and [`std/`](std) (§13), and
-[`../test-suite`](../test-suite) holds the conformance tests. The package layer (where a
-build finds the packages a schema imports, profiles, how codecs are wired) is
+[`../test-suite`](../test-suite) holds the conformance tests. The package layer (how a
+build is given the packages a schema imports, a package's rules, how codecs are wired) is
 the companion document [`packages.md`](packages.md), with its own version (§10).
 
 "MUST", "SHOULD" and "MAY" are used as in RFC 2119.
@@ -212,7 +212,7 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 <!-- rule: limits.enforce.while-parsing -->
 <!-- rule: limits.enforce.configurable -->
 <!-- rule: limits.enforce.accept-within -->
-Implementations MUST enforce limits while parsing and MUST let users configure them. With the default limits, they MUST accept every input that stays within them:
+Implementations MUST enforce limits while parsing, and when a value is built in code (below), and MUST let users configure them for parsing and encoding (constructors apply the defaults). With the default limits, they MUST accept every input that stays within them:
 
 <!-- rule: limits.depth.default -->
 <!-- rule: limits.number.default -->
@@ -228,7 +228,7 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 | absolute exponent | 6144 |
 | characters in one string (its value, after escapes and a block string's indent are processed), record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
-| values written for one value built in code (writers, canonical form, hashing; below) | 64 Mi (67,108,864) |
+| size of one value built in code, counted as it is written out (when it is built; below) | 64 Mi (67,108,864) |
 
 <!-- rule: limits.characters.code-points -->
 <!-- rule: limits.number.whole-literal -->
@@ -251,25 +251,32 @@ To count before parsing, a reader finds the next top-level comma by scanning the
 
 <!-- rule: limits.depth.counting -->
 <!-- rule: limits.depth.values-in-code -->
-Nesting depth is counted on the text as written, since it is checked while parsing: each record, array and parenthesized payload `Tag( … )` is one level, and so is a record payload written without parentheses, `Tag { … }`. A value outside any of them, like `1`, is at depth 0. So `Some(1)`, `[1]` and `Some { a: 1 }` need depth 1, while `Some({ a: 1 })`, `Some([])` and `A(B(1))` need 2, although `Some({ a: 1 })` and `Some { a: 1 }` are the same value. Writers and checks of values built in code count a record payload as one level, the shorter spelling, which is also the one the canonical form uses (§12), and count an empty record, array or payload as a level as parsing does, so a value built in code and the same value parsed have the same depth.
+Nesting depth is counted on the text as written, since it is checked while parsing: each record, array and parenthesized payload `Tag( … )` is one level, and so is a record payload written without parentheses, `Tag { … }`. A value outside any of them, like `1`, is at depth 0. So `Some(1)`, `[1]` and `Some { a: 1 }` need depth 1, while `Some({ a: 1 })`, `Some([])` and `A(B(1))` need 2, although `Some({ a: 1 })` and `Some { a: 1 }` are the same value. Where the depth of a value built in code is checked (its constructors, §11; encoding and checking with a schema, §9.8, §15; the JSON readers, §16), a record payload counts as one level, the shorter spelling, which is also the one the canonical form uses (§12), and an empty record, array or payload counts as a level as in parsing, so a value built in code and the same value parsed have the same depth.
+
+<!-- rule: limits.enforce.when-built -->
+**Values built in code** meet the limits when they are built, as parsed values meet them when they are read: the constructors (§11) check the length of each string, key and tag, each number on its normalized literal (`number-too-long`, `exponent-too-large`), the depth, which each container records next to its size (one more than its deepest part, counted as above), and the size (below), with the default limits. Encoders with a schema check the same, with their own limits (§9.8, §15). So a value that exists is within the limits it was built with: writing it never fails (§11), and a reader with those limits reads the text back, a reader with the default limits for every value built by constructors. A part keeps the limits it was built with: a container built from a part parsed with larger limits counts the part's depth and size, and doesn't check its lengths again.
 
 <!-- rule: limits.nodes.default -->
 <!-- rule: limits.nodes.counting -->
-**Values written.** A value built in code can hold the same part in several places (a value whose arrays share an element, a DAG): it is small in memory, and written out it can be exponentially larger, since each place writes the part again. So writers of values (§11), the canonical form and hashing (§12) count the values they write for one value, each as often as it is written: the value itself and every element, field value and argument inside it, at any depth. So `T { a: 1 }` is 3 values (the variant, its record payload and `1`; keys are not values), and so are `T(1, 2)` and `[[1]]`. They stop at the limit with `too-many-nodes`. The limit applies to each top-level value on its own, also when a file or stream of them is written or hashed, and can be configured like the others. A parsed value has fewer values than its text has characters, so every value a stream reader accepts with the default limits (64 Mi characters) is within it.
+**Size.** A value built in code can hold the same part in several places (a value whose arrays share an element, a DAG): it is small in memory, and written out it can be exponentially larger, since each place writes the part again. So the *size* of a value counts the values it is written as: the value itself and every element, field value and argument inside it, at any depth, each as often as it is written. So `T { a: 1 }` has size 3 (the variant, its record payload and `1`; keys are not values), and so do `T(1, 2)` and `[[1]]`. The limit applies to each top-level value on its own.
+<!-- rule: limits.nodes.when-built -->
+The limit is checked when a value is built, never when it is used. Building a container in code whose size is over the limit fails with `too-many-nodes`, at the constructor that builds it (§11): with *x*<sub>0</sub> = [] and *x*<sub>*n*+1</sub> = [*x*<sub>*n*</sub>, *x*<sub>*n*</sub>], whose size more than doubles at each step, the first array over the limit is refused where it is built. A binding whose values can share parts records each container's size when the container is built, one plus its parts' sizes, so the check costs one addition per part; it MAY stop counting above the limit. A value that exists is within the limit, and the writers (§11), the canonical form, hashing, equality and order (§12) neither count nor check it, nor any other limit. A binding whose values can't share parts (each part owned by one value, as in Rust) needs no count: such a value is as large in memory as it is written out.
+<!-- rule: limits.nodes.parsed -->
+Parsing doesn't apply this limit: a parsed value shares no parts, its size is less than the number of characters of its text, and writing it is linear in that text. A container built in code from parsed parts counts their sizes like any other.
 <!-- rule: limits.nodes.schema-place -->
-Encoding and decoding with a schema (§15) count the same way where they write or walk a value built in code, and `too-many-nodes` raised there is at `$`, the value given, as for writers.
+Encoding with a schema (§15) builds a value from the program's objects, which can share parts, and counts its size the same way: `too-many-nodes` raised there is at `$`, the value given (`$[i]` for the i-th item of a stream encoded). Decoding takes a value that exists, and never raises it. Encoders take the limit as an option, like the other limits; constructors apply the default limits (above).
 
 <!-- rule: limits.depth.binding-maximum -->
 <!-- rule: limits.depth.reject-unsupported -->
 A binding whose parser, decoder or encoder uses the call stack MAY support only a bounded nesting depth, of at least the default (256). It MUST document that maximum, and MUST reject a larger configured depth when the limits are set, with an error that names the maximum, rather than overflow its stack on deep input.
 <!-- rule: limits.depth.canonical-any-depth -->
-`canonical`, `hash`, `hashAll`, `equals` and `compare` (§12) have no depth limit and no maximum: they MUST work for a value of any depth, bounded only by memory, without overflowing the stack or giving a wrong answer. They take values built in code, which no parser's depth limit bounds, so they can't use the call stack for nesting.
+`canonical`, `hash`, `hashAll`, `equals` and `compare` (§12) have no depth limit and no maximum: they MUST work for a value of any depth, bounded only by memory, without overflowing the stack or giving a wrong answer, so they don't use the call stack for nesting.
 <!-- rule: limits.depth.stack-documented -->
 It SHOULD also document the stack it needs at that maximum, so that an application that runs it on a thread with a smaller stack than the main one can give that thread enough.
 <!-- rule: limits.depth.small-stack-tested -->
 A binding SHOULD test every path that recurses per level (parsing, the writers, decoding and encoding with a schema, the JSON readers, whose self-describing form nests up to 4·*d*+2 levels for depth *d*, §16.2) at its maximum supported depth on a thread with a small stack, 512 KiB, where its platform has threads (a secondary thread's default on macOS), and lower its maximum to what fits if that fails. A binding on a platform whose stacks grow (Go's goroutines) needs no such test. This holds for optimised (release) builds, the ones applications run: a debug build uses several times the stack per level, and need not reach the maximum on a small stack. Where a library can't set the size of the stack it runs on (JavaScript engines), the small stack this asks for is the runtime's default one.
 <!-- rule: limits.depth.host-hooks -->
-The host language's own hooks on a value built in code, of any depth, SHOULD NOT overflow the stack either: freeing it (a destructor, reference counting), printing it for debugging (`Debug`, `toString`, `description`, `repr`) and the language's hash and equality hooks. A binding whose language does these recursively by default gives its value types non-recursive ones, or bounds them: debug output MAY be cut off at some depth, and a hash hook MAY look only at the first levels, as long as equal values hash alike. A binding SHOULD NOT cap how deep a value can be built in code, with these hooks as the reason: the writers, the checks and the codecs that take such a value check its depth where they use the call stack (above), and `canonical`, `hash` and `equals` take any depth.
+The host language's own hooks on a value, at the deepest depth the binding supports, SHOULD NOT overflow the stack either: freeing it (a destructor, reference counting), printing it for debugging (`Debug`, `toString`, `description`, `repr`) and the language's hash and equality hooks. A binding whose language does these recursively by default tests them at that depth, as the paths above, or gives its value types non-recursive ones, or bounds them: debug output MAY be cut off at some depth, and a hash hook MAY look only at the first levels, as long as equal values hash alike. A value built in code is no deeper than the default depth limit (above); a parsed value is no deeper than its parser's limit, which is at most the binding's supported depth.
 
 <!-- rule: limits.portability.defaults -->
 **Portability.** A document within the default limits is read the same by every conforming implementation. One that needs higher limits is portable only to readers that are configured, and able, to accept it: a reader may be set to lower limits, and a binding's supported depth (above) may be lower than the depth a document needs.
@@ -303,7 +310,7 @@ An error inside a string is at the character that is wrong, in a block string to
 - In a stream reader, `value-too-long` is at the start of the value's text (the character after the previous top-level comma, or the start of the stream), and `stream-truncated` at the end of the stream.
 - An error in JSON text (§16) is at `$`, with the line and column of its place in the text, found as in haus text: a duplicate member name at the second name, a number at its first character, an unterminated string at its opening quote, an escape at its backslash, a syntax error at the token found or at the end of the text.
 - A schema file's errors (§14, §13.3) are at what they are about: a name, parameter, field, tag or attribute (a second one at the second), a definition as a whole at its `type`, a module at its `import`. These places are informative for now, and so is the catalogue's column for them: they come from one checker, and become normative once the fuzzer has compared them across bindings. Warnings about schema files (§14) are not affected: the conformance suite pins their places.
-- The errors of the package layer ([`packages.md`](packages.md): where an import's package is found, its manifest's fields beyond `name` and `version`, a `package.json`, a package's version) are informative too, as long as that document is a draft (§10).
+- The errors of the package layer ([`packages.md`](packages.md): the packages given to a build, a manifest's fields beyond `name` and `version`, a package's version, rules and codecs) are informative too, as long as that document is a draft (§10).
 
 <!-- rule: positions.error.invalid-utf8 -->
 **Invalid UTF-8** has an informative place: bytes that aren't UTF-8 are no character to point at. An implementation SHOULD give the line and column of the first byte of the maximal ill-formed subsequence (Unicode §3.9), counting the characters before it as for any other place, and of an unpaired surrogate in a host string, the surrogate (§4); it MAY give none. The conformance suites and the fuzzer compare its code only.
@@ -321,7 +328,7 @@ When an input has several mistakes, which is reported is not fixed (§17), excep
    <!-- rule: security.errors.quoted-text-escaped -->
    <!-- rule: security.errors.version-quoted-if-valid -->
    <!-- rule: security.packages.declared-places -->
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that an error message quotes from its input (a token, a key, a tag, a name, a version) is escaped (control and bidirectional characters, and U+2028 and U+2029) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40. This holds for every message: of the data parser, the schema reader and checker, the decoders, the JSON readers and package resolution alike, whatever the input (data, a schema file, a manifest, a `package.json`). A version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used ([`packages.md`](packages.md) §2). Relative imports stay inside the build's root directory and follow no symbolic links (§13.3), every file read is a regular file checked on its open handle, and messages about files SHOULD show paths relative to the root, never absolute ones.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from the packages the application gives the build, never while parsing. A package is data: implementations read only its `package.haus` and `schema.haus`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that an error message quotes from its input (a token, a key, a tag, a name, a version) is escaped (control and bidirectional characters, and U+2028 and U+2029) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40; bytes that aren't UTF-8 (a tag built in code, in a binding whose strings are bytes, §11) are shown as U+FFFD, never raw. This holds for every message: of the data parser, the schema reader and checker, the decoders, the JSON readers and package resolution alike, whatever the input (data, a schema file, a manifest). A version quoted from a file is quoted only if it is a valid version. A build is never searched for packages: it uses only those given to it (the official packages built into a binding, packages given as values in code, and directories given explicitly), never ones found in a project, in global locations or over the network, so a package planted in a shared folder is never used ([`packages.md`](packages.md)). Relative imports stay inside the build's root directory and follow no symbolic links (§13.3), every file read is a regular file checked on its open handle, and messages about files SHOULD show paths relative to the root, never absolute ones.
    <!-- rule: security.limits.while-parsing -->
 3. **Enforce limits while parsing** (§7), not afterwards.
    <!-- rule: security.keys.data-only -->
@@ -378,7 +385,7 @@ This specification is versioned. Versions 0.x are drafts, in which anything may 
 **No version header.** A file doesn't say which version it is written in: every version reads every earlier version's text the same way. Files whose first character (after a byte order mark) is `#` are reserved for a version directive, such as `#haus 2`, should a version that breaks compatibility ever become unavoidable. Such a version would require the directive in every file, and a file without one would always be read by the rules of 1.x. Parsers SHOULD report a file starting with `#haus` (whatever follows it: `#haus 2`, `#haus2`, `#hausfoo`) as needing a newer version of haus (`version-directive`), rather than as an ordinary syntax error; a file starting with any other `#` is an ordinary syntax error (`expected-value`).
 
 <!-- rule: versions.scope.core -->
-**What 1.0 freezes.** The rules above apply to this document from 1.0 on: the data syntax, the layouts, the canonical form and the hash, the error codes, the prelude, `std/time`, the schema language with relative imports, the import syntax and type ids. The package layer (where a build finds packages, by the rules of npm and Cargo; a manifest's fields beyond `name` and `version`; profiles; how codecs are wired to types and what is reported without one) is the companion document [`packages.md`](packages.md). It has its own version, 0.x while it is a draft, and may still change after this document's 1.0.
+**What 1.0 freezes.** The rules above apply to this document from 1.0 on: the data syntax, the layouts, the canonical form and the hash, the error codes, the prelude, `std/time`, the schema language with relative imports, the import syntax and type ids. The package layer (how a build is given packages; a manifest's fields beyond `name` and `version`; a package's rules; how codecs are wired to types and what is reported without one) is the companion document [`packages.md`](packages.md). It has its own version, 0.x while it is a draft, and may still change after this document's 1.0.
 
 <!-- rule: versions.conformance.statement -->
 **Conformance.** An implementation states the version it implements ("haus 1.1"), and, if it finds packages, the version of the package layer too: "haus 1.0, packages 0.3". The conformance suite (`../test-suite`) is tagged for each version; its package cases are kept apart (test-suite/README.md, "Package suite"). Media types MAY carry the version as a parameter: `application/vnd.haus; version=1.1`.
@@ -408,6 +415,10 @@ codes of §17 name mistakes in documents, so none applies), and MUST NOT read 0
 as "use the default": an API that needs a way to leave an option unset uses a
 separate value for it (an absent option, not 0). Compact and minimised don't use
 them; an API may accept them there and ignore them.
+<!-- rule: format.options.checked-when-made -->
+A writer of values (below, "Values built in code") checks its options when they
+are made, not when it writes: whatever makes the options rejects a negative
+indent or width, so that writing a value can't fail on them.
 
 <!-- rule: format.pretty.keeps-comments -->
 <!-- rule: format.compact.drops-comments -->
@@ -426,9 +437,9 @@ The canonical form (§12) is the fourth way to write values; it sorts keys and n
 
 <!-- rule: format.stream.option -->
 <!-- rule: format.stream.single-item -->
-**Streams.** Without being told, a formatter writes a file with one top-level item as a single document, without a comma after it, and a file with more than one as a stream, with a comma after every item (below). Counting items can't tell a stream from a document: a log that grows by appending starts with one item, and the comma after it is what lets the next one be appended (§6). So formatters MUST take an option that says the file is a stream (`haus fmt --stream`, say), off by default. With it, every top-level item is followed by a comma, a single item too, in pretty, compact and minimised; nothing else changes, and a file with no items is written as without it (above). A tool that formats a file with a schema (§14, "Which schema describes a file") whose type for the file is a `Stream` sets the option.
+**Streams.** Without being told, a formatter writes a file with one top-level item as a single document, without a comma after it, and a file with more than one as a stream, with a comma after every item (below). Counting items can't tell a stream from a document: a log that grows by appending starts with one item, and the comma after it is what lets the next one be appended (§6). So formatters MUST take an option that says the file is a stream (`haus fmt --stream`, say), off by default. With it, every top-level item is followed by a comma, a single item too, in pretty, compact and minimised; nothing else changes, and a file with no items, one of only comments too, is written as without it (above). A tool that formats a file with a schema (§14, "Which schema describes a file") whose type for the file is a `Stream` sets the option.
 <!-- rule: format.stream.writers -->
-The writers of values that write a list of values as a file or stream (`stringifyAll`, `writeAll`) take the same option, off by default, and write as a formatter does: with it, a comma after every value, a single one too. Without it, nothing changes.
+The writers of values that write a list of values as a file or stream (`stringifyAll`, `writeAll`) take the same option, off by default, and write as a formatter does: with it, a comma after every value, a single one too. Without it, nothing changes. A writer of one value (`stringify`) doesn't take the option: one value is never a file.
 
 <!-- rule: format.strings.escaped-alike -->
 Strings are escaped alike in every layout: `\"`, `\\`, line feed, carriage return and tab as `\n`, `\r` and `\t` (in `"…"` strings; pretty's block strings below), and `\u{…}` for the other raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw. A string written from its value spells `\u{…}` as the canonical form does (§12): uppercase hex digits, no leading zeros (`\u{1B}`).
@@ -453,7 +464,7 @@ For people.
   <!-- rule: format.pretty.width.code-points -->
   <!-- rule: format.pretty.width.whole-line -->
   <!-- rule: format.pretty.container-payload-never-fits -->
-- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry (a single top-level item has none, unless the file is formatted as a stream, above, so nothing is added for it), so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
+- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry (a single top-level item has none, so nothing is added for it, unless the file is formatted as a stream, above), so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
   <!-- rule: format.pretty.spacing -->
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
   <!-- rule: format.keys.minimal -->
@@ -476,8 +487,8 @@ For people.
   <!-- rule: format.strings.source-spelling -->
   <!-- rule: format.strings.form-change -->
   <!-- rule: format.numbers.serialized -->
-  <!-- rule: format.numbers.too-long-unwritable -->
-- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal, and only within the writer's number limits (§7, the defaults unless configured otherwise), so that a parser with the same limits reads them back: a normalized literal longer than the number limit, an integer, a decimal or one with an exponent (an integer of 1001 digits, `1.000…` with 1000 zeros), can't be written (`number-too-long`), nor one whose exponent is larger than the exponent limit (`1e9999`, `exponent-too-large`); see "Values built in code" below.
+  <!-- rule: format.numbers.limits-when-built -->
+- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal, as in the canonical form (§12). A number built in code is within the number limits on that form, checked when it is built: an integer of 1001 digits, `1.000…` with 1000 zeros or `1e9999` can't be built (`number-too-long`, `exponent-too-large`), so a reader with the default limits reads every number written back; see "Values built in code" below.
   <!-- rule: format.pretty.stream.commas -->
   <!-- rule: format.pretty.stream.blank-after-multiline -->
   <!-- rule: format.pretty.stream.trailing-comments -->
@@ -565,27 +576,35 @@ Person{name:"Jane Smith",age:28,type:Designer},
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
 <!-- rule: format.values.built-in-code -->
-**Values built in code.** A value built in code, not parsed, must be a haus value (§1). The rule is stated by what can be observed: building a value and then writing it, or taking its canonical form or hash (§12), fails for a value that isn't one with the code of its mistake (below), whether the binding checks when the value is built or when it is used; a valid value never fails there, except on a limit (§7).
+**Values built in code.** A binding's value type holds haus values (§1) and nothing else. Building a value is the one step that can fail: parsing, reading JSON (§16), encoding with a schema (§15), and the constructors a binding offers for values built in code. Once a value exists, writing it in any layout or as self-describing JSON (§16.2), its canonical form, hash, equality and order (§12) are total: they give a result for every value, and have no errors but the safety net below.
 <!-- rule: format.values.check-when-built -->
 <!-- rule: format.values.place-informative -->
-Bindings SHOULD check when the value is built, so that the mistake is reported where it is made: their constructors then build only haus values. Where these errors are reported, by the constructor or by the writer, and the place they name, is informative. Checking that a value is valid is never checking a limit: limits belong to the writer, and two writers may be configured with different ones.
+Constructors check what they are given, when the value is built, so that a mistake is reported where it is made, with the code of the mistake, and apply the default limits of §7. Where a constructor reports it, and the place it names, is informative:
 
 - a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`. The tag rule is checked first, so a tag that also has no UTF-8 form is one of them: a tag with an unpaired surrogate (`\uD800` in a JavaScript string), or, in a binding whose strings are bytes, one that isn't valid UTF-8, is `invalid-tag`, not `cannot-encode`;
-- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number longer than the number limit is still a number: the writer rejects it (above);
+- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number beyond the number limits is a number too, and is refused for its length (below);
 - a record with a key twice: `duplicate-key`;
   <!-- rule: format.values.bytes-strings-utf8 -->
-- a string or key with an unpaired surrogate, which has no UTF-8 form (§4), or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
+- a string or key with an unpaired surrogate, which has no UTF-8 form (§4), or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`;
+  <!-- rule: format.values.limits-when-built -->
+- anything beyond the default limits of §7, with the limit's code: a string or byte string longer than the string limit, `string-too-long`; a key, `key-too-long`; a tag, `tag-too-long`; a number beyond the number limits, `number-too-long` or `exponent-too-large`; a container nested deeper than the depth limit, counted as §7 counts values built in code, `nesting-too-deep`;
+  <!-- rule: format.values.node-limit -->
+- a container whose size, counted as §7 counts it, is over the node limit: `too-many-nodes`.
 
-Values checked when they are built can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons.
-
-<!-- rule: format.values.writer-limits -->
-<!-- rule: format.values.node-limit -->
-A writer checks every limit of §7 that a value can break, whoever built the value: the nesting depth (counted as for values built in code), the length of each string, key and tag, the number and exponent limits (above), and the node limit, which ends a value whose parts share each other and would expand without bound when written. It fails with the limit's code: `nesting-too-deep`, `string-too-long`, `key-too-long`, `tag-too-long`, `number-too-long`, `exponent-too-large`, `too-many-nodes`.
 <!-- rule: format.values.number-limits-written -->
-The number and exponent limits are measured on the literal as it would be written, the normalized form (§2), not on the text the number was built from; a number that breaks both may fail with either code.
+The number limits are measured on the literal as it is written, the normalized form (§2), not on the text the number was built from: 600 digits written with a `_` between each two are more than 1000 characters and a number within the limit, while `0x` followed by 840 `f`s is `number-too-long`, its decimal form having more than 1000 digits. A number that breaks both limits, and any value with several mistakes, may fail with any of their codes (§17).
+
+Parsing and the JSON readers build values that are valid and within their limits as they read them, and need not check them again; encoding with a schema (§15) checks the value it builds as the constructors do, with the encoder's limits.
+
+<!-- rule: format.values.writers-total -->
+**Writers apply no limits.** A value that exists is within the limits it was built with (§7), so a writer of values writes it whole and can't fail: a reader with the same limits reads the text back, a reader with the default limits for every value built by constructors. A value parsed with larger limits is written as it is, and only readers with such limits read it (§7, "Portability"). Writers work within the binding's supported depth, as its parser does (§7): no value that exists is deeper.
 <!-- rule: format.values.stream-place -->
-An error in the i-th value of a stream written (a writer of several values, such as a file or JSON Lines, §16) is at `$[i]`, counted from 0, also when the stream has one value (`$[0]`); an error writing one value is at `$`.
-The canonical form and hashing apply only the node limit (§12), at any depth (§7): every other value has a canonical form. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
+An error writing the i-th value of a stream (a writer of several values, such as a file or JSON Lines, §16) is at `$[i]`, counted from 0, also when the stream has one value (`$[0]`); an error writing one value is at `$`. The safety net below is the only such error.
+
+<!-- rule: format.values.immutable -->
+**Values don't change.** A value is never changed after it is built. A binding makes its value type immutable where its language can enforce that, and otherwise documents its values as read-only: changing a value after it is built, or making one without the constructors (a cast, a reflective write), is a programming error.
+<!-- rule: format.values.changed-after-built -->
+Where the language can't keep code from changing a value (an array or list inside it changed in place), a changed value MUST NOT make a writer, the canonical form, hashing, equality or order hang, overflow the stack or break memory safety. They count the values they visit, and stop with `value-changed` when a container contains itself or has another size than the one recorded when it was built (§7; a size counted only up to the limit is compared up to it); the message says that the value was changed after it was built. A value used as it was built never gives this error. A binding needn't check a changed value further: it MAY check it again with the constructors' codes, and what it writes for a change that keeps the size is otherwise undefined.
 
 <!-- rule: format.comments.refuse-pretty -->
 <!-- rule: format.comments.refuse-in-place -->
@@ -606,13 +625,13 @@ Bindings SHOULD provide `canonical(value)`, `equals(a, b)`,
 exactly, so that every binding gives the same bytes and the same hash.
 
 <!-- rule: canonical.api.values-only -->
-They are defined for haus values only (§11, "Values built in code"). For what isn't one (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate, or that isn't UTF-8) building it and then taking its canonical form or hash gives the constructor's error code, `invalid-number`, `invalid-tag`, `duplicate-key` or `cannot-encode`, whether the binding rejects it when it is built (as it SHOULD) or here. For a haus value they never fail except on a limit (below), and a number built from another spelling (`Number("1E+05")`) is the normalized number.
-<!-- rule: canonical.api.node-limit -->
-They have one limit, the node limit (§7): `canonical`, `hash` and `hashAll` fail with `too-many-nodes` for a value whose parts share each other so much that its canonical form would hold more values than the limit, and so do `equals` and `compare` where they compare canonical forms. A binding whose values can't share their parts (each part owned by one value, as in Rust) can't reach this limit, and need not check it there.
+They take values of the binding's value type, which holds haus values only (§11, "Values built in code"). What isn't one (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate, or that isn't UTF-8) is rejected when it is built, with the constructor's code (`invalid-number`, `invalid-tag`, `duplicate-key`, `cannot-encode`), and never reaches them. A number built from another spelling (`Number("1E+05")`) is the normalized number.
+<!-- rule: canonical.api.total -->
+They are total: they give a result for every value, and have no errors but the safety net of §11 (`value-changed`, for a value changed after it was built). Where the platform computes SHA-256 only asynchronously (Web Crypto in JavaScript), `hash` and `hashAll` give their result asynchronously, and it never fails. A language that reports running out of memory as an error of the call (Zig) reports it from them as from any other function.
 <!-- rule: canonical.api.any-depth -->
-They work at any depth (§7): no depth limit or maximum applies to them. No other limit applies to them either: a value longer than a writer's limits, or deeper than its depth limit, still has a canonical form.
+They apply no limit. They work at any depth (§7): no depth limit or maximum applies to them, and a value longer than a reader's limits, or deeper than its depth limit, still has a canonical form. The node limit is met when a value is built (§7), so they don't count values either.
 <!-- rule: canonical.api.error-place -->
-These errors are at `$`, the value given; for `equals` and `compare`, `too-many-nodes` is at `$` too, and the message (informative) says which operand. An error in the i-th value given to `hashAll` is at `$[i]`, also when there is one value (`$[0]`). A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
+`value-changed` is at `$`, the value given; for `equals` and `compare` at `$` too, and the message (informative) says which operand; for the i-th value given to `hashAll` at `$[i]`, also when there is one value (`$[0]`).
 
 <!-- rule: canonical.form.text -->
 The canonical form of a value is UTF-8 without a byte order mark, with no
@@ -648,9 +667,11 @@ Order{id:255,p:Point(1,2),total:19.90,"x-y":1e5}
 The canonical form parses back to the same value.
 
 <!-- rule: canonical.api.equals -->
-- **Equality:** `equals(a, b)` is equality as in §2. Comparing canonical forms is one correct way to compute it.
+- **Equality:** `equals(a, b)` is equality as in §2, defined by the canonical form: `a` and `b` are equal exactly when their canonical forms are identical.
   <!-- rule: canonical.api.compare -->
 - **Order:** `compare(a, b)` orders values by the bytes of their canonical forms (UTF-8), shorter first when one is a prefix of the other. It is a total order consistent with equality, for sorting and for values as keys of ordered maps; it is not numeric order (`10` sorts before `9`).
+  <!-- rule: canonical.api.trees-agree -->
+- **Computing them.** Comparing canonical forms is one correct way to compute `equals` and `compare`. A binding MAY compute them on the two values instead (walking both, skipping pairs of parts it has already found equal, descending into the first pair that differs), and MUST then give the same answer as the canonical forms; the conformance suite (`equality/`) and the fuzzer compare the two.
   <!-- rule: canonical.hash.sha256 -->
 - **Hashing:** `hash(value)` is the SHA-256 digest of the canonical form, written as 64 lowercase hex digits.
   <!-- rule: canonical.hash-all.joined -->
@@ -679,8 +700,8 @@ Types come from three tiers:
 | Tier | Contents | Rules about values | Bindings |
 |---|---|---|---|
 | **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Stream a` (only as the whole type of a definition, §14), `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
-| **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time profile](std/time.md) | MUST support |
-| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`; packages of any other organisation | none in the schema; profiles, which codecs implement ([`packages.md`](packages.md) §6) | MAY offer codecs |
+| **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time rule](std/time.md) | MUST support |
+| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`; packages of any other organisation | none in the schema; package rules, which schema bindings check ([`packages.md`](packages.md) §6) | MAY offer codecs |
 
 The official extensions are schema packages like any other, under the scope `@haus-fmt/`, which is reserved for them (§13.3).
 
@@ -698,20 +719,20 @@ A domain goes in a module even when it is built in: the prelude reserves its nam
 
 ### 13.1 Rules about values
 
-**The schema language has no syntax for rules about values.** A schema describes structure (§9.10). The only rules about values are those of built-in types: the range of `UInt8`, the digits of a `Decimal`, the std/time profile. They are fixed by this specification, run in linear time, and mean the same in every implementation.
+**The schema language has no syntax for rules about values.** A schema describes structure (§9.10). The only rules about values are those of built-in types: the range of `UInt8`, the digits of a `Decimal`, the std/time rule. They are fixed by this specification, run in linear time, and mean the same in every implementation.
 
 <!-- rule: prelude.rules.line -->
-**The line.** A rule about values, at every tier (the prelude, a standard module, a package's profile, [`packages.md`](packages.md) §6), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, which follows the four rules below), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
+**The line.** A rule about values, at every tier (the prelude, a standard module, a package's rule, [`packages.md`](packages.md) §6), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, which meets the four requirements below), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
 
 <!-- rule: prelude.rules.admission -->
-**What a rule about values is.** Every rule about values that haus has, at every tier (the prelude, a standard module, a package's profile), follows four rules:
+**What a rule about values is.** Every rule about values that haus has, at every tier (the prelude, a standard module, a package's rule), meets four requirements:
 
 1. **It defines the type.** Without it, the text is no value of the type: no such date (`2026-02-30`), no such `Int8` (`300`), no such point on earth (a latitude of 91). It rests on the published definition of the thing, not on a host type (those differ between languages), and not on a subset someone prefers (UUIDs of version 7 only).
 2. **It needs only the one value.** No other field, clock, database, locale or registry lookup. Relations inside the one value count: a `BBox`'s south edge is not north of its north edge.
 3. **It is specified exactly.** A rule in prose defines it, and test vectors test it; it runs in linear time and gives the same result in every binding.
-4. **One spelling per value where possible.** A rule never changes equality, the canonical form or the hash (below), so two spellings of one value that it accepts stay two haus values. Its grammar leaves one spelling per value, with the exceptions it lists, as the std/time profile does.
+4. **One spelling per value where possible.** A rule never changes equality, the canonical form or the hash (below), so two spellings of one value that it accepts stay two haus values. Its grammar leaves one spelling per value, with the exceptions it lists, as the std/time rule does.
 
-A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a profile of a package ([`packages.md`](packages.md) §6), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's. Which tier a type's rule belongs to is §13.2's question.
+A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a package's rule ([`packages.md`](packages.md) §6), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's. Which tier a type's rule belongs to is §13.2's question.
 
 There are two conformance classes:
 
@@ -730,11 +751,11 @@ Rules about values never change haus equality (§2), the canonical form or the h
 <!-- rule: prelude.std.import-no-version -->
 Standard modules ship with this specification and are versioned with it. A module only gains types; its rules never change (§10), so imports of standard modules carry no version.
 
-<!-- rule: prelude.std.time-profile -->
-- [`std/time`](std/time.schema.haus): `Date`, `Time`, `DateTime`, `Instant`, `ZonedDateTime`, `Duration`, `YearMonth`, `TimeZone`, the model of JavaScript's Temporal and java.time. Values are a tag around a string; the strings a schema binding accepts are defined by the [std/time profile](std/time.md), a strict subset of RFC 3339, RFC 9557 and ISO 8601. Nothing in it depends on a registry: zone names are checked for their syntax, never looked up.
+<!-- rule: prelude.std.time-rule -->
+- [`std/time`](std/time.schema.haus): `Date`, `Time`, `DateTime`, `Instant`, `ZonedDateTime`, `Duration`, `YearMonth`, `TimeZone`, the model of JavaScript's Temporal and java.time. Values are a tag around a string; the strings a schema binding accepts are defined by the [std/time rule](std/time.md), a strict subset of RFC 3339, RFC 9557 and ISO 8601. Nothing in it depends on a registry: zone names are checked for their syntax, never looked up.
 
 <!-- rule: prelude.std.admission -->
-**When a type goes into a standard module.** Its rule follows the four rules of §13.1 with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding, always, and never changes (§10), while a package's rule is defined by the package and the package layer ([`packages.md`](packages.md)), can be left out by an application, and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with each definition a profile (`iso` is one), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
+**When a type goes into a standard module.** The type's rule meets the four requirements of §13.1 with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding, always, and never changes (§10), while a package's rule is defined by the package and the package layer ([`packages.md`](packages.md)), can be left out by an application, and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with a definition as its rule (`iso`), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
 
 When in doubt, a type is a package. Data never names where a type comes from, so data stays valid when a package's type later moves into a standard module, and a schema changes an import line. Code is not as free: a type's id names its package or module (`@haus-fmt/money@1#Money`, `std/time#Instant`, §13.3), and bindings select codecs and generate code by id (§13.4), so moving a type breaks the codec registrations and generated code of applications that use it. Nothing can leave a standard module after 1.0.
 
@@ -759,16 +780,16 @@ A **schema package** is a directory with two files: a manifest, `package.haus`, 
   <!-- rule: packages.schema.imports-packages-only -->
 - `schema.haus` is an ordinary schema file: shape only, like every schema. It imports standard modules and other packages, never files. Packages change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
   <!-- rule: packages.layout.other-files-unread -->
-- The directory may hold other files, such as profiles ([`packages.md`](packages.md) §6) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them.
+- The directory may hold other files, such as the prose of its rules ([`packages.md`](packages.md) §4, §6) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them (the package layer may check the version they give, [`packages.md`](packages.md) §4).
 
-Which package an import reaches, and from where (packages given to the build explicitly, or the build's dependencies by the rules of npm and Cargo, never global locations or the network), is the package layer: [`packages.md`](packages.md) §2–§4. This section says what holds for every package, however it was found.
+Which package an import reaches, and from where (the official packages built in, packages given as values or read from directories given explicitly, never searched for, never global locations or the network), is the package layer: [`packages.md`](packages.md) §2–§4. This section says what holds for every package, however it was found.
 
 <!-- rule: packages.relative.extension-added -->
 <!-- rule: packages.relative.leading-dotdot -->
 <!-- rule: packages.relative.exact-spelling -->
 <!-- rule: packages.relative.no-links -->
 <!-- rule: packages.resolution.at-build -->
-**Resolution.** Relative imports read a file of the importing file's directory, of a directory below it, or of one above it inside the root (below): `import ./common` is `common.schema.haus` (the extension is always added). A path goes up first, then down: `..` names appear only at its start (`../../shared/money`), and every other name starts with a letter, digit, `_` or `-` (grammar.ebnf, `path`), so a path has no `.` name, no `..` after a name, no empty name (`a//b`) and no `/` at its end, and `./` or `../` alone is no path; any of them is `schema-syntax`. The `..` names go up from the importing file's real directory (the directory of its real path, which has no links), and the other names go down from there, one at a time: each name of the path, every directory name and the file name, MUST be an entry its directory lists with that exact spelling, also on file systems that ignore case or Unicode normalization, and MUST NOT be a symbolic link, which is checked without following it (as `lstat` does). A link anywhere in the path is `import-not-found`: the message says that the name is a link, not where it points, and nothing behind the link is ever looked at. So a relative import reaches its file only by the names it spells: the file's path is the importer's real directory with those names, the same on the text as on the file system, and its last name ends in `.schema.haus`. Packages are found when a schema is built, never while data is parsed. The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
+**Resolution.** Relative imports read a file of the importing file's directory, of a directory below it, or of one above it inside the root (below): `import ./common` is `common.schema.haus` (the extension is always added). A path goes up first, then down: `..` names appear only at its start (`../../shared/money`), and every other name starts with a letter, digit, `_` or `-` (grammar.ebnf, `path`), so a path has no `.` name, no `..` after a name, no empty name (`a//b`) and no `/` at its end, and `./` or `../` alone is no path; any of them is `schema-syntax`. The `..` names go up from the importing file's real directory (the directory of its real path, which has no links), and the other names go down from there, one at a time: each name of the path, every directory name and the file name, MUST be an entry its directory lists with that exact spelling, also on file systems that ignore case or Unicode normalization, and MUST NOT be a symbolic link, which is checked without following it (as `lstat` does). A link anywhere in the path is `import-not-found`: the message says that the name is a link, not where it points, and nothing behind the link is ever looked at. So a relative import reaches its file only by the names it spells: the file's path is the importer's real directory with those names, the same on the text as on the file system, and its last name ends in `.schema.haus`. Packages are found when a schema is built, never while data is parsed. A schema pins no exact version or content hash: the build uses the package it is given ([`packages.md`](packages.md) §2).
 
 <!-- rule: packages.relative.check-order -->
 The checks of a relative import are made in one order, and the first that fails gives the error: its syntax (grammar `path`, `schema-syntax`); `..` names that go above the root (`import-outside-root`, "The root" below); the walk down its names (each listed with that spelling, none a link: `import-not-found`); a target in a package's directory (`package-path`, "Imports" below); then opening the file ("Files read" below: a regular file, else `import-not-found`; within its limit, else `file-too-large`).
@@ -783,18 +804,18 @@ Messages about files SHOULD show their paths relative to the root (`../vendor/x`
 
 <!-- rule: packages.files.exact-names -->
 <!-- rule: packages.files.unlistable -->
-**Spelling.** The names a build looks up itself are spelled exactly too: `package.haus`, `schema.haus`, `package.json`, `node_modules` and a package's `@org/name` directories match only an entry their directory lists with that spelling, so that a directory is a package, or has a package, on every file system alike (`Package.haus` makes no package, `node_modules/@Acme/Common` is not `@acme/common`). A directory that can't be listed can't show how a name is spelled: the name is not found there (an error, never a pass).
+**Spelling.** The names a build looks up itself are spelled exactly too: `package.haus` and `schema.haus` match only an entry their directory lists with that spelling, so that a directory given to the build is a package, or isn't, on every file system alike (`Package.haus` makes no package). A directory that can't be listed can't show how a name is spelled: the name is not found there (an error, never a pass).
 
 <!-- rule: packages.files.regular-only -->
 <!-- rule: packages.files.open-checked -->
-**Files read.** Every file a build reads (the entry file, the files of relative imports, a package's `package.haus`, `schema.haus` and `package.json`, a project's `package.json`) MUST be a regular file. A build opens each by its real path or in a real directory, without following a link at its last name and without blocking (a FIFO or a device must not hang the build), checks on the opened file that it is a regular file, and reads from that file, so that the file checked is the file read. A file of a relative import or the entry file that isn't a regular file is `import-not-found`; one of a package's files is `package-path` (below); a project's `package.json` that isn't one declares nothing ([`packages.md`](packages.md) §3, npm).
+**Files read.** Every file a build reads (the entry file, the files of relative imports, and the `package.haus` and `schema.haus` of a package read from a directory) MUST be a regular file. A build opens each by its real path or in a real directory, without following a link at its last name and without blocking (a FIFO or a device must not hang the build), checks on the opened file that it is a regular file, and reads from that file, so that the file checked is the file read. A file of a relative import or the entry file that isn't a regular file is `import-not-found`; one of a package's files is `package-path` (below).
 
 > **Implementation note.** The pattern, on Unix: `lstat` the path (the type and the device and inode expected), `open` it with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` (and `O_NOCTTY`), `fstat` the handle, and require a regular file with the same device and inode; then read at most the limit plus one byte from the handle. On Windows: `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT` (so a link is opened, not followed), then `GetFileType` (`FILE_TYPE_DISK`) and `GetFileInformationByHandle` (not a reparse point, not a directory; the same volume serial and file index as the path's). Where the platform's API gives only the file index, without the volume serial, comparing the index alone is acceptable, and the binding documents it. A platform that can't open without blocking or can't ask an open handle for its type (the JVM's standard library) checks the path's type without following links just before it opens, and documents the race that is left: a file swapped for a FIFO between the check and the open can block the build.
 
 <!-- rule: packages.files.regular-not-links -->
 <!-- rule: packages.files.no-follow -->
 <!-- rule: packages.files.read-once -->
-**Files and limits.** A package's `package.haus`, `schema.haus` and `package.json` MUST be regular files, not symbolic links (the package's directory may be one). Implementations open them without following links, check the type and the size on the opened file, and read from it, so that the file checked is the file read ("Files read", above). Each file is read at most once for a schema, by its real path, also when one file is needed in two roles (an entry file that is also a project's `package.json`): every use sees the same bytes. These limits MUST be enforced by default and MAY be raised by the user:
+**Files and limits.** A package's `package.haus` and `schema.haus` MUST be regular files, not symbolic links (the package's directory may be one). Implementations open them without following links, check the type and the size on the opened file, and read from it, so that the file checked is the file read ("Files read", above). Each file is read at most once for a schema, by its real path: every use sees the same bytes. These limits MUST be enforced by default and MAY be raised by the user:
 
 <!-- rule: packages.limits.manifest -->
 <!-- rule: packages.limits.file-size -->
@@ -803,16 +824,16 @@ Messages about files SHOULD show their paths relative to the root (`../vendor/x`
 | Limit | Default | Error |
 |---|---|---|
 | manifest | 64 KiB | `package-manifest` |
-| schema file, `package.json` | 1 MiB | `file-too-large` |
+| schema file | 1 MiB | `file-too-large` |
 | entries in a folder of packages | 4096 | `too-many-files` |
-| schema files in one schema, the root included (manifests and `package.json` don't count) | 256 | `too-many-files` |
+| schema files in one schema, the root included (manifests don't count) | 256 | `too-many-files` |
 
 How packages are published and distributed (there is no haus registry) is [`packages.md`](packages.md) §5.
 
 <!-- rule: packages.identity.ids -->
 <!-- rule: packages.identity.real-path -->
 <!-- rule: packages.identity.major-as-text -->
-**Identity.** Every named type has an id: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path); two imports reach the same such file when its real path is the same, whatever its id.
+**Identity.** Every named type has an id: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (such as a project's name and the file's path from the root); two imports reach the same such file when its real path is the same, whatever its id.
 <!-- rule: packages.identity.files-not-packages -->
 A file's id MUST NOT have the form of a package's id, `@org/name@N` (§13.3, grammar `package_module`), whatever the file and its project are called, so that a codec selected for a package's type never applies to a file's: a binding that builds ids from a project's name and a path prefixes them so that they can't (a path has no `@`, grammar `path`, but a project's name and an entry file's name may). Major versions are compared as text (`@18446744073709551616` is a valid major that no package has). Codecs (§13.4) and tools refer to types by their id. Only the ids of packages, the prelude and the standard modules are the same in every binding; the id of a type in a file outside a package is the binding's own, and may differ from another binding's for the same file.
 
@@ -835,7 +856,7 @@ A file's id MUST NOT have the form of a package's id, `@org/name@N` (§13.3, gra
   <!-- rule: packages.imports.into-package-checked -->
 - a relative import from a file outside a package to a file in a package's directory (import the package by name). The directories looked at are those from the file's directory up to the root, the root included, each a package's when it lists `package.haus` ("Spelling" above). A directory among them that can't be listed can't show whether it is a package's: the import is `import-not-found` (it can't be checked), and never passes as one outside a package;
   <!-- rule: packages.imports.reject-links -->
-- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file (a `package.json` beside a package given explicitly is ignored instead, [`packages.md`](packages.md) §4). Such a file is not read;
+- a package's `package.haus` or `schema.haus` that is a symbolic link or not a regular file. Such a file is not read;
   <!-- rule: packages.imports.reject-non-schema-file -->
 - a relative import with a symbolic link on its path, one that spells a name differently from its directory, or whose file isn't a regular file ("Resolution" and "Files read" above). Such a file is not read. The checks come in the order "Resolution" gives: `..` names above the root first (`import-outside-root`), then the walk down the names, then a target in a package's directory (the error above), then the file;
   <!-- rule: packages.imports.reject-cycles -->
@@ -864,25 +885,25 @@ A minor version guarantees, between any two versions of the same major:
 A field or tag that an open type doesn't list is reserved for later versions of its schema: writers SHOULD NOT use one, as a later minor version may give it a meaning or a type the data doesn't match. `{ id: 1, note: 5 }` is valid under an open `{ id: Int }`, and invalid once 1.1 adds `note?: String`.
 
 <!-- rule: packages.imports.major-only -->
-An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
+An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range on the library that carries the package ([`packages.md`](packages.md) §3): `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
-A package's **profiles**, definitions of its types that codecs implement (§13.4), are the package layer: [`packages.md`](packages.md) §6.
+A package's **rules**, definitions of its types that schema bindings check (§13.4), are the package layer: [`packages.md`](packages.md) §6.
 
 ### 13.4 Codecs
 
 <!-- rule: codecs.api.optional -->
 A schema binding MAY let applications choose the host type of a named type without arguments: a **codec**, selected by the type's id.
 <!-- rule: codecs.api.any-named-type -->
-Every such type can have one: a type of the prelude (`prelude#Decimal`), of a standard module (`std/time#Instant`), of a package, or of the application's own files. A codec for `prelude#Decimal` applies to every `Decimal`, in the types of every package too. How codecs are set (one per id), and what a binding reports about a codec that matches no type or a profile without its codec (`unused-codec`, `missing-codec`), is the package layer: [`packages.md`](packages.md) §7.
+Every such type can have one: a type of the prelude (`prelude#Decimal`), of a standard module (`std/time#Instant`), of a package, or of the application's own files. A codec for `prelude#Decimal` applies to every `Decimal`, in the types of every package too. How codecs are set (one per id), and what a binding reports about a codec that matches no type or a package rule the program doesn't implement (`unused-codec`, `missing-codec`), is the package layer: [`packages.md`](packages.md) §7.
 
 A codec:
 
 <!-- rule: codecs.rules.after-schema -->
 <!-- rule: codecs.rules.rejected-code -->
 <!-- rule: codecs.rules.inside-secret -->
-- runs after the type's schema: it can reject more values, never fewer. A value the schema accepts and the codec rejects is the error `codec-rejected`, at the place of the codec's type (§15), and so is a value a profile's rule rejects. Inside a `Secret` it is `invalid-secret` at the secret, as every error inside one (§15);
+- runs after the type's schema: it can reject more values, never fewer. A value the schema accepts and the codec rejects is the error `codec-rejected`, at the place of the codec's type (§15), and so is a value a package's rule rejects ([`packages.md`](packages.md) §6). Inside a `Secret` it is `invalid-secret` at the secret, as every error inside one (§15);
   <!-- rule: codecs.rules.encode-rejected -->
-- rejects, when encoding, a host value it can't write or that its rules reject, with `cannot-encode` at the place of the codec's type;
+- rejects, when encoding, a host value it can't write or doesn't accept, with `cannot-encode` at the place of the codec's type;
   <!-- rule: codecs.rules.round-trip -->
 - encodes back to the type's values, so that decoding what it encoded gives the same result: decode, encode, decode is the same as decode;
   <!-- rule: codecs.rules.meaning-kept -->
@@ -899,7 +920,7 @@ A codec applies wherever its type occurs: inside the types of imported packages 
 <!-- rule: codecs.apply.inside-out -->
 When codecs apply at several places in one value (a codec for `Currency` inside one for `Money`), decoding runs them from the inside out: a part's codec runs before the codec of the value that holds it, and the first that rejects gives the error, at its own place (`$[1]` for the currency).
 <!-- rule: codecs.apply.outer-input -->
-What an outer codec receives for a part that has a codec of its own (the part's host value, or the value the schema decoded) is the binding's choice, which it documents. A profile's rule is checked on the values the schema decoded, whatever the inner codecs made of them ([`packages.md`](packages.md) §6).
+What an outer codec receives for a part that has a codec of its own (the part's host value, or the value the schema decoded) is the binding's choice, which it documents. A package's rule is checked on the values the schema decoded, whatever the inner codecs made of them ([`packages.md`](packages.md) §6).
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
 
@@ -933,7 +954,7 @@ Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-ta
   <!-- rule: schema.check.all-errors-stream-items -->
   A `Stream` type (§15, "Streams") is checked item by item, as a stream decoder reads it: each item is parsed, then checked, before the next is read. A syntax or limit error ends the check, after the errors of the items before it. With `type Root = Stream String`, the text `1,⏎"ok",⏎"ok" "oops"` has two errors in this mode, `type-mismatch` at `$[0]` and `missing-comma` at line 3, column 6, and only the first when stopping at the first.
   <!-- rule: schema.check.all-errors-stream-utf8 -->
-  Invalid UTF-8 is an error of the item it is in, as a syntax error is: it is reported after the errors of the items before it, and ends the check. With `type Root = Stream String`, `1,⏎"ok",⏎"` followed by the byte FF and `"` has two errors, `type-mismatch` at `$[0]` and `invalid-utf8`. A document's invalid UTF-8 is its one error (§4).
+  Invalid UTF-8 is an error of the text after the last item before it, as a syntax error is (also between items, in whitespace or a comment): it is reported after the errors of the items before it, and ends the check. With `type Root = Stream String`, `1,⏎"ok",⏎"` followed by the byte FF and `"` has two errors, `type-mismatch` at `$[0]` and `invalid-utf8`. A document's invalid UTF-8 is its one error (§4).
   <!-- rule: schema.check.all-errors-once -->
 - Each error once, at its place of §15 (`$.items[2].price`). Several errors can share a place: a record missing two fields has two `missing-field` errors, both at the record.
   <!-- rule: schema.check.all-errors-nothing-below -->
@@ -1056,7 +1077,7 @@ A schema binding (§13.1) decodes a value with a type. The result is a value of 
   <!-- rule: decode.path.stream-index -->
   An error about a value as a whole is at that value: a wrong kind of value, a missing field (at the record), a wrong payload or an unknown tag (at the variant). An unknown field of a closed record is at the field. An error inside a `Secret` is at the secret, with no step into it (`Secret` below). In a stream (§6), the path of an error in an item starts with the item's index, `$[3].price`.
   <!-- rule: decode.path.too-many-nodes -->
-  `too-many-nodes` (§7), raised while encoding or decoding a value built in code, is at `$`, the value given (`$[i]` for the i-th item of a stream), as for writers (§11).
+  `too-many-nodes` (§7), raised while encoding objects of the program whose parts share each other, is at `$`, the value given (`$[i]` for the i-th item of a stream). Decoding never raises it: the value it takes was counted when it was built.
   <!-- rule: decode.general.linear -->
 - Decoding is linear in the input whatever the schema, within the limits of §9.8 and §9.9.
 
@@ -1102,7 +1123,7 @@ A value outside an integer type's range is an error, never wrapped or clamped. F
 | `Map v` | a record with any keys, whose values `v` all accept. As for records (§2), the order of its entries carries no meaning. |
 | `Any` | any value, kept exactly as parsed: the binding's value tree (§9.5 applies, as for unknown values). Encoding writes it back unchanged, after checking it is a value within the limits (§9.8). |
 | `Secret a` | exactly what `a` accepts, decoded as `a` decodes it, in a host type that hides it (below) |
-| `Date`, `Time`, … (std/time) | the type's own tag with exactly one string argument that the [std/time profile](std/time.md) accepts: `Date("2026-11-13")`. `Instant("2026-11-13T10:00:00Z")` is not a `Date`. These types are built in: any other value is `type-mismatch` at the value (`Date(1)` and `Instant("…")` for a `Date` at `$`, not `unknown-tag` or `wrong-payload` as the module's schema text would say), and a string the profile rejects is `invalid-time` at the string (`$[0]`). |
+| `Date`, `Time`, … (std/time) | the type's own tag with exactly one string argument that the [std/time rule](std/time.md) accepts: `Date("2026-11-13")`. `Instant("2026-11-13T10:00:00Z")` is not a `Date`. These types are built in: any other value is `type-mismatch` at the value (`Date(1)` and `Instant("…")` for a `Date` at `$`, not `unknown-tag` or `wrong-payload` as the module's schema text would say), and a string the std/time rule rejects is `invalid-time` at the string (`$[0]`). |
 
 **Records.** `{ … }` accepts a record in which:
 
@@ -1144,17 +1165,24 @@ A listed tag with any other payload is an error, in open variants too: an unknow
 <!-- rule: decode.unknown.representation-may -->
 How it is represented is up to the binding. For example, a binding MAY represent an unknown value without a payload by its tag name, so that `< >` decodes `EUR` to the string `"EUR"`.
 
-**Secrets.** `Secret a` marks a value that must not end up in logs, such as an API key or a password. The data is the same as for `a`: it is written in full, since the receiver needs it, and its canonical form and hash (§12) don't change. What changes is the host side. Bindings MUST:
+**Secrets.** `Secret a` marks a value that must not end up in logs, such as an API key or a password. The data is the same as for `a`: a document holds it in full, as the receiver needs it, and decoding reads it as `a` reads it. What changes is the host side. Bindings MUST:
 
 <!-- rule: decode.secret.hidden -->
 - decode it to a type that hides the value when printed, logged, inspected or converted to JSON (showing something like `<redacted>`), and gives it out only through an explicit call;
   <!-- rule: decode.secret.generic-decoders -->
-- do so in every decoder that applies a schema, the generic ones too: a decoder that gives the binding's value tree or another untyped value, without a host type of the application's, gives a secret there in such a type, never the plain value;
+- do so in every decoder that applies a schema, the generic ones too: a decoder that gives an untyped result, without a host type of the application's, gives it as a decoded tree of its own that holds the secret in such a type, never the plain value;
+  <!-- rule: decode.secret.not-a-value -->
+- keep secrets out of the binding's value type (§11): a secret is not a haus value of the program, the value type can't hold one, and such a decoded tree is not a value;
   <!-- rule: decode.secret.no-value-in-errors -->
 - leave the value out of error messages, when decoding and when encoding: an error inside a `Secret` is reported at the secret itself (`$.apiKey`), with its type, never with the value found or any part of it. A path into the secret could itself reveal it, through the keys of a `Map` or an `Any`.
 
 <!-- rule: decode.secret.hiding -->
-**Hiding** means that the value never shows outside that explicit call. Printing, logging, inspecting it and converting it to JSON with the language's own tools (`JSON.stringify`, Foundation's `JSONEncoder`, serde) show a marker such as `<redacted>`, or fail. A writer of the binding's that doesn't apply the secret's schema (haus or JSON written from the binding's values, the canonical form, the hash) refuses a secret with `cannot-encode`, at the secret, in an error that doesn't show it: it never writes the value, nor a marker that a reader would take for data. Encoding with the schema writes the value in full (above), so decoding and encoding again keeps it. A binding whose values have no printing hooks, such as a C ABI's tree of handles, hides a secret as a value of its own kind: its accessors see nothing in it, every writer refuses it, and an explicit call gives the value.
+**Hiding** means that the value never shows outside that explicit call. Printing, logging, inspecting it and converting it to JSON with the language's own tools (`JSON.stringify`, Foundation's `JSONEncoder`, serde) always show a marker such as `<redacted>`, or fail. Since the binding's value type can't hold a secret, the writers of values, the canonical form, the hash, equality and order (§11, §12) never meet one. A binding whose decoded results have no printing hooks, such as a C ABI's tree of handles, gives a secret as a node of its own kind in its decoded tree: its accessors see nothing in it, and an explicit call gives the value.
+
+<!-- rule: decode.secret.encode-refused -->
+**Encoding a secret.** An encoder with a schema, to haus values or text or to schema-based JSON (§16.3), refuses a secret by default: `cannot-encode`, at the secret, in an error that doesn't show it. It never writes the value, nor a marker that a reader would take for data. So a secret leaves the program only by the program's choice.
+<!-- rule: decode.secret.reveal -->
+An encoder takes an option, `revealSecrets` (spelled as the language spells its options), off by default, with which it writes every secret in full, as `a` writes it. The value it builds is then ordinary data, and its canonical form and hash include the secret, by the program's choice. A value that a type with a secret accepts is written back as it was decoded only with this option, so a program that saves a document with a secret in it again (a configuration file) sets it. Encoding with the option, a secret whose content `a` can't write is `invalid-secret`, at the secret.
 
 <!-- rule: decode.secret.tools-mask -->
 Tools that show data, such as editors and `haus check`, SHOULD mask values of a `Secret` type.
@@ -1173,7 +1201,7 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 Any other type describes a single document (§6): a text with no value, or with two or more, is `not-one-value`, at `$`.
 
 <!-- rule: decode.encode.fits-decoding -->
-**Encoding.** A binding that encodes writes values that the type accepts, and encoding fits decoding: for every value `v` that a type accepts, decoding `encode(decode(v))` gives the same result as decoding `v`. `encode(decode(v))` is equal to `v` (§2), except where decoding drops information by design:
+**Encoding.** A binding that encodes writes values that the type accepts, and encoding fits decoding: for every value `v` that a type accepts, decoding `encode(decode(v))` gives the same result as decoding `v` (encoding with `revealSecrets` where `v` holds a secret, "Encoding a secret" above). `encode(decode(v))` is equal to `v` (§2), except where decoding drops information by design:
 
 <!-- rule: decode.encode.open-fields-dropped -->
 - fields an open record ignores;
@@ -1308,7 +1336,7 @@ With a schema type, the decoded value (§15) is written as:
 | `Float32`, `Float64` | a number in the spelling of §15; `NaN`, `Infinity` and `NegInfinity` as the strings `"NaN"`, `"Infinity"` and `"-Infinity"` |
 | `Decimal` | a string: the normalized literal (`"19.90"`), so that float parsers can't round it. Readers accept a JSON number literal in the string (`"1E+05"` is `1e5`), not hex or digit separators. |
 | `Any` | its self-describing value (16.2), without the envelope |
-| `Secret a` | as `a` |
+| `Secret a` | as `a`, written only with `revealSecrets` (§15, "Encoding a secret"); without it writing refuses the secret |
 | `Array a` | an array |
 | `Map v`, records | an object; a missing optional field is a missing member |
 | `Maybe a` (the prelude's; a schema's own `closed < None \| Some a >` is a variant like any other) | `null` for `None` and the value for `Some(x)`, when `a`'s JSON can't be `null`; otherwise `{"_tag": "None"}` and `{"_tag": "Some", "value": x}` |
@@ -1347,7 +1375,7 @@ JSON in such forms is converted before a haus reader reads it.
 So a reader accepts the schema-based JSON of a newer minor version of its schema (§13.3): it ignores the new fields and reads the new tags as unknown values. Such an unknown value is the import's reading of the newer case, not that case ("Which form", above).
 
 <!-- rule: json.schema.round-trip -->
-**Round trip.** For every value `v` that a type accepts, where the value has a schema-based JSON form (a record payload with a field named `_tag` or `_args` has none, above), reading the schema-based JSON of `decode(v)` gives `decode(v)` back, and two different decoded values never have the same schema-based JSON.
+**Round trip.** For every value `v` that a type accepts, where the value has a schema-based JSON form (a record payload with a field named `_tag` or `_args` has none, above), reading the schema-based JSON of `decode(v)` (written with `revealSecrets` where it holds a secret, §15) gives `decode(v)` back, and two different decoded values never have the same schema-based JSON.
 
 ## 17. Error codes
 

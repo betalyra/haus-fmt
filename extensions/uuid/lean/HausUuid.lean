@@ -1,23 +1,25 @@
 import Haus.Schema.Codec
 
 /-!
-# The profile `@haus-fmt/uuid/rfc9562`, version 1 — X2, X4
+# The rule `rfc9562` of `@haus-fmt/uuid`, version 1 — X2, X4
 
-The rule of [`extensions/uuid/profiles/rfc9562.md`](../../../../extensions/uuid/profiles/rfc9562.md),
-stated on the values the schema decoded (spec §13.3): a `Uuid` is
+The rule of [`profiles/rfc9562.md`](../profiles/rfc9562.md) (packages.md §6),
+stated on the values the schema decoded: a `Uuid` is
 `Uuid(text)` where the text is the RFC 9562 form in lowercase, 32
 hexadecimal digits `0`–`9`, `a`–`f` in groups of 8, 4, 4, 4 and 12, with a
 hyphen between the groups. No version or variant is checked: the nil and the
 max UUID are accepted.
 
 `Valid` is the rule, `check` computes it (`check_iff`), and `codec` is the
-profile as a codec (§13.4), so the laws of `Haus.Schema.Codec` hold for it.
+rule as a check on the decoded value (§13.4), so the laws of
+`Haus.Schema.Codec` hold for it. Built as the library `HausUuid` of
+`spec/lean`, run by `haus-rules`.
 `one_spelling` (X4): two accepted texts with the same 32 digit values are the
 same text, so each UUID has exactly one spelling, and haus equality, the
 canonical form and the hash agree with UUID equality.
 -/
 
-namespace Haus.Profiles.Uuid
+namespace Haus.Rules.Uuid
 open Haus Schema
 
 /-- The schema of `@haus-fmt/uuid` (`extensions/uuid/schema.haus`), resolved. -/
@@ -25,7 +27,7 @@ def env : Env := ⟨[
   -- type Uuid = closed < Uuid String >
   ("Uuid", .variant true [.positional "Uuid" [.string]])]⟩
 
-/-- The types the profile has a rule for. -/
+/-- The types the rule decides on. -/
 inductive Type_ where
   | uuid
   deriving DecidableEq, Repr
@@ -58,11 +60,11 @@ inductive FitsAll : List Bool → List Char → Prop
 /-- The text form: as many characters as the pattern (36), each fitting its place. -/
 def Text (cs : List Char) : Prop := FitsAll pattern cs
 
-/-- A `Uuid` the profile accepts: its string is the text form. -/
+/-- A `Uuid` the rule accepts: its string is the text form. -/
 inductive Uuid : Typed → Prop
   | mk {s : String} : Text s.toList → Uuid (.case "Uuid" [.str s])
 
-/-- **The rule**, by type: which decoded values of each type the profile accepts. -/
+/-- **The rule**, by type: which decoded values of each type the rule accepts. -/
 def Valid : Type_ → Typed → Prop
   | .uuid => Uuid
 
@@ -84,7 +86,7 @@ def checkUuid : Typed → Bool
   | .case tag [.str s] => tag == "Uuid" && checkText pattern s.toList
   | _ => false
 
-/-- The checker: whether the profile accepts a decoded value of the type `ty`. -/
+/-- The checker: whether the rule accepts a decoded value of the type `ty`. -/
 def check : Type_ → Typed → Bool
   | .uuid => checkUuid
 
@@ -126,9 +128,9 @@ theorem check_iff (ty : Type_) (x : Typed) : check ty x = true ↔ Valid ty x :=
   cases ty
   exact checkUuid_iff x
 
-/-! ## The profile is a codec -/
+/-! ## The rule as a codec -/
 
-/-- The profile as a codec (§13.4): a check on the decoded value. -/
+/-- The rule as a codec (§13.4): a check on the decoded value. -/
 def codec (ty : Type_) : Codec Typed := Codec.check (check ty)
 
 /-- The codec accepts exactly the values the schema decodes that the rule accepts, and holds them as decoded. -/
@@ -148,9 +150,9 @@ theorem codec_keeps (ty : Type_) : (codec ty).Keeps := Codec.check_keeps _
 
 A UUID is its 32 digits, each a number 0–15. The text form has one spelling
 for each: two accepted texts whose digits have the same values are the same
-text. So the profile needs no normal form, and haus equality, the canonical
-form and the hash of `Uuid("…")` agree with UUID equality (spec §13.3,
-`packages.profiles.spellings`).
+text. So the rule needs no normal form, and haus equality, the canonical
+form and the hash of `Uuid("…")` agree with UUID equality (packages.md §6,
+`packages.rules.spellings`).
 -/
 
 /-- The value of a hexadecimal digit: `0`–`9` are 0–9, `a`–`f` are 10–15. -/
@@ -194,7 +196,7 @@ theorem digits_inj {ps : List Bool} {cs ds : List Char} (hc : FitsAll ps cs) (hd
         simp only [digits] at h
         rw [hpc, hpd, ih hrest h]
 
-/-- **One spelling**: two texts the profile accepts with the same digits are the same text. -/
+/-- **One spelling**: two texts the rule accepts with the same digits are the same text. -/
 theorem one_spelling {s t : String} (hs : Text s.toList) (ht : Text t.toList)
     (h : digits pattern s.toList = digits pattern t.toList) : s = t :=
   String.toList_inj.mp (digits_inj hs ht h)
@@ -229,4 +231,4 @@ theorem digits_length {cs : List Char} (h : Text cs) : (digits pattern cs).lengt
 #guard (digits pattern "0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57".toList).take 5 == [0, 1, 9, 0, 12]
 #guard (digits pattern "ffffffff-ffff-ffff-ffff-ffffffffffff".toList).all (· == 15)
 
-end Haus.Profiles.Uuid
+end Haus.Rules.Uuid

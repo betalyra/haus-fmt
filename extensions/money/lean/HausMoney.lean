@@ -1,17 +1,20 @@
 import Haus.Schema.Codec
 
 /-!
-# The profile `@haus-fmt/money/iso`, version 1 — X2
+# The rule `iso` of `@haus-fmt/money`, version 1 — X2
 
-The rule of [`extensions/money/profiles/iso.md`](../../../../extensions/money/profiles/iso.md),
-stated on the values the schema decoded (spec §13.3): a `Currency` is a bare
+The rule of [`profiles/iso.md`](../profiles/iso.md) (packages.md §6),
+stated on the values the schema decoded: a `Currency` is a bare
 tag of three capitals `A`–`Z`; a `Money` is any `Decimal` with such a
 currency. `Valid` is the rule, `check` computes it (`check_iff`), and
-`codec` is the profile as a codec (§13.4), so the laws of
+`codec` is the rule as a check on the decoded value (§13.4), so the laws of
 `Haus.Schema.Codec` hold for it (`codec_decode`, `codec_decode_encode`).
+The package's manifest gives the rule to `Currency`; `Money` is covered
+through it. Built as the library `HausMoney` of `spec/lean`, run by
+`haus-rules`.
 -/
 
-namespace Haus.Profiles.Money
+namespace Haus.Rules.Money
 open Haus Schema
 
 /-- The schema of `@haus-fmt/money` (`extensions/money/schema.haus`), resolved. -/
@@ -21,7 +24,7 @@ def env : Env := ⟨[
   -- type Currency = < >
   ("Currency", .variant false [])]⟩
 
-/-- The types the profile has a rule for. -/
+/-- The types the rule decides on. -/
 inductive Type_ where
   | money
   | currency
@@ -38,15 +41,15 @@ def Type_.all : List Type_ := [.money, .currency]
 /-- A currency code: three characters, each a capital letter `A`–`Z` (U+0041–U+005A). -/
 def Code (tag : String) : Prop := tag.toList.length = 3 ∧ ∀ c ∈ tag.toList, 'A' ≤ c ∧ c ≤ 'Z'
 
-/-- A `Currency` the profile accepts: a code as its tag, and no payload. -/
+/-- A `Currency` the rule accepts: a code as its tag, and no payload. -/
 inductive Currency : Typed → Prop
   | mk {tag : String} : Code tag → Currency (.unknown tag [])
 
-/-- A `Money` the profile accepts: any amount, with a currency it accepts. -/
+/-- A `Money` the rule accepts: any amount, with a currency it accepts. -/
 inductive Money : Typed → Prop
   | mk {a : String} {c : Typed} : Currency c → Money (.case "Money" [.decimal a, c])
 
-/-- **The rule**, by type: which decoded values of each type the profile accepts. -/
+/-- **The rule**, by type: which decoded values of each type the rule accepts. -/
 def Valid : Type_ → Typed → Prop
   | .currency => Currency
   | .money => Money
@@ -68,7 +71,7 @@ def checkMoney : Typed → Bool
   | .case tag [.decimal _, c] => tag == "Money" && checkCurrency c
   | _ => false
 
-/-- The checker: whether the profile accepts a decoded value of the type `ty`. -/
+/-- The checker: whether the rule accepts a decoded value of the type `ty`. -/
 def check : Type_ → Typed → Bool
   | .currency => checkCurrency
   | .money => checkMoney
@@ -109,9 +112,9 @@ theorem check_iff (ty : Type_) (x : Typed) : check ty x = true ↔ Valid ty x :=
   · exact checkMoney_iff x
   · exact checkCurrency_iff x
 
-/-! ## The profile is a codec -/
+/-! ## The rule as a codec -/
 
-/-- The profile as a codec (§13.4): a check on the decoded value. -/
+/-- The rule as a codec (§13.4): a check on the decoded value. -/
 def codec (ty : Type_) : Codec Typed := Codec.check (check ty)
 
 /-- The codec accepts exactly the values the schema decodes that the rule accepts, and holds them as decoded. -/
@@ -201,4 +204,4 @@ private def rejectedAt (ty : Type_) (src : String) : Option String :=
 #guard check .money (.case "Money" [.decimal "19.90", .unknown "USD" []])
 #guard !check .money (.case "Money" [.decimal "1", .unknown "US" []])
 
-end Haus.Profiles.Money
+end Haus.Rules.Money

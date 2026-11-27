@@ -15,17 +15,19 @@ and a reference parser that computes it.
 | [`Haus/DupKeys.lean`](Haus/DupKeys.lean) | Duplicate keys found by sorting (spec §7): the same answer as the parser's scan, in n log n comparisons |
 | [`Haus/Linear/`](Haus/Linear), [`Haus/Stream/Cost.lean`](Haus/Stream/Cost.lean) | Linear time (spec §7): a cost model (steps counted next to results), a reference parser with a trie of keys that returns what the parser returns and takes at most `256 · n + 68` steps, the stream reader's buffer in at most `3 · n + 3 · p + 6` steps, the design before S17 shown quadratic |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
+| [`Haus/Built.lean`](Haus/Built.lean) | Values checked when built, total afterwards (spec §7, §11, §12): `Value.Valid` (numbers normalized, tags, unique keys), `Built` (a valid value with its size and depth recorded), constructors that are the only fallible step (`invalid-number`, `invalid-tag`, `duplicate-key`, and the limits of §7: lengths, numbers on their normalized literal, depth, and the node limit as `too-many-nodes`), `parse_valid` (parsing builds valid values), and the canonical form, hash input, equality, order and layouts as total functions of a built value |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
 | [`Haus/Layout/`](Haus/Layout) | The three layouts of spec §11 written from values, without comments: compact and minimised (one writer, the spacing a parameter; minimised is `Canonical.write`) and pretty, with the proofs that they parse back and that a compact or minimised stream splits by lines; and the standard formatter (`Format.lean`), which keeps comments, blank lines and spellings, on a concrete syntax tree, with the proof that its compact and minimised layouts keep the values |
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does; the value limit (§7) and strict mode (§6) on top of it (`Stream/Limited.lean`) |
-| [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
+| [`Haus/Time/`](Haus/Time) | The std/time rule ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/SchemaFile/`](Haus/SchemaFile) | Schema files (spec §14): types as written, a reader for `.schema.haus` text, the checker of §14's static rules, instances of generic types and their resolved types (`load`: text to the environment decoding reads); the proofs that a checked file has finitely many instances (§9.10, with a bound) and that decoding with what `load` returns never fails because of the schema |
+| [`Haus/Schema/Secrets.lean`](Haus/Schema/Secrets.lean) | Encoding a secret (spec §15): refused without `revealSecrets` (`cannot-encode` at the first secret, `secretAt`), written in full with it (`encodeWith`) |
 | [`Haus/Schema/Codec.lean`](Haus/Schema/Codec.lean) | Codecs (spec §13.4): a codec as a check on the value the schema decoded, and the laws of §13.4 proven once for every codec |
-| [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84` and `@haus-fmt/uuid/rfc9562`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
+| [`extensions/<name>/lean/`](../../extensions), [`Rules.lean`](Rules.lean) | The official packages' rules ([`packages.md`](../packages.md) §6) `@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84` and `@haus-fmt/uuid/rfc9562`, kept with their packages as the libraries `HausMoney`, `HausGeo`, `HausUuid` (the `srcDir`s in `lakefile.toml`): each rule as a definition, a checker proven to compute it, the rule as a codec; `Rules.lean` is the second executable, `haus-rules`, which runs their test vectors. The core library `Haus` and `haus-ref` don't import them |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new`, with the JSON mappings, the hash, the default limits and the error codes |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
-| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, order independence, and folders that never change a successful result |
+| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, order independence, and folders that never change a successful result. On top of the resolver, the package layer's compile ([`packages.md`](../packages.md) §3, §4, §7; `Rules.lean`, `Official.lean`): the built-in official packages, the manifest's `rules` field and `missing-codec` |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser, the layout writers, the schema-file reader and the decoders on the command line |
 | [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser: `--json-suite` decodes with them, `--schema-suite` compares them with the Lean reader's on every case; a record case written by name keeps the name, and the model finds the record itself |
 
@@ -46,9 +48,10 @@ lake build
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §14, §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
 .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
-.lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a profile's vectors
-.lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
-.lake/build/bin/haus-ref --profile @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
+.lake/build/bin/haus-ref --packages ../../test-suite/packages/rules.haus  # its rules cases (packages.md §3, §4, §7)
+.lake/build/bin/haus-rules --rule @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a rule's vectors
+.lake/build/bin/haus-rules --rule @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
+.lake/build/bin/haus-rules --rule @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
 .lake/build/bin/haus-ref --stream-suite ../../test-suite/stream  # the stream suite (spec §6, §7, §15 "Streams")
 .lake/build/bin/haus-ref --positions ../../test-suite/positions/cases.haus  # error lines and columns (spec §8)
 .lake/build/bin/haus-ref --equality ../../test-suite/equality/cases.haus    # equals and compare (spec §2, §12)
@@ -98,11 +101,12 @@ For fuzzing the JSON mappings, one case per line: `--json-batch TYPES FILE`
 type), `--haus-json-batch FILE` (a haus value: its self-describing JSON, in
 the envelope), `--haus-json-read-batch FILE` (an envelope read as a haus
 value) and `--import-batch FILE` (any JSON text imported as a haus value).
-Each prints `ok …` or `err …`. `--profile-batch NAME FILE` does the same for
-an official profile's codec (`TYPE HEX`, a haus value of a type of the
-profile's package): `ok <canonical form>` when it is accepted, `err PLACE
+Each prints `ok …` or `err …`. `haus-rules --rule-batch NAME FILE` does the
+same for an official package's rule (`TYPE HEX`, a haus value of a type of
+the rule's package): `ok <canonical form>` when it is accepted, `err PLACE
 CODE REASON` when the schema rejects it and `err $ codec-rejected REASON`
-when the profile does.
+when the rule does. (`haus-rules` also takes `--profile` and
+`--profile-batch`, the names `haus-ref` had for them.)
 
 Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
 the parser's (syntax and limits), the schema-file checker's, the schema
@@ -396,10 +400,10 @@ of `test-suite/schema` pass with it, and every schema file in
 | `Source.instances_reach`, `Source.instances_some` | What the reference computes is exactly the reachable instances; for a checked file it returns whenever `instBound` is within the bindings' limit |
 | `load_decode` (I4) | For every schema file `load` accepts and every name in it, decoding any value never fails with `unknown-type` or `unguarded-recursion`; `whnf_ok`: following names succeeds on every closed type within `env.fuel` steps |
 
-**About codecs and profiles** (spec §13.3, §13.4). A codec
+**About codecs and rules** (spec §13.4, [`packages.md`](../packages.md) §6). A codec
 ([`Schema/Codec.lean`](Haus/Schema/Codec.lean)) reads the value the type's
 schema decoded into a host type, or rejects it, and writes a host value
-back as a decoded value for the schema's encoder; a profile is a check, a
+back as a decoded value for the schema's encoder; a package's rule is a check, a
 codec that keeps the decoded value (`Codec.check`). The laws of §13.4 are
 proven once, for every codec that keeps the value (`Codec.Keeps`, which
 every check does):
@@ -414,8 +418,9 @@ every check does):
 | `Codec.same_value` | Two codecs that both accept a value agree on what it is; they differ only in what they accept |
 | `Codec.decode_encode_of` | A codec whose host type keeps less (a `Date` for an `Instant`) still has decode, encode, decode, when what it writes is a value of the type that reads back as the same host value |
 
-The official profiles ([`Haus/Profiles/`](Haus/Profiles)) state their
-rules (`extensions/*/profiles/*.md`) on the decoded value, with a checker
+The official packages' rules (`extensions/<name>/lean/`, namespace
+`Haus.Rules`) state their prose (`extensions/*/profiles/*.md`) on the
+decoded value, with a checker
 proven to compute each (`Money.check_iff`, `Geo.check_iff`, `Uuid.check_iff`), and are codecs
 (`Money.codec_decode`, `Geo.codec_decode`, `Uuid.codec_decode`: the codec accepts exactly the
 values the schema decodes that the rule accepts, kept as decoded; with
@@ -434,11 +439,11 @@ the string of a `Uuid` fits the pattern 8-4-4-4-12, a hyphen or a digit
 with the same 32 digit values are the same text (`Uuid.one_spelling`, X4),
 so each UUID has one spelling. The packages' schemas are
 written in Lean (`Money.env`, `Geo.env`, `Uuid.env`), as `scripts/schema-types.ts`
-resolves `extensions/*/schema.haus` (compared by hand, not in CI). `haus-ref --profile NAME FILE` runs a vectors file: an
-`Accept` passes when the codec accepts `value` and writes back the same
+resolves `extensions/*/schema.haus` (compared by hand, not in CI). `haus-rules --rule NAME FILE` runs a vectors file: an
+`Accept` passes when the rule accepts `value` and writes back the same
 value as `output` (or `value`), and exactly `output` when one is given; a
 `Reject` when `value` is valid for the schema of its type (the shape) and
-the profile rejects it, so the rejection comes from the rule: a `Reject` the
+the rule rejects it, so the rejection comes from the rule: a `Reject` the
 schema already rejects fails, with the schema's error. All three vectors
 files pass.
 
@@ -605,6 +610,31 @@ time, with Hoare-style triples for the resolver's monad (`Run.lean`) and
 | `load_good`, `load_sim` | A successful run's finished targets pass their checks as properties of the tree and import only targets finished before them (`Done.lean`); a run in another order stays below such a state and never fails (R3, `Walk.lean`) |
 | `resolveIn_addFolders`, `resolveIn_folders` | Adding folders of packages never turns a successful result into a different one: the same packages, or an error; for any settings with more folders and everything else the same (`MoreFolders`), in any walk orders (R6, F2; `Folders.lean`) |
 | `givenPackages_ok`, `load_reach`, `load_wider` | The packages given are exactly those of the directories and folders given; every target a run finishes is reached from the root; two successful loads, the second with more packages in folders (`Wider`: the same packages given by directory), make the same packages (R6) |
+
+The npm lookup of packages 0.1 (`Mode.npm`, the walk and a project's
+`package.json`) stays in the model because the theorems above cover it; no
+case of the suite and no command-line option turns it on, as packages 0.2
+has no lookup ([`packages.md`](../packages.md) §2).
+
+**The package layer's compile** ([`packages.md`](../packages.md) §3, §4,
+§7), in [`Packages/Rules.lean`](Haus/Packages/Rules.lean), runs on top of
+the resolver, which it doesn't change, so the theorems above hold as they
+are. `compile tree config root program`: a package given with an official
+package's name must be byte for byte the built-in one (`officialCopies`,
+`duplicate-package`); the built-in packages
+([`Packages/Official.lean`](Haus/Packages/Official.lean), the files of
+`extensions/` read with `include_str`) are written into the tree and given
+by their directory; then `resolveIn`; then, on success, the `rules` field of
+every package reached (`checkRulesField`: a record of rule names
+`[a-z][a-z0-9-]*`, each type defined without parameters and not as a
+`Stream`, and `rules/<name>.md` a regular file unless the package is built
+in; else `package-manifest`) and `missing-codec` for each type with a rule
+that the schema reaches (`reachedTypes`: from the application files'
+definitions through the types they name, across imports) and that the
+program doesn't implement (built in for the
+official packages, `Program.withRule`) and doesn't take shape-only
+(`Program.shapeOnly`). `haus-ref --packages` runs `cases.haus` and
+`rules.haus` with it. Nothing about it is proven yet.
 
 With two mistakes in one schema, the error reported does depend on the
 order (`Order.lean`); the spec doesn't say which one is reported, and R3 is

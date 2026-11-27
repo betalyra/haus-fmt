@@ -1,6 +1,6 @@
 {
   "name": "@haus-fmt/money",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "haus schema package: exact amounts with a currency",
   "keywords": [
     "haus",

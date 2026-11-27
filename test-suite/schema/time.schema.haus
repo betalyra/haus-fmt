@@ -1,5 +1,5 @@
 // std/time (spec §13.2, spec/std/time.md): every type of the module, for the
-// rows of the profile's rules table.
+// rows of the std/time rule's table.
 import std/time (Date, Time, DateTime, Instant, ZonedDateTime, Duration, YearMonth, TimeZone)
 
 type Day = Date

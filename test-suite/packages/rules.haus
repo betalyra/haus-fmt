@@ -1,0 +1,344 @@
+// Package rules (spec/packages.md §3, §4, §6, §7): the built-in official
+// packages, the manifest's `rules` field, and `missing-codec` with the
+// program's opt-outs. Cases have the format of cases.haus, and two more
+// fields, the program's: `shapeOnly`, the packages it takes shape-only
+// (`Package.shapeOnly`), and `withRule`, the type ids whose package rule it
+// implements (`Package.withRule`; the runner supplies a rule that accepts
+// every value). See test-suite/README.md, "Package suite", "Rules".
+//
+// Packages used below:
+//   @acme/codes   type Code = < >, with rules: { "Code": "iso" } and rules/iso.md
+//   @acme/orders  imports @acme/codes@1 (Code), no rules
+
+// ── a rule the program doesn't implement ────────────────────────────────────
+
+Case {
+  name: "rules-missing-implementation",
+  about: "a third-party package gives Code the rule iso, and the program has no implementation of it",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "missing-codec", mentions: ["@acme/codes@1#Code", "iso"] },
+},
+
+Case {
+  name: "rules-shape-only",
+  about: "the same, with the package taken shape-only: Code is checked for its shape only",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  shapeOnly: ["@acme/codes"],
+  expect: Ok { packages: ["@acme/codes@1.0.0"] },
+},
+
+Case {
+  name: "rules-with-rule",
+  about: "the same, with the program supplying the package's rule for Code",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  withRule: ["@acme/codes@1#Code"],
+  expect: Ok { packages: ["@acme/codes@1.0.0"] },
+},
+
+Case {
+  name: "rules-type-not-used",
+  about: "the schema reaches another type of the package only: a rule on a type nothing decodes lets nothing through, and is not required",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Label)\ntype Root = { label: Label }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >\ntype Label = String"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Ok { packages: ["@acme/codes@1.0.0"] },
+},
+
+Case {
+  name: "rules-used-and-unused",
+  about: "two types with rules, neither implemented: only the one the schema reaches (Code) is missing-codec, not Tag",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Tag\": \"short\", \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >\ntype Tag = String"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+    File("vendor/codes/rules/short.md", "A Tag has at most 8 characters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "missing-codec", mentions: ["@acme/codes@1#Code"], hides: ["@acme/codes@1#Tag"] },
+},
+
+Case {
+  name: "rules-reached-inside-a-package-type",
+  about: "the schema names Order of @acme/codes, which holds a Code: the rule of Code is reached through it",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Order)\ntype Root = { order: Order }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >\ntype Order = { lines: Array Line }\ntype Line = { code: Code }"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "missing-codec", mentions: ["@acme/codes@1#Code"] },
+},
+
+Case {
+  name: "rules-reached-through-another-package",
+  about: "the application imports @acme/orders only, which imports @acme/codes: its rules count",
+  files: [
+    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
+    Package("vendor/orders", "@acme/orders", "1.0.0", "import @acme/codes@1 (Code)\ntype Order = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/orders", "vendor/codes"] },
+  expect: Err { code: "missing-codec", mentions: ["@acme/codes@1#Code"] },
+},
+
+Case {
+  name: "rules-in-a-folder",
+  about: "a package found in a folder is compiled as one given by its directory",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("schemas/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("schemas/codes/schema.haus", "type Code = < >"),
+    File("schemas/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { folders: ["schemas"] },
+  expect: Err { code: "missing-codec", mentions: ["@acme/codes@1#Code"] },
+},
+
+// ── the rules field (packages.md §4) ────────────────────────────────────────
+
+Case {
+  name: "rules-type-not-defined",
+  about: "the field names a type the package's schema doesn't define",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Kode\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "Kode"] },
+},
+
+Case {
+  name: "rules-type-with-parameters",
+  about: "a rule for a generic type",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Pair\": \"ordered\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >\ntype Pair a = { first: a, second: a }"),
+    File("vendor/codes/rules/ordered.md", "first comes before second."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "Pair"] },
+},
+
+Case {
+  name: "rules-stream-type",
+  about: "a rule for a Stream definition, which is no value of its own",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Log\": \"ordered\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >\ntype Entry = { at: Int }\ntype Log = Stream Entry"),
+    File("vendor/codes/rules/ordered.md", "Entries come in order."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "Log"] },
+},
+
+Case {
+  name: "rules-bad-rule-name",
+  about: "a rule name that isn't [a-z][a-z0-9-]*",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"Iso_4217\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/Iso_4217.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "Iso_4217"] },
+},
+
+Case {
+  name: "rules-missing-document",
+  about: "a rule without its prose, rules/iso.md",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/README.md", "not the rule"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "rules/iso.md"] },
+},
+
+Case {
+  name: "rules-document-is-a-link",
+  about: "rules/iso.md is a symbolic link, which is not a regular file",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/iso.md", "A Code is three capital letters."),
+    Link("vendor/codes/rules/iso.md", "../../iso.md"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "rules/iso.md"] },
+},
+
+Case {
+  name: "rules-value-not-a-string",
+  about: "a rule given as a list, which the field doesn't allow (no alternative rules for now)",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": [\"iso\"] } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "Code"] },
+},
+
+Case {
+  name: "rules-not-a-record",
+  about: "a rules field that isn't a record",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: \"iso\" }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+    File("vendor/codes/rules/iso.md", "A Code is three capital letters."),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes"] },
+},
+
+Case {
+  name: "rules-broken-shape-only",
+  about: "taking a package shape-only doesn't excuse a broken rules field",
+  files: [
+    File("app/app.schema.haus", "import @acme/codes@1 (Code)\ntype Root = { code: Code }"),
+    File("vendor/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Code\": \"iso\" } }"),
+    File("vendor/codes/schema.haus", "type Code = < >"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/codes"] },
+  shapeOnly: ["@acme/codes"],
+  expect: Err { code: "package-manifest", mentions: ["@acme/codes", "rules/iso.md"] },
+},
+
+Case {
+  name: "rules-broken-not-reached",
+  about: "a package in a folder with a broken rules field that the schema doesn't reach: the field is checked on reached packages only",
+  files: [
+    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
+    Package("schemas/orders", "@acme/orders", "1.0.0", "type Order = { id: Int }"),
+    File("schemas/codes/package.haus", "{ name: \"@acme/codes\", version: \"1.0.0\", rules: { \"Kode\": \"iso\" } }"),
+    File("schemas/codes/schema.haus", "type Code = < >"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { folders: ["schemas"] },
+  expect: Ok { packages: ["@acme/orders@1.0.0"] },
+},
+
+// ── the built-in official packages (packages.md §3) ─────────────────────────
+
+Case {
+  name: "official-built-in",
+  about: "an official package is built in: no package given, and its rule is the library's own",
+  files: [
+    File("app/app.schema.haus", "import @haus-fmt/money@1 (Money)\ntype Root = { total: Money }"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit {},
+  expect: Ok { packages: ["@haus-fmt/money@1.0.1"] },
+},
+
+Case {
+  name: "official-imported-by-a-package",
+  about: "a third-party package imports an official one by name: the built-in one is used",
+  files: [
+    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
+    Package("vendor/orders", "@acme/orders", "1.0.0", "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/orders"] },
+  expect: Ok { packages: ["@acme/orders@1.0.0", "@haus-fmt/money@1.0.1"] },
+},
+
+Case {
+  name: "official-copy-differs",
+  about: "a copy of @haus-fmt/money given by its directory differs from the built-in one: an official package can't be replaced",
+  files: [
+    File("app/app.schema.haus", "import @haus-fmt/money@1 (Money)\ntype Root = { total: Money }"),
+    Package("vendor/money", "@haus-fmt/money", "1.0.0", "type Money = closed < Money Decimal Currency >\ntype Currency = < >"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { packages: ["vendor/money"] },
+  expect: Err { code: "duplicate-package", mentions: ["@haus-fmt/money"] },
+},
+
+Case {
+  name: "official-copy-differs-not-imported",
+  about: "a differing copy of @haus-fmt/geo in a folder given, which the schema doesn't import: still duplicate-package",
+  files: [
+    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
+    Package("schemas/orders", "@acme/orders", "1.0.0", "type Order = { id: Int }"),
+    Package("schemas/geo", "@haus-fmt/geo", "1.0.0", "type LatLng = closed < LatLng Float64 Float64 >"),
+  ],
+  root: "app/app.schema.haus",
+  ecosystem: "core",
+  mode: Explicit { folders: ["schemas"] },
+  expect: Err { code: "duplicate-package", mentions: ["@haus-fmt/geo"] },
+},

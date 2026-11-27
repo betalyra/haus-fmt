@@ -39,7 +39,7 @@ def lookup (base : List Text) (name : Text) : List Text :=
 #guard lookup (["usr", "share", "zoneinfo"].map String.toList) "Europe/../../../etc/passwd".toList ==
   ["usr", "etc", "passwd"].map String.toList
 #guard lookup (["usr", "share", "zoneinfo"].map String.toList) "/etc/passwd".toList == ["etc", "passwd"].map String.toList
--- and the profile rejects both.
+-- and the std/time rule rejects both.
 #guard !check .timeZone "Europe/../../../etc/passwd".toList && !check .timeZone "/etc/passwd".toList
 
 theorem walk_plain (dir : List Text) (ps : List Text) (h : ∀ p ∈ ps, ZonePart p) : walk dir ps = dir ++ ps := by

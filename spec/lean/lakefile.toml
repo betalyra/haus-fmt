@@ -1,10 +1,28 @@
 name = "haus"
 version = "0.1.0"
-defaultTargets = ["Haus", "haus-ref"]
+defaultTargets = ["Haus", "haus-ref", "haus-rules"]
 
 [[lean_lib]]
 name = "Haus"
 
+# The models of the official packages' rules live with the packages
+# (extensions/<name>/lean/), outside the core library; haus-rules runs them.
+[[lean_lib]]
+name = "HausMoney"
+srcDir = "../../extensions/money/lean"
+
+[[lean_lib]]
+name = "HausGeo"
+srcDir = "../../extensions/geo/lean"
+
+[[lean_lib]]
+name = "HausUuid"
+srcDir = "../../extensions/uuid/lean"
+
 [[lean_exe]]
 name = "haus-ref"
 root = "Main"
+
+[[lean_exe]]
+name = "haus-rules"
+root = "Rules"
