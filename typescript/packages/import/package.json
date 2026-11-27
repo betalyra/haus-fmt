@@ -1,6 +1,6 @@
 {
   "name": "@haus-fmt/import",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Import .haus files in TypeScript: typed imports (TypeScript 7.1 content mapper), a Node loader and a Vite plugin",
   "keywords": [
     "haus",
