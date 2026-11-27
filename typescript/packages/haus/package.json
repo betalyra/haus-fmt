@@ -1,6 +1,6 @@
 {
   "name": "@haus-fmt/haus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The haus data format: parser, writer, streams, schemas and Standard Schema support",
   "keywords": [
     "haus",
